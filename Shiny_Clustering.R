@@ -1,0 +1,72 @@
+# Shiny_Clustering.R
+library(Cardinal)
+library(dplyr)
+
+process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
+  message("Copying uploaded files to a temporary directory...")
+  temp_dir <- tempdir()
+  temp_imzml <- file.path(temp_dir, "data.imzML")
+  temp_ibd   <- file.path(temp_dir, "data.ibd")
+  file.copy(imzml_path, temp_imzml, overwrite = TRUE)
+  file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
+  
+  message("Reading MSI data...")
+  msi_data <- readImzML(temp_imzml, , memory = FALSE, check = FALSE,
+                        mass.range = NULL, resolution = 10, units = c("ppm"),
+                        guess.max = 1000L, as = "auto", parse.only=FALSE,
+                        verbose = getCardinalVerbose(), chunkopts = list(),
+                        BPPARAM = getCardinalBPPARAM())
+  
+  message("Summarizing reference sample...")
+  control_mean <- summarizeFeatures(msi_data, "mean")
+  ref_mz <- read.csv(ref_mz_path)
+  
+  control_MSI_ref <- control_mean %>%
+    peakPick(SNR = 3) %>%
+    peakAlign(ref = as.numeric(ref_mz[, 1]), tolerance = 0.5, units = "mz") %>%
+    subsetFeatures() %>%
+    process()
+  
+  message("Binning MSI data...")
+  msi_data <- bin(msi_data, ref = mz(control_MSI_ref),
+                  tolerance = 0.5, units = "mz") %>% process()
+  
+  message("Building feature matrix...")
+  msi_matrix <- t(as.matrix(spectra(msi_data)))
+  mz_names <- paste0("mz_", mz(msi_data))
+  coords <- coord(msi_data)
+  run_id <- runNames(msi_data)
+  pixel_names <- rep(run_id, nrow(msi_matrix))
+  
+  full_df <- data.frame(
+    runNames = pixel_names,
+    x = coords$x,
+    y = coords$y,
+    msi_matrix
+  )
+  colnames(full_df) <- c("runNames", "x", "y", mz_names)
+  
+  full_df
+}
+
+
+
+# K-means clustering
+run_kmeans <- function(full_df, k = 3) {
+  feature_matrix <- as.matrix(full_df[, grep("^mz_", colnames(full_df))])
+  km <- kmeans(feature_matrix, centers = k)
+  full_df$cluster <- km$cluster
+  full_df
+}
+
+# Hierarchical clustering
+run_hclust <- function(full_df, k = 3) {
+  feature_matrix <- as.matrix(full_df[, grep("^mz_", colnames(full_df))])
+  d <- dist(feature_matrix)
+  hc <- hclust(d, method = "ward.D2")
+  clusters <- cutree(hc, k = k)
+  full_df$cluster <- clusters
+  full_df
+}
+
+
