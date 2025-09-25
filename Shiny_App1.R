@@ -6,6 +6,7 @@ library(grid)
 library(plotly)
 library(RColorBrewer)
 library(mongolite)
+library(BiocParallel)  # if you want to use parallel backend in Shiny_Clustering.R
 
 # Source your MSI processing and clustering functions
 source("Shiny_Clustering.R")
@@ -18,6 +19,42 @@ msi_con <- mongo(
   db = "msi_project",
   url = "mongodb://localhost"
 )
+
+# --- Helper: upsert rows instead of insert ---
+upsert_rows <- function(df_rows) {
+  if (nrow(df_rows) == 0) return(NULL)
+  
+  # Ensure x and y are numeric
+  df_rows$x <- as.numeric(df_rows$x)
+  df_rows$y <- as.numeric(df_rows$y)
+  
+  b <- msi_con$bulk()
+  
+  for (i in seq_len(nrow(df_rows))) {
+    row <- df_rows[i, , drop = FALSE]
+    
+    # unique key for each pixel
+    key <- list(
+      dataset_id = row$dataset_id,
+      run_id     = row$run_id,
+      x          = unname(row$x),
+      y          = unname(row$y)
+    )
+    
+    # set all fields except immutable key fields
+    set_doc <- as.list(row)
+    set_doc[c("dataset_id","run_id","x","y")] <- NULL
+    
+    b$update(
+      query    = key,
+      update   = list(`$set` = set_doc),
+      upsert   = TRUE,
+      multiple = FALSE
+    )
+  }
+  
+  b$execute()
+}
 
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
@@ -101,7 +138,7 @@ server <- function(input, output, session) {
     }
     
     # --- Add dataset_id + run_id ---
-    dataset_id <- paste0("dataset_", as.integer(Sys.Date()))
+    dataset_id <- paste0("dataset_", as.integer(Sys.time()))  # second-level unique ID
     df$dataset_id <- dataset_id
     df$run_id <- df$runNames
     df$runNames <- NULL
@@ -112,6 +149,9 @@ server <- function(input, output, session) {
     # Reorder columns
     mz_cols <- grep("^mz_", colnames(df), value = TRUE)
     df <- df[, c("dataset_id", "run_id", "x", "y", mz_cols, "cluster", "Class")]
+    
+    # Optional: initialize dataset in DB (Class = NA)
+    upsert_rows(df)
     
     df
   })
@@ -158,8 +198,8 @@ server <- function(input, output, session) {
         next_color_i(if (i == length(my_palette)) 1 else i + 1)
       }
       
-      # --- Save full annotated dataset to MongoDB ---
-      msi_con$insert(df)
+      # --- Upsert to MongoDB (overwrite instead of duplicate) ---
+      upsert_rows(df[!is.na(df$Class), ])
       
       showNotification(
         sprintf("Assigned '%s' to %d previously unassigned pixels. Data saved to MongoDB.",
@@ -194,8 +234,8 @@ server <- function(input, output, session) {
       next_color_i(if (i == length(my_palette)) 1 else i + 1)
     }
     
-    # --- Save full annotated dataset to MongoDB ---
-    msi_con$insert(df)
+    # --- Upsert only the changed pixels ---
+    upsert_rows(df[idx, ])
     
     showNotification(
       sprintf("Assigned '%s' to %d pixels. Data saved to MongoDB.",
@@ -206,7 +246,8 @@ server <- function(input, output, session) {
   
   # --- color palette ---
   my_palette <- c(
-    "steelblue","seagreen","darkorange","darkviolet","gold","tan", "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
+    "steelblue","seagreen","darkorange","darkviolet","gold","tan", 
+    "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
     "darkred","darkblue","darkgreen", "gray20","gray50",
     "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
     "khaki"
