@@ -25,47 +25,45 @@ msi_con <- mongo(
 
 # --- Helpers (drop-in) ---------------------------------------------------------
 sanitize_colnames <- function(nms) {
-  # Why: Mongo forbids '.' and keys starting with '$'
   nms <- gsub("\\.", "_", nms, perl = TRUE)
   nms <- ifelse(grepl("^\\$", nms), paste0("dollar_", sub("^\\$", "", nms)), nms)
   nms
 }
 
 normalize_for_mongo <- function(df) {
-  # Why: mongolite needs atomic columns; JSON/BSON can't encode list-cols cleanly
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
   # factors -> character
-  is_fac <- vapply(df, is.factor, logical(1))
+  is_fac  <- vapply(df, is.factor, logical(1))
   if (any(is_fac)) df[is_fac] <- lapply(df[is_fac], as.character)
-  # list-cols -> character (JSON) with safe scalarization
+  # list-cols -> scalar character
   is_list <- vapply(df, is.list, logical(1))
   if (any(is_list)) {
     df[is_list] <- lapply(df[is_list], function(col)
-      vapply(col, function(x) if (length(x) == 0) NA_character_ else as.character(x[1]), character(1))
+      vapply(col, function(x) if (length(x) == 0) NA_character_ else as.character(x[[1]]), character(1))
     )
   }
-  # replace NaN/Inf (JSON/BSON issue)
+  # NaN/Inf -> NA
   is_num <- vapply(df, is.numeric, logical(1))
   if (any(is_num)) {
-    df[is_num] <- lapply(df[is_num], function(x) {
-      x[is.nan(x) | is.infinite(x)] <- NA_real_
-      x
-    })
+    df[is_num] <- lapply(df[is_num], function(x) { x[is.nan(x) | is.infinite(x)] <- NA_real_; x })
   }
   rownames(df) <- NULL
   names(df) <- sanitize_colnames(names(df))
   df
 }
 
-stream_import_to_mongo <- function(con, df) {
-  # Why: streaming avoids R->BSON conversion pitfalls on huge/wide frames
+stream_import_to_mongo <- function(mongo_con, df) {
+  # Write NDJSON file, then mongo$import(path). Avoids arg name collision with 'con'
   tmp <- tempfile(fileext = ".json")
-  on.exit(unlink(tmp), add = TRUE)
-  con_out <- file(tmp, open = "w", encoding = "UTF-8")
-  on.exit(close(con_out), add = TRUE)
-  jsonlite::stream_out(df, con_out, pagesize = 1000, verbose = FALSE)
-  con$import(tmp)
+  out <- file(tmp, open = "wt")                 # text-mode, no encoding arg
+  on.exit({ try(close(out), silent = TRUE); unlink(tmp) }, add = TRUE)
+  
+  stopifnot(inherits(out, "connection"))        # ensure connection object
+  jsonlite::stream_out(df, con = out, pagesize = 1000, verbose = FALSE)
+  close(out)                                    # flush before import
+  mongo_con$import(tmp)                         # path string, not a connection
 }
+
 
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
@@ -317,11 +315,9 @@ server <- function(input, output, session) {
     df <- annotated_data() %||% clustered_data()
     req(df)
     
-    # ensure Class exists
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     df$Class <- as.character(df$Class)
     
-    # metadata
     paths <- uploaded_paths()
     assignment_id <- UUIDgenerate()
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
@@ -336,24 +332,29 @@ server <- function(input, output, session) {
     df$ibd_file       <- if (!is.null(paths)) paths$ibd_name   else NA_character_
     df$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
-    # normalize + stream into Mongo
     tryCatch({
       withProgress(message = "Committing to MongoDB…", value = 0, {
         safe_df <- normalize_for_mongo(df)
-        incProgress(0.4, detail = "Preparing NDJSON")
+        incProgress(0.5, detail = "Building NDJSON")
+        # primary path: NDJSON import
         stream_import_to_mongo(msi_con, safe_df)
-        incProgress(1.0, detail = "Finalizing")
+        incProgress(1.0, detail = sprintf("assignment_id=%s", assignment_id))
       })
-      ins_count <- msi_con$count(query = list(assignment_id = assignment_id))
-      showNotification(
-        sprintf("Success: committed %d rows (assignment_id=%s).", ins_count, assignment_id),
-        type = "message", duration = 6
-      )
+      ins_count <- msi_con$count(list(assignment_id = assignment_id))
+      showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", ins_count, assignment_id),
+                       type = "message", duration = 6)
     }, error = function(e) {
-      showNotification(
-        paste0("MongoDB commit failed: ", conditionMessage(e)),
-        type = "error", duration = 10
-      )
+      # Fallback to direct insert if streaming fails for any reason
+      tryCatch({
+        safe_df <- normalize_for_mongo(df)
+        msi_con$insert(safe_df)
+        ins_count <- msi_con$count(list(assignment_id = assignment_id))
+        showNotification(sprintf("Committed via insert(): %d rows (assignment_id=%s).", ins_count, assignment_id),
+                         type = "warning", duration = 8)
+      }, error = function(e2) {
+        showNotification(paste0("MongoDB commit failed: ", conditionMessage(e2)),
+                         type = "error", duration = 10)
+      })
     })
   })
 }
