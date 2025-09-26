@@ -56,6 +56,20 @@ upsert_rows <- function(df_rows) {
   b$execute()
 }
 
+persist_if_complete <- function(df) {
+  if (!"Class" %in% names(df) || nrow(df) == 0) {
+    return(FALSE)
+  }
+  
+  is_complete <- all(!is.na(df$Class))
+  
+  if (is_complete) {
+    upsert_rows(df)
+  }
+  
+  is_complete
+}
+
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
   
@@ -74,7 +88,7 @@ ui <- navbarPage(
                fileInput("histology", "Optional: Upload histology image",
                          accept = c(".png", ".jpg", ".jpeg", ".tif")),
                
-               numericInput("clusters", "Number of clusters:", 
+               numericInput("clusters", "Number of clusters:",
                             value = 3, min = 2, max = 30),
                
                selectInput("method", "Clustering method:",
@@ -172,7 +186,7 @@ server <- function(input, output, session) {
   # annotated data (reactive copy)
   annotated_data <- reactiveVal(NULL)
   
-  observeEvent(input$run, { 
+  observeEvent(input$run, {
     annotated_data(NULL)
     class_colors(c("Unassigned" = "grey80"))
     next_color_i(1)
@@ -198,14 +212,17 @@ server <- function(input, output, session) {
         next_color_i(if (i == length(my_palette)) 1 else i + 1)
       }
       
-      # --- Upsert to MongoDB (overwrite instead of duplicate) ---
-      upsert_rows(df[!is.na(df$Class), ])
+      persisted <- persist_if_complete(df)
       
-      showNotification(
-        sprintf("Assigned '%s' to %d previously unassigned pixels. Data saved to MongoDB.",
-                input$class_label, n_unassigned),
-        type = "message", duration = 3
-      )
+      msg <- sprintf("Assigned '%s' to %d previously unassigned pixels.",
+                     input$class_label, n_unassigned)
+      if (persisted) {
+        msg <- paste(msg, "Data saved to MongoDB.")
+      } else {
+        msg <- paste(msg, "Complete all pixels to persist to MongoDB.")
+      }
+      
+      showNotification(msg, type = "message", duration = 3)
     } else {
       showNotification("No unassigned pixels left.", type = "warning", duration = 3)
     }
@@ -234,19 +251,22 @@ server <- function(input, output, session) {
       next_color_i(if (i == length(my_palette)) 1 else i + 1)
     }
     
-    # --- Upsert only the changed pixels ---
-    upsert_rows(df[idx, ])
+    persisted <- persist_if_complete(df)
     
-    showNotification(
-      sprintf("Assigned '%s' to %d pixels. Data saved to MongoDB.",
-              input$class_label, length(idx)),
-      type = "message", duration = 3
-    )
+    msg <- sprintf("Assigned '%s' to %d pixels.",
+                   input$class_label, length(idx))
+    if (persisted) {
+      msg <- paste(msg, "Data saved to MongoDB.")
+    } else {
+      msg <- paste(msg, "Complete all pixels to persist to MongoDB.")
+    }
+    
+    showNotification(msg, type = "message", duration = 3)
   })
   
   # --- color palette ---
   my_palette <- c(
-    "steelblue","seagreen","darkorange","darkviolet","gold","tan", 
+    "steelblue","seagreen","darkorange","darkviolet","gold","tan",
     "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
     "darkred","darkblue","darkgreen", "gray20","gray50",
     "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
