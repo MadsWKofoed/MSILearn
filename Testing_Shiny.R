@@ -17,51 +17,72 @@ options(shiny.maxRequestSize = 500*1024^2)
 options(shiny.launch.browser = TRUE)
 
 # Reusable Mongo connection (optional, not required to run clustering)
-msi_con <- mongo(
-  collection = "msi_data",
-  db = "msi_project",
-  url = "mongodb://localhost"
-)
+msi_con <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://localhost")
+
+
 
 # --- Helpers (drop-in) ---------------------------------------------------------
 sanitize_colnames <- function(nms) {
-  nms <- gsub("\\.", "_", nms, perl = TRUE)
-  nms <- ifelse(grepl("^\\$", nms), paste0("dollar_", sub("^\\$", "", nms)), nms)
+  nms <- gsub("\\.", "_", nms, perl = TRUE)                  # Mongo forbids '.'
+  nms <- ifelse(grepl("^\\$", nms), paste0("dollar_", sub("^\\$", "", nms)), nms)  # forbids leading $
   nms
 }
 
 normalize_for_mongo <- function(df) {
+  # keep only JSON-safe atomic scalars; make names Mongo-safe
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
+  
   # factors -> character
-  is_fac  <- vapply(df, is.factor, logical(1))
+  is_fac <- vapply(df, is.factor, logical(1))
   if (any(is_fac)) df[is_fac] <- lapply(df[is_fac], as.character)
-  # list-cols -> scalar character
+  
+  # list/complex/raw -> character scalars
   is_list <- vapply(df, is.list, logical(1))
   if (any(is_list)) {
     df[is_list] <- lapply(df[is_list], function(col)
       vapply(col, function(x) if (length(x) == 0) NA_character_ else as.character(x[[1]]), character(1))
     )
   }
-  # NaN/Inf -> NA
+  
+  # numeric: replace NaN/Inf (JSON/BSON don’t allow them)
   is_num <- vapply(df, is.numeric, logical(1))
   if (any(is_num)) {
     df[is_num] <- lapply(df[is_num], function(x) { x[is.nan(x) | is.infinite(x)] <- NA_real_; x })
   }
+  
+  # logical NA is fine; character NA will be serialized as null below
   rownames(df) <- NULL
   names(df) <- sanitize_colnames(names(df))
   df
 }
 
 stream_import_to_mongo <- function(mongo_con, df) {
-  # Write NDJSON file, then mongo$import(path). Avoids arg name collision with 'con'
+  # write NDJSON and import; fastest path for huge frames
   tmp <- tempfile(fileext = ".json")
-  out <- file(tmp, open = "wt")                 # text-mode, no encoding arg
+  out <- file(tmp, open = "wt")
   on.exit({ try(close(out), silent = TRUE); unlink(tmp) }, add = TRUE)
-  
-  stopifnot(inherits(out, "connection"))        # ensure connection object
   jsonlite::stream_out(df, con = out, pagesize = 1000, verbose = FALSE)
-  close(out)                                    # flush before import
-  mongo_con$import(tmp)                         # path string, not a connection
+  close(out)
+  mongo_con$import(tmp)  # path string; mongolite detects NDJSON
+}
+
+insert_json_batches <- function(mongo_con, df, batch_size = 1000) {
+  # fully control JSON; each element = one JSON document
+  n <- nrow(df)
+  if (!n) return(invisible(NULL))
+  starts <- seq(1, n, by = batch_size)
+  for (s in starts) {
+    e <- min(s + batch_size - 1, n)
+    rows <- s:e
+    docs <- vapply(rows, function(i) {
+      # one object per row
+      jsonlite::toJSON(as.list(df[i, , drop = FALSE]),
+                       auto_unbox = TRUE, na = "null", null = "null",
+                       POSIXt = "ISO8601", digits = NA)
+    }, character(1))
+    mongo_con$insert(docs)  # vector of JSON documents
+  }
+  invisible(NULL)
 }
 
 
@@ -335,26 +356,25 @@ server <- function(input, output, session) {
     tryCatch({
       withProgress(message = "Committing to MongoDB…", value = 0, {
         safe_df <- normalize_for_mongo(df)
-        incProgress(0.5, detail = "Building NDJSON")
-        # primary path: NDJSON import
-        stream_import_to_mongo(msi_con, safe_df)
-        incProgress(1.0, detail = sprintf("assignment_id=%s", assignment_id))
+        incProgress(0.3, detail = "Preparing records")
+        
+        # First try: fast NDJSON import
+        tryCatch({
+          stream_import_to_mongo(msi_con, safe_df)
+        }, error = function(e) {
+          # Fallback: JSON-string batches (avoids any ambiguous R->BSON conversion)
+          insert_json_batches(msi_con, safe_df, batch_size = 1000)
+        })
+        
+        incProgress(1, detail = sprintf("assignment_id=%s", assignment_id))
       })
+      
       ins_count <- msi_con$count(list(assignment_id = assignment_id))
-      showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", ins_count, assignment_id),
+      showNotification(sprintf("Committed %d rows (assignment_id=%s).", ins_count, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
-      # Fallback to direct insert if streaming fails for any reason
-      tryCatch({
-        safe_df <- normalize_for_mongo(df)
-        msi_con$insert(safe_df)
-        ins_count <- msi_con$count(list(assignment_id = assignment_id))
-        showNotification(sprintf("Committed via insert(): %d rows (assignment_id=%s).", ins_count, assignment_id),
-                         type = "warning", duration = 8)
-      }, error = function(e2) {
-        showNotification(paste0("MongoDB commit failed: ", conditionMessage(e2)),
-                         type = "error", duration = 10)
-      })
+      showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
+                       type = "error", duration = 10)
     })
   })
 }
