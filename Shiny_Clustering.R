@@ -4,30 +4,33 @@ library(Cardinal)
 library(dplyr)
 
 process_msi_files <- function(imzml_path, ibd_path, ref_mz_path = NULL) {
-  # Why: preserve pairing; .imzML expects a same-basename .ibd next to it
-  temp_dir  <- tempdir()
-  imz_dst   <- file.path(temp_dir, basename(imzml_path))
-  ibd_dst   <- file.path(temp_dir, basename(ibd_path))
+  validate_paths <- function(p) if (!file.exists(p)) stop("Missing file: ", p)
+  validate_paths(imzml_path); validate_paths(ibd_path)
+  
+  # Keep a deterministic pair so .imzML ↔ .ibd are side-by-side
+  temp_dir <- tempdir()
+  imz_dst  <- file.path(temp_dir, "upload.imzML")
+  ibd_dst  <- file.path(temp_dir, "upload.ibd")
   file.copy(imzml_path, imz_dst, overwrite = TRUE)
   file.copy(ibd_path,   ibd_dst, overwrite = TRUE)
   
-  # FIX: removed stray empty argument after imz path
+  # IMPORTANT: give readImzML the ibd path explicitly
   msi_data <- readImzML(
     imz_dst,
-    memory     = FALSE,
-    check      = FALSE,
-    mass.range = NULL,
-    resolution = 10,
-    units      = "ppm",
-    guess.max  = 1000L,
-    as         = "auto",
-    parse.only = FALSE,
-    verbose    = getCardinalVerbose(),
-    chunkopts  = list(),
-    BPPARAM    = getCardinalBPPARAM()
+    ibdpath   = ibd_dst,
+    memory    = FALSE,
+    check     = FALSE,
+    mass.range= NULL,
+    resolution= 10,
+    units     = "ppm",
+    guess.max = 1000L,
+    as        = "auto",
+    parse.only= FALSE,
+    verbose   = getCardinalVerbose(),
+    chunkopts = list(),
+    BPPARAM   = getCardinalBPPARAM()
   )
   
-  # Reference build (robust): use external ref if provided, else fallback
   control_mean <- summarizeFeatures(msi_data, "mean")
   control_ref <- tryCatch({
     if (!is.null(ref_mz_path) && file.exists(ref_mz_path)) {
@@ -40,24 +43,19 @@ process_msi_files <- function(imzml_path, ibd_path, ref_mz_path = NULL) {
     } else {
       control_mean %>% peakPick(SNR = 3) %>% process()
     }
-  }, error = function(e) {
-    # Why: keep the pipeline running even if alignment fails
-    control_mean %>% peakPick(SNR = 3) %>% process()
-  })
+  }, error = function(e) control_mean %>% peakPick(SNR = 3) %>% process())
   
-  # Bin to reference m/z grid
   msi_data <- bin(msi_data, ref = mz(control_ref), tolerance = 0.5, units = "mz") %>% process()
   
-  # Feature matrix
-  m <- t(as.matrix(spectra(msi_data)))
-  mz_names <- paste0("mz_", mz(msi_data))  # safe, simple names
+  m        <- t(as.matrix(spectra(msi_data)))
+  mz_names <- paste0("mz_", mz(msi_data))
   coords   <- coord(msi_data)
   run_id   <- runNames(msi_data)
   
   full_df <- data.frame(
     runNames = rep(run_id, nrow(m)),
-    x        = coords$x,
-    y        = coords$y,
+    x = coords$x,
+    y = coords$y,
     m,
     check.names = FALSE
   )
@@ -65,6 +63,7 @@ process_msi_files <- function(imzml_path, ibd_path, ref_mz_path = NULL) {
   rownames(full_df) <- NULL
   full_df
 }
+
 
 # K-means clustering
 run_kmeans <- function(full_df, k = 3) {
