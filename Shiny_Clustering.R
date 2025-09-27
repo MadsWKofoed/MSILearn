@@ -1,55 +1,70 @@
 # Shiny_Clustering.R
+# ------------------------------------------------------------------------------
 library(Cardinal)
 library(dplyr)
 
-process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
-  message("Copying uploaded files to a temporary directory...")
-  temp_dir <- tempdir()
-  temp_imzml <- file.path(temp_dir, "data.imzML")
-  temp_ibd   <- file.path(temp_dir, "data.ibd")
-  file.copy(imzml_path, temp_imzml, overwrite = TRUE)
-  file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
+process_msi_files <- function(imzml_path, ibd_path, ref_mz_path = NULL) {
+  # Why: preserve pairing; .imzML expects a same-basename .ibd next to it
+  temp_dir  <- tempdir()
+  imz_dst   <- file.path(temp_dir, basename(imzml_path))
+  ibd_dst   <- file.path(temp_dir, basename(ibd_path))
+  file.copy(imzml_path, imz_dst, overwrite = TRUE)
+  file.copy(ibd_path,   ibd_dst, overwrite = TRUE)
   
-  message("Reading MSI data...")
-  msi_data <- readImzML(temp_imzml, , memory = FALSE, check = FALSE,
-                        mass.range = NULL, resolution = 10, units = c("ppm"),
-                        guess.max = 1000L, as = "auto", parse.only=FALSE,
-                        verbose = getCardinalVerbose(), chunkopts = list(),
-                        BPPARAM = getCardinalBPPARAM())
+  # FIX: removed stray empty argument after imz path
+  msi_data <- readImzML(
+    imz_dst,
+    memory     = FALSE,
+    check      = FALSE,
+    mass.range = NULL,
+    resolution = 10,
+    units      = "ppm",
+    guess.max  = 1000L,
+    as         = "auto",
+    parse.only = FALSE,
+    verbose    = getCardinalVerbose(),
+    chunkopts  = list(),
+    BPPARAM    = getCardinalBPPARAM()
+  )
   
-  message("Summarizing reference sample...")
+  # Reference build (robust): use external ref if provided, else fallback
   control_mean <- summarizeFeatures(msi_data, "mean")
-  ref_mz <- read.csv(ref_mz_path)
+  control_ref <- tryCatch({
+    if (!is.null(ref_mz_path) && file.exists(ref_mz_path)) {
+      ref_mz <- read.csv(ref_mz_path)
+      control_mean %>%
+        peakPick(SNR = 3) %>%
+        peakAlign(ref = as.numeric(ref_mz[[1]]), tolerance = 0.5, units = "mz") %>%
+        subsetFeatures() %>%
+        process()
+    } else {
+      control_mean %>% peakPick(SNR = 3) %>% process()
+    }
+  }, error = function(e) {
+    # Why: keep the pipeline running even if alignment fails
+    control_mean %>% peakPick(SNR = 3) %>% process()
+  })
   
-  control_MSI_ref <- control_mean %>%
-    peakPick(SNR = 3) %>%
-    peakAlign(ref = as.numeric(ref_mz[, 1]), tolerance = 0.5, units = "mz") %>%
-    subsetFeatures() %>%
-    process()
+  # Bin to reference m/z grid
+  msi_data <- bin(msi_data, ref = mz(control_ref), tolerance = 0.5, units = "mz") %>% process()
   
-  message("Binning MSI data...")
-  msi_data <- bin(msi_data, ref = mz(control_MSI_ref),
-                  tolerance = 0.5, units = "mz") %>% process()
-  
-  message("Building feature matrix...")
-  msi_matrix <- t(as.matrix(spectra(msi_data)))
-  mz_names <- paste0("mz_", mz(msi_data))
-  coords <- coord(msi_data)
-  run_id <- runNames(msi_data)
-  pixel_names <- rep(run_id, nrow(msi_matrix))
+  # Feature matrix
+  m <- t(as.matrix(spectra(msi_data)))
+  mz_names <- paste0("mz_", mz(msi_data))  # safe, simple names
+  coords   <- coord(msi_data)
+  run_id   <- runNames(msi_data)
   
   full_df <- data.frame(
-    runNames = pixel_names,
-    x = coords$x,
-    y = coords$y,
-    msi_matrix
+    runNames = rep(run_id, nrow(m)),
+    x        = coords$x,
+    y        = coords$y,
+    m,
+    check.names = FALSE
   )
   colnames(full_df) <- c("runNames", "x", "y", mz_names)
-  
+  rownames(full_df) <- NULL
   full_df
 }
-
-
 
 # K-means clustering
 run_kmeans <- function(full_df, k = 3) {
@@ -62,11 +77,8 @@ run_kmeans <- function(full_df, k = 3) {
 # Hierarchical clustering
 run_hclust <- function(full_df, k = 3) {
   feature_matrix <- as.matrix(full_df[, grep("^mz_", colnames(full_df))])
-  d <- dist(feature_matrix)
+  d  <- dist(feature_matrix)
   hc <- hclust(d, method = "ward.D2")
-  clusters <- cutree(hc, k = k)
-  full_df$cluster <- clusters
+  full_df$cluster <- cutree(hc, k = k)
   full_df
 }
-
-
