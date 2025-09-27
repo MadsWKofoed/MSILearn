@@ -22,69 +22,39 @@ msi_con <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://l
 
 
 # --- Helpers (drop-in) ---------------------------------------------------------
-sanitize_colnames <- function(nms) {
-  nms <- gsub("\\.", "_", nms, perl = TRUE)                  # Mongo forbids '.'
-  nms <- ifelse(grepl("^\\$", nms), paste0("dollar_", sub("^\\$", "", nms)), nms)  # forbids leading $
-  nms
+null_if_na <- function(x) {
+  # Why: mongolite prefers NULL over NA inside lists
+  if (length(x) == 1 && (is.na(x) || is.nan(x) || is.infinite(x))) return(NULL)
+  x
 }
-
-normalize_for_mongo <- function(df) {
-  # keep only JSON-safe atomic scalars; make names Mongo-safe
+normalize_scalar_cols <- function(df) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
-  
-  # factors -> character
   is_fac <- vapply(df, is.factor, logical(1))
   if (any(is_fac)) df[is_fac] <- lapply(df[is_fac], as.character)
-  
-  # list/complex/raw -> character scalars
-  is_list <- vapply(df, is.list, logical(1))
-  if (any(is_list)) {
-    df[is_list] <- lapply(df[is_list], function(col)
-      vapply(col, function(x) if (length(x) == 0) NA_character_ else as.character(x[[1]]), character(1))
-    )
-  }
-  
-  # numeric: replace NaN/Inf (JSON/BSON don’t allow them)
   is_num <- vapply(df, is.numeric, logical(1))
   if (any(is_num)) {
     df[is_num] <- lapply(df[is_num], function(x) { x[is.nan(x) | is.infinite(x)] <- NA_real_; x })
   }
-  
-  # logical NA is fine; character NA will be serialized as null below
   rownames(df) <- NULL
-  names(df) <- sanitize_colnames(names(df))
   df
 }
-
-stream_import_to_mongo <- function(mongo_con, df) {
-  # write NDJSON and import; fastest path for huge frames
-  tmp <- tempfile(fileext = ".json")
-  out <- file(tmp, open = "wt")
-  on.exit({ try(close(out), silent = TRUE); unlink(tmp) }, add = TRUE)
-  jsonlite::stream_out(df, con = out, pagesize = 1000, verbose = FALSE)
-  close(out)
-  mongo_con$import(tmp)  # path string; mongolite detects NDJSON
+to_docs <- function(df_small) {
+  # list of named lists, NA -> NULL (per-field)
+  lapply(seq_len(nrow(df_small)), function(i) {
+    r <- as.list(df_small[i, , drop = FALSE])
+    for (nm in names(r)) r[[nm]] <- null_if_na(r[[nm]])
+    r
+  })
 }
-
-insert_json_batches <- function(mongo_con, df, batch_size = 1000) {
-  # fully control JSON; each element = one JSON document
-  n <- nrow(df)
-  if (!n) return(invisible(NULL))
+insert_docs_batched <- function(con, docs, batch_size = 5000) {
+  n <- length(docs); if (!n) return(invisible(NULL))
   starts <- seq(1, n, by = batch_size)
   for (s in starts) {
     e <- min(s + batch_size - 1, n)
-    rows <- s:e
-    docs <- vapply(rows, function(i) {
-      # one object per row
-      jsonlite::toJSON(as.list(df[i, , drop = FALSE]),
-                       auto_unbox = TRUE, na = "null", null = "null",
-                       POSIXt = "ISO8601", digits = NA)
-    }, character(1))
-    mongo_con$insert(docs)  # vector of JSON documents
+    con$insert(docs[s:e])  # list of documents
   }
   invisible(NULL)
 }
-
 
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
@@ -336,41 +306,46 @@ server <- function(input, output, session) {
     df <- annotated_data() %||% clustered_data()
     req(df)
     
+    # Ensure Class column
     if (!"Class" %in% names(df)) df$Class <- NA_character_
-    df$Class <- as.character(df$Class)
     
-    paths <- uploaded_paths()
+    # ---- Annotation-only payload (do NOT push thousands of mz_* columns) ----
     assignment_id <- UUIDgenerate()
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
     
-    df$row_id         <- seq_len(nrow(df))
-    df$assignment_id  <- assignment_id
-    df$committed_at   <- committed_at
-    df$method         <- input$method
-    df$k              <- as.integer(input$clusters)
-    df$orientation    <- input$orientation
-    df$imzml_file     <- if (!is.null(paths)) paths$imzml_name else NA_character_
-    df$ibd_file       <- if (!is.null(paths)) paths$ibd_name   else NA_character_
-    df$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
+    ann <- data.frame(
+      runNames      = as.character(df$runNames),
+      x             = as.numeric(df$x),
+      y             = as.numeric(df$y),
+      cluster       = as.integer(df$cluster),
+      Class         = as.character(df$Class),
+      assignment_id = assignment_id,
+      committed_at  = committed_at,
+      method        = as.character(input$method),
+      k             = as.integer(input$clusters),
+      orientation   = as.character(input$orientation),
+      stringsAsFactors = FALSE, check.names = FALSE
+    )
+    # Optional file metadata (safe even if NULL)
+    paths <- uploaded_paths()
+    ann$imzml_file     <- if (!is.null(paths)) as.character(paths$imzml_name) else NA_character_
+    ann$ibd_file       <- if (!is.null(paths)) as.character(paths$ibd_name)   else NA_character_
+    ann$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
+    # Normalize to BSON-safe scalars
+    ann <- normalize_scalar_cols(ann)
+    
+    # Convert rows to plain documents, NA -> NULL
+    docs <- to_docs(ann)
+    
+    # Insert in batches
     tryCatch({
-      withProgress(message = "Committing to MongoDB…", value = 0, {
-        safe_df <- normalize_for_mongo(df)
-        incProgress(0.3, detail = "Preparing records")
-        
-        # First try: fast NDJSON import
-        tryCatch({
-          stream_import_to_mongo(msi_con, safe_df)
-        }, error = function(e) {
-          # Fallback: JSON-string batches (avoids any ambiguous R->BSON conversion)
-          insert_json_batches(msi_con, safe_df, batch_size = 1000)
-        })
-        
-        incProgress(1, detail = sprintf("assignment_id=%s", assignment_id))
+      withProgress(message = "Committing annotations to MongoDB…", value = 0, {
+        insert_docs_batched(msi_con, docs, batch_size = 5000)
+        incProgress(1)
       })
-      
-      ins_count <- msi_con$count(list(assignment_id = assignment_id))
-      showNotification(sprintf("Committed %d rows (assignment_id=%s).", ins_count, assignment_id),
+      n <- msi_con$count(list(assignment_id = assignment_id))
+      showNotification(sprintf("Committed %d annotated pixels (assignment_id=%s).", n, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
       showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
