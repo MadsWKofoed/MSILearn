@@ -4,17 +4,27 @@ library(Cardinal)
 library(dplyr)
 
 process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
-  message("Copying uploaded files to a temporary directory...")
-  temp_dir <- tempdir()
+  message("Staging uploaded files…")
+  temp_dir <- file.path(tempdir(), "msi_upload")
+  dir.create(temp_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  # Use SAME basename so Cardinal finds the .ibd next to .imzML
   temp_imzml <- file.path(temp_dir, "data.imzML")
   temp_ibd   <- file.path(temp_dir, "data.ibd")
-  file.copy(imzml_path, temp_imzml, overwrite = TRUE)
-  file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
   
-  message("Reading MSI data...")
+  ok1 <- file.copy(imzml_path, temp_imzml, overwrite = TRUE)
+  ok2 <- file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
+  if (!ok1 || !file.exists(temp_imzml)) stop("Failed to stage imzML at: ", temp_imzml)  # why: readImzML requires both files
+  if (!ok2 || !file.exists(temp_ibd))   stop("Failed to stage IBD at: ", temp_ibd)
+  
+  if (!is.character(ref_mz_path) || !nzchar(ref_mz_path) || !file.exists(ref_mz_path)) {
+    stop("Reference m/z CSV not found at: ", ref_mz_path)  # why: peakAlign needs a reference axis
+  }
+  
+  message("Reading MSI data…")
   msi_data <- readImzML(
-    file = temp_imzml,
-    path = NULL,                  # fix: remove stray comma; explicit path arg
+    file = basename(temp_imzml),  # "data.imzML"
+    path = temp_dir,              # must be a valid directory; not NULL
     memory = FALSE, check = FALSE,
     mass.range = NULL, resolution = 10, units = c("ppm"),
     guess.max = 1000L, as = "auto", parse.only = FALSE,
@@ -22,7 +32,7 @@ process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
     BPPARAM = getCardinalBPPARAM()
   )
   
-  message("Summarizing reference sample...")
+  message("Summarizing reference sample…")
   control_mean <- summarizeFeatures(msi_data, "mean")
   ref_mz <- read.csv(ref_mz_path)
   
@@ -32,11 +42,12 @@ process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
     subsetFeatures() %>%
     process()
   
-  message("Binning MSI data...")
+  message("Binning MSI data…")
   msi_data <- bin(msi_data, ref = mz(control_MSI_ref),
-                  tolerance = 0.5, units = "mz") %>% process()
+                  tolerance = 0.5, units = "mz") %>%
+    process()
   
-  message("Building feature matrix...")
+  message("Building feature matrix…")
   msi_matrix <- t(as.matrix(spectra(msi_data)))
   mz_names <- paste0("mz_", mz(msi_data))
   coords <- coord(msi_data)
