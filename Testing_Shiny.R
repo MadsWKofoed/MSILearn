@@ -12,6 +12,7 @@ library(uuid)
 library(jsonlite)
 
 source("Shiny_Clustering.R")
+source("Helper_functions.R")
 
 options(shiny.maxRequestSize = 500*1024^2)
 options(shiny.launch.browser = TRUE)
@@ -20,41 +21,6 @@ options(shiny.launch.browser = TRUE)
 msi_con <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://localhost")
 
 
-
-# --- Helpers (drop-in) ---------------------------------------------------------
-null_if_na <- function(x) {
-  # Why: mongolite prefers NULL over NA inside lists
-  if (length(x) == 1 && (is.na(x) || is.nan(x) || is.infinite(x))) return(NULL)
-  x
-}
-normalize_scalar_cols <- function(df) {
-  df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
-  is_fac <- vapply(df, is.factor, logical(1))
-  if (any(is_fac)) df[is_fac] <- lapply(df[is_fac], as.character)
-  is_num <- vapply(df, is.numeric, logical(1))
-  if (any(is_num)) {
-    df[is_num] <- lapply(df[is_num], function(x) { x[is.nan(x) | is.infinite(x)] <- NA_real_; x })
-  }
-  rownames(df) <- NULL
-  df
-}
-to_docs <- function(df_small) {
-  # list of named lists, NA -> NULL (per-field)
-  lapply(seq_len(nrow(df_small)), function(i) {
-    r <- as.list(df_small[i, , drop = FALSE])
-    for (nm in names(r)) r[[nm]] <- null_if_na(r[[nm]])
-    r
-  })
-}
-insert_docs_batched <- function(con, docs, batch_size = 5000) {
-  n <- length(docs); if (!n) return(invisible(NULL))
-  starts <- seq(1, n, by = batch_size)
-  for (s in starts) {
-    e <- min(s + batch_size - 1, n)
-    con$insert(docs[s:e])  # list of documents
-  }
-  invisible(NULL)
-}
 
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
@@ -306,12 +272,12 @@ server <- function(input, output, session) {
     df <- annotated_data() %||% clustered_data()
     req(df)
     
-    # Ensure Class column
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     
-    # ---- Annotation-only payload (do NOT push thousands of mz_* columns) ----
+    # Build a SMALL, atomic, annotation-only frame
     assignment_id <- UUIDgenerate()
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
+    paths <- uploaded_paths()
     
     ann <- data.frame(
       runNames      = as.character(df$runNames),
@@ -324,32 +290,38 @@ server <- function(input, output, session) {
       method        = as.character(input$method),
       k             = as.integer(input$clusters),
       orientation   = as.character(input$orientation),
+      imzml_file     = if (!is.null(paths)) as.character(paths$imzml_name) else NA_character_,
+      ibd_file       = if (!is.null(paths)) as.character(paths$ibd_name)   else NA_character_,
+      histology_file = if (!is.null(input$histology)) basename(input$histology$name) else NA_character_,
       stringsAsFactors = FALSE, check.names = FALSE
     )
-    # Optional file metadata (safe even if NULL)
-    paths <- uploaded_paths()
-    ann$imzml_file     <- if (!is.null(paths)) as.character(paths$imzml_name) else NA_character_
-    ann$ibd_file       <- if (!is.null(paths)) as.character(paths$ibd_name)   else NA_character_
-    ann$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
-    # Normalize to BSON-safe scalars
-    ann <- normalize_scalar_cols(ann)
+    ann <- normalize_annotation_df(ann)
     
-    # Convert rows to plain documents, NA -> NULL
-    docs <- to_docs(ann)
-    
-    # Insert in batches
     tryCatch({
-      withProgress(message = "Committing annotations to MongoDB…", value = 0, {
-        insert_docs_batched(msi_con, docs, batch_size = 5000)
+      withProgress(message = "Committing annotations…", value = 0, {
+        # FAST PATH: insert as a data.frame (what mongolite expects)
+        insert_dataframe_chunked(msi_con, ann, chunk = 20000)
         incProgress(1)
       })
       n <- msi_con$count(list(assignment_id = assignment_id))
       showNotification(sprintf("Committed %d annotated pixels (assignment_id=%s).", n, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
-      showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
-                       type = "error", duration = 10)
+      # Fallback: row-wise JSON strings
+      tryCatch({
+        withProgress(message = "Committing annotations (JSON fallback)…", value = 0, {
+          json_vec <- df_rows_to_json(ann)
+          insert_json_chunked(msi_con, json_vec, chunk = 20000)
+          incProgress(1)
+        })
+        n <- msi_con$count(list(assignment_id = assignment_id))
+        showNotification(sprintf("Committed via JSON fallback: %d rows (assignment_id=%s).", n, assignment_id),
+                         type = "warning", duration = 8)
+      }, error = function(e2) {
+        showNotification(paste0("MongoDB commit failed: ", conditionMessage(e2)),
+                         type = "error", duration = 10)
+      })
     })
   })
 }
