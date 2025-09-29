@@ -1,3 +1,4 @@
+# file: Shiny_Clustering.R
 # Shiny_Clustering.R
 library(Cardinal)
 library(dplyr)
@@ -11,11 +12,15 @@ process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
   file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
   
   message("Reading MSI data...")
-  msi_data <- readImzML(temp_imzml, , memory = FALSE, check = FALSE,
-                        mass.range = NULL, resolution = 10, units = c("ppm"),
-                        guess.max = 1000L, as = "auto", parse.only=FALSE,
-                        verbose = getCardinalVerbose(), chunkopts = list(),
-                        BPPARAM = getCardinalBPPARAM())
+  msi_data <- readImzML(
+    file = temp_imzml,
+    path = NULL,                  # fix: remove stray comma; explicit path arg
+    memory = FALSE, check = FALSE,
+    mass.range = NULL, resolution = 10, units = c("ppm"),
+    guess.max = 1000L, as = "auto", parse.only = FALSE,
+    verbose = getCardinalVerbose(), chunkopts = list(),
+    BPPARAM = getCardinalBPPARAM()
+  )
   
   message("Summarizing reference sample...")
   control_mean <- summarizeFeatures(msi_data, "mean")
@@ -42,14 +47,14 @@ process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
     runNames = pixel_names,
     x = coords$x,
     y = coords$y,
-    msi_matrix
+    msi_matrix,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
   )
   colnames(full_df) <- c("runNames", "x", "y", mz_names)
   
   full_df
 }
-
-
 
 # K-means clustering
 run_kmeans <- function(full_df, k = 3) {
@@ -68,5 +73,3 @@ run_hclust <- function(full_df, k = 3) {
   full_df$cluster <- clusters
   full_df
 }
-
-
