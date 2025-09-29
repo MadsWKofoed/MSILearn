@@ -1,11 +1,9 @@
-# file: Helper_functions.R
 # --- Helpers (drop-in) ---------------------------------------------------------
 null_if_na <- function(x) {
   # Why: mongolite prefers NULL over NA inside lists
   if (length(x) == 1 && (is.na(x) || is.nan(x) || is.infinite(x))) return(NULL)
   x
 }
-
 normalize_scalar_cols <- function(df) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
   is_fac <- vapply(df, is.factor, logical(1))
@@ -17,7 +15,6 @@ normalize_scalar_cols <- function(df) {
   rownames(df) <- NULL
   df
 }
-
 to_docs <- function(df_small) {
   # list of named lists, NA -> NULL (per-field)
   lapply(seq_len(nrow(df_small)), function(i) {
@@ -26,7 +23,6 @@ to_docs <- function(df_small) {
     r
   })
 }
-
 insert_docs_batched <- function(con, docs, batch_size = 5000) {
   n <- length(docs); if (!n) return(invisible(NULL))
   starts <- seq(1, n, by = batch_size)

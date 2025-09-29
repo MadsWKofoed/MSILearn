@@ -10,7 +10,7 @@ library(RColorBrewer)
 library(mongolite)
 library(uuid)
 library(jsonlite)
-library(digest)   # dataset_id hashing
+library(digest)
 
 source("Shiny_Clustering.R")
 source("Helper_functions.R")
@@ -18,8 +18,10 @@ source("Helper_functions.R")
 options(shiny.maxRequestSize = 500*1024^2)
 options(shiny.launch.browser = TRUE)
 
-# Reusable Mongo connection
+# Reusable Mongo connection (optional, not required to run clustering)
 msi_con <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://localhost")
+
+
 
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
@@ -58,19 +60,18 @@ ui <- navbarPage(
 )
 
 server <- function(input, output, session) {
+  
   uploaded_paths <- reactiveVal(NULL)
-  committing <- reactiveVal(FALSE)  # re-entrancy guard for commit
   
   observeEvent(input$msi_files, {
     req(input$msi_files)
-    
+    # Match by extension on the *original names*; keep both paths
     imzml_idx <- grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)
     ibd_idx   <- grepl("\\.ibd$",   input$msi_files$name, ignore.case = TRUE)
     
-    # FIX: jsonlite::validate was masking shiny::validate
-    shiny::validate(
-      shiny::need(sum(imzml_idx) == 1, "Please upload one .imzML file"),
-      shiny::need(sum(ibd_idx)   == 1, "Please upload one .ibd file")
+    validate(
+      need(sum(imzml_idx) == 1, "Please upload one .imzML file"),
+      need(sum(ibd_idx)   == 1, "Please upload one .ibd file")
     )
     
     uploaded_paths(list(
@@ -81,24 +82,18 @@ server <- function(input, output, session) {
     ))
   })
   
-  # Stable dataset_id from filenames + sizes (same dataset => same id)
-  dataset_id <- reactive({
-    paths <- uploaded_paths(); req(paths)
-    sz_imzml <- tryCatch(file.info(paths$imzml)$size, error = function(...) NA_real_)
-    sz_ibd   <- tryCatch(file.info(paths$ibd)$size,   error = function(...) NA_real_)
-    digest(paste(paths$imzml_name, paths$ibd_name, sz_imzml, sz_ibd, sep = "|"), algo = "sha1")
-  })
-  
+  # Processing + clustering only on click, with visible errors.
   clustered_data <- eventReactive(input$run, {
     paths <- uploaded_paths()
     req(paths)
+    
     withProgress(message = "Running preprocessing & clustering…", value = 0, {
       incProgress(0.05, detail = "Preparing inputs")
       out <- tryCatch({
         df <- process_msi_files(
           imzml_path = paths$imzml,
           ibd_path   = paths$ibd,
-          ref_mz_path = "ref_mz.csv"
+          ref_mz_path = "ref_mz.csv"  # optional; handled inside
         )
         incProgress(0.5, detail = "Clustering")
         if (input$method == "K-means") {
@@ -273,60 +268,62 @@ server <- function(input, output, session) {
                                         "hoverCompareCartesian","toggleSpikelines","toImage"))
   })
   
-  # Commit to MongoDB: save metadata + all mz_* bins; prevent duplicate inserts
-  observeEvent(input$commit_db, ignoreInit = TRUE, {
-    if (isTRUE(committing())) {
-      showNotification("Commit is already in progress. Please wait…", type = "warning", duration = 4)
-      return(invisible(NULL))  # Why: avoid accidental double insert on rapid clicks
+  # Commit to MongoDB (unchanged logic)
+  observeEvent(input$commit_db, {
+    # Re-entrancy guard (avoid duplicate inserts on rapid clicks)
+    if (isTRUE(session$userData$committing)) {
+      showNotification("Commit already in progress…", type = "warning", duration = 4)
+      return(invisible(NULL))  # why: avoid sending twice
     }
-    committing(TRUE); on.exit(committing(FALSE), add = TRUE)
+    session$userData$committing <- TRUE
+    on.exit({ session$userData$committing <- FALSE }, add = TRUE)
     
-    df <- annotated_data() %||% clustered_data()
-    req(df)
-    
+    df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
+    
+    # Stable dataset_id from uploaded file names + sizes
+    paths <- uploaded_paths()
+    dataset_id <- tryCatch({
+      sz_imzml <- if (!is.null(paths)) file.info(paths$imzml)$size else NA_real_
+      sz_ibd   <- if (!is.null(paths)) file.info(paths$ibd)$size   else NA_real_
+      digest(paste(paths$imzml_name, paths$ibd_name, sz_imzml, sz_ibd, sep = "|"), algo = "sha1")
+    }, error = function(e) UUIDgenerate())
     
     assignment_id <- UUIDgenerate()
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
     
-    # Select mz_* columns to store full spectra
+    # Identify all m/z columns (full spectra)
     mz_cols <- grep("^mz_", names(df), value = TRUE)
     
-    # Build annotation + spectra in a single wide doc per pixel
+    # Metadata per pixel
     ann <- data.frame(
-      dataset_id   = dataset_id(),
-      run_id       = as.character(df$runNames),
-      x            = as.numeric(df$x),
-      y            = as.numeric(df$y),
-      cluster      = as.integer(df$cluster),
-      Class        = as.character(df$Class),
+      dataset_id    = dataset_id,
+      run_id        = as.character(df$runNames),
+      x             = as.numeric(df$x),
+      y             = as.numeric(df$y),
+      cluster       = as.integer(df$cluster),
+      Class         = as.character(df$Class),
       assignment_id = assignment_id,
       committed_at  = committed_at,
       method        = as.character(input$method),
       k             = as.integer(input$clusters),
       orientation   = as.character(input$orientation),
-      stringsAsFactors = FALSE,
-      check.names = FALSE
+      stringsAsFactors = FALSE, check.names = FALSE
     )
     
-    # Optional file metadata
-    paths <- uploaded_paths()
+    # Optional file metadata (kept from your code)
     ann$imzml_file     <- if (!is.null(paths)) as.character(paths$imzml_name) else NA_character_
     ann$ibd_file       <- if (!is.null(paths)) as.character(paths$ibd_name)   else NA_character_
     ann$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
-    # Append full spectra (danger: many columns; ensure within Mongo's 16MB doc limit)
+    # Append all mz_* bins (wide schema: one field per bin)
     ann_all <- cbind(ann, df[, mz_cols, drop = FALSE])
-    ann_all <- normalize_scalar_cols(ann_all)
     
-    # Convert to BSON-safe docs (NA -> NULL)
+    # Normalize scalars; NA → NULL
+    ann_all <- normalize_scalar_cols(ann_all)
     docs <- to_docs(ann_all)
     
-    # Idempotency: remove any existing docs with same assignment_id before insert
-    # Why: protects against duplicated inserts due to double-trigger
-    tryCatch(msi_con$remove(query = list(assignment_id = assignment_id)), error = function(e) {})
-    
-    # Insert in batches
+    # Insert and report
     tryCatch({
       withProgress(message = "Committing annotations + spectra to MongoDB…", value = 0, {
         insert_docs_batched(msi_con, docs, batch_size = 5000)
@@ -343,3 +340,4 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
