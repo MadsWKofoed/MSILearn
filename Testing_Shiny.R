@@ -63,12 +63,14 @@ server <- function(input, output, session) {
   
   observeEvent(input$msi_files, {
     req(input$msi_files)
+    
     imzml_idx <- grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)
     ibd_idx   <- grepl("\\.ibd$",   input$msi_files$name, ignore.case = TRUE)
     
-    validate(
-      need(sum(imzml_idx) == 1, "Please upload one .imzML file"),
-      need(sum(ibd_idx)   == 1, "Please upload one .ibd file")
+    # FIX: jsonlite::validate was masking shiny::validate
+    shiny::validate(
+      shiny::need(sum(imzml_idx) == 1, "Please upload one .imzML file"),
+      shiny::need(sum(ibd_idx)   == 1, "Please upload one .ibd file")
     )
     
     uploaded_paths(list(
