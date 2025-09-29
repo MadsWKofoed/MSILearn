@@ -10,7 +10,6 @@ library(RColorBrewer)
 library(mongolite)
 library(uuid)
 library(jsonlite)
-library(digest)
 
 source("Shiny_Clustering.R")
 source("Helper_functions.R")
@@ -270,35 +269,18 @@ server <- function(input, output, session) {
   
   # Commit to MongoDB (unchanged logic)
   observeEvent(input$commit_db, {
-    # Re-entrancy guard (avoid duplicate inserts on rapid clicks)
-    if (isTRUE(session$userData$committing)) {
-      showNotification("Commit already in progress…", type = "warning", duration = 4)
-      return(invisible(NULL))  # why: avoid sending twice
-    }
-    session$userData$committing <- TRUE
-    on.exit({ session$userData$committing <- FALSE }, add = TRUE)
+    df <- annotated_data() %||% clustered_data()
+    req(df)
     
-    df <- annotated_data() %||% clustered_data(); req(df)
+    # Ensure Class column
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     
-    # Stable dataset_id from uploaded file names + sizes
-    paths <- uploaded_paths()
-    dataset_id <- tryCatch({
-      sz_imzml <- if (!is.null(paths)) file.info(paths$imzml)$size else NA_real_
-      sz_ibd   <- if (!is.null(paths)) file.info(paths$ibd)$size   else NA_real_
-      digest(paste(paths$imzml_name, paths$ibd_name, sz_imzml, sz_ibd, sep = "|"), algo = "sha1")
-    }, error = function(e) UUIDgenerate())
-    
+    # ---- Annotation-only payload (do NOT push thousands of mz_* columns) ----
     assignment_id <- UUIDgenerate()
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
     
-    # Identify all m/z columns (full spectra)
-    mz_cols <- grep("^mz_", names(df), value = TRUE)
-    
-    # Metadata per pixel
     ann <- data.frame(
-      dataset_id    = dataset_id,
-      run_id        = as.character(df$runNames),
+      runNames      = as.character(df$runNames),
       x             = as.numeric(df$x),
       y             = as.numeric(df$y),
       cluster       = as.integer(df$cluster),
@@ -310,28 +292,27 @@ server <- function(input, output, session) {
       orientation   = as.character(input$orientation),
       stringsAsFactors = FALSE, check.names = FALSE
     )
-    
-    # Optional file metadata (kept from your code)
+    # Optional file metadata (safe even if NULL)
+    paths <- uploaded_paths()
     ann$imzml_file     <- if (!is.null(paths)) as.character(paths$imzml_name) else NA_character_
     ann$ibd_file       <- if (!is.null(paths)) as.character(paths$ibd_name)   else NA_character_
     ann$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
-    # Append all mz_* bins (wide schema: one field per bin)
-    ann_all <- cbind(ann, df[, mz_cols, drop = FALSE])
+    # Normalize to BSON-safe scalars
+    ann <- normalize_scalar_cols(ann)
     
-    # Normalize scalars; NA → NULL
-    ann_all <- normalize_scalar_cols(ann_all)
-    docs <- to_docs(ann_all)
+    # Convert rows to plain documents, NA -> NULL
+    docs <- to_docs(ann)
     
-    # Insert and report
+    # Insert in batches
     tryCatch({
-      withProgress(message = "Committing annotations + spectra to MongoDB…", value = 0, {
+      withProgress(message = "Committing annotations to MongoDB…", value = 0, {
         insert_docs_batched(msi_con, docs, batch_size = 5000)
         incProgress(1)
       })
       n <- msi_con$count(list(assignment_id = assignment_id))
-      showNotification(sprintf("Committed %d pixel documents (assignment_id=%s).", n, assignment_id),
-                       type = "message", duration = 8)
+      showNotification(sprintf("Committed %d annotated pixels (assignment_id=%s).", n, assignment_id),
+                       type = "message", duration = 6)
     }, error = function(e) {
       showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
                        type = "error", duration = 10)
