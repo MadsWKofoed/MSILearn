@@ -1,9 +1,13 @@
-normalize_annotation_df <- function(df) {
+# --- Helpers (drop-in) ---------------------------------------------------------
+null_if_na <- function(x) {
+  # Why: mongolite prefers NULL over NA inside lists
+  if (length(x) == 1 && (is.na(x) || is.nan(x) || is.infinite(x))) return(NULL)
+  x
+}
+normalize_scalar_cols <- function(df) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
-  # Factors -> character
   is_fac <- vapply(df, is.factor, logical(1))
   if (any(is_fac)) df[is_fac] <- lapply(df[is_fac], as.character)
-  # Numeric: NaN/Inf -> NA
   is_num <- vapply(df, is.numeric, logical(1))
   if (any(is_num)) {
     df[is_num] <- lapply(df[is_num], function(x) { x[is.nan(x) | is.infinite(x)] <- NA_real_; x })
@@ -11,26 +15,20 @@ normalize_annotation_df <- function(df) {
   rownames(df) <- NULL
   df
 }
-
-df_rows_to_json <- function(df) {
-  vapply(seq_len(nrow(df)), function(i) {
-    jsonlite::toJSON(
-      as.list(df[i, , drop = FALSE]),
-      auto_unbox = TRUE, na = "null", null = "null", POSIXt = "ISO8601", digits = NA
-    )
-  }, character(1))
+to_docs <- function(df_small) {
+  # list of named lists, NA -> NULL (per-field)
+  lapply(seq_len(nrow(df_small)), function(i) {
+    r <- as.list(df_small[i, , drop = FALSE])
+    for (nm in names(r)) r[[nm]] <- null_if_na(r[[nm]])
+    r
+  })
 }
-
-insert_dataframe_chunked <- function(con, df, chunk = 20000) {
-  n <- nrow(df); if (!n) return(invisible(NULL))
-  idx <- split(seq_len(n), ceiling(seq_len(n)/chunk))
-  for (ids in idx) con$insert(df[ids, , drop = FALSE])
-  invisible(NULL)
-}
-
-insert_json_chunked <- function(con, json_vec, chunk = 20000) {
-  n <- length(json_vec); if (!n) return(invisible(NULL))
-  idx <- split(seq_len(n), ceiling(seq_len(n)/chunk))
-  for (ids in idx) con$insert(json_vec[ids])
+insert_docs_batched <- function(con, docs, batch_size = 5000) {
+  n <- length(docs); if (!n) return(invisible(NULL))
+  starts <- seq(1, n, by = batch_size)
+  for (s in starts) {
+    e <- min(s + batch_size - 1, n)
+    con$insert(docs[s:e])  # list of documents
+  }
   invisible(NULL)
 }
