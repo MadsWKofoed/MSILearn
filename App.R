@@ -1,5 +1,5 @@
-# file: app.R
-# ────────────────────────────────────────────────────────────────────────────────
+# App.R
+
 library(shiny)
 library(ggplot2)
 library(gridExtra)
@@ -18,7 +18,7 @@ options(shiny.maxRequestSize = 500*1024^2)
 options(shiny.launch.browser = TRUE)
 setCardinalNChunks(nchunks = 1L)
 
-# Reusable Mongo connection (optional, not required to run clustering)
+# Mongo connection
 msi_con <- mongo(
   collection = "msi_data",
   db = "msi_project",
@@ -292,32 +292,18 @@ server <- function(input, output, session) {
     df$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
     tryCatch({
-      withProgress(message = "Committing to MongoDB…", value = 0, {
-        safe_df <- normalize_for_mongo(df)
-        incProgress(0.5, detail = "Building NDJSON")
-        # primary path: NDJSON import
-        stream_import_to_mongo(msi_con, safe_df)
-        incProgress(1.0, detail = sprintf("assignment_id=%s", assignment_id))
-      })
+      safe_df <- normalize_for_mongo(df)
+      msi_con$insert(safe_df)
       ins_count <- nrow(df)
       showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", 
                                ins_count, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
-      # Fallback to direct insert if streaming fails
-      tryCatch({
-        safe_df <- normalize_for_mongo(df)
-        msi_con$insert(safe_df)
-        ins_count <- nrow(df)
-        showNotification(sprintf("Committed via insert(): %d rows (assignment_id=%s).", 
-                                 ins_count, assignment_id),
-                         type = "warning", duration = 8)
-      }, error = function(e2) {
-        showNotification(paste0("MongoDB commit failed: ", conditionMessage(e2)),
-                         type = "error", duration = 10)
-      })
+      showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
+                       type = "error", duration = 10)
     })
   })
+  
   
 }
 
