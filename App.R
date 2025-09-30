@@ -83,20 +83,50 @@ server <- function(input, output, session) {
     ))
   })
   
-  # Processing + clustering only on click, with visible errors.
-  clustered_data <- eventReactive(input$run, {
+  # Preprocessing and saving dataframe in cache
+  processed_data <- reactiveVal(NULL)
+  
+  
+  observeEvent(input$run, {
     paths <- uploaded_paths()
     req(paths)
     
-    withProgress(message = "Running preprocessing & clustering…", value = 0, {
-      incProgress(0.05, detail = "Preparing inputs")
+    if (is.null(processed_data())) {
+      withProgress(message = "Running preprocessing…", value = 0, {
+        incProgress(0.05, detail = "Preparing inputs")
+        df <- tryCatch({
+          process_msi_files(
+            imzml_path = paths$imzml,
+            ibd_path   = paths$ibd,
+            ref_mz_path = "ref_mz.csv"
+          )
+        }, error = function(e) {
+          showNotification(
+            paste("Processing failed:", conditionMessage(e)),
+            type = "error", duration = 10
+          )
+          return(NULL)
+        })
+        incProgress(1)
+        processed_data(df)
+      })
+    }
+  })
+  
+  
+  # Reset the processed data when new files are used
+  observeEvent(input$msi_files, {
+    processed_data(NULL)  # reset cache
+  })
+  
+  
+  # Clustering on the processed data
+  clustered_data <- eventReactive(input$run, {
+    df <- processed_data()
+    req(df)
+    
+    withProgress(message = "Clustering…", value = 0, {
       out <- tryCatch({
-        df <- process_msi_files(
-          imzml_path = paths$imzml,
-          ibd_path   = paths$ibd,
-          ref_mz_path = "ref_mz.csv"  # optional; handled inside
-        )
-        incProgress(0.5, detail = "Clustering")
         if (input$method == "K-means") {
           run_kmeans(df, k = input$clusters)
         } else {
@@ -109,10 +139,11 @@ server <- function(input, output, session) {
         )
         return(NULL)
       })
-      incProgress(1)
       out
     })
   })
+  
+  
   
   # Histology zoom ranges
   histology_ranges <- reactiveValues(x = NULL, y = NULL)
