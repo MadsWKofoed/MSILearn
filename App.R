@@ -299,16 +299,18 @@ server <- function(input, output, session) {
         stream_import_to_mongo(msi_con, safe_df)
         incProgress(1.0, detail = sprintf("assignment_id=%s", assignment_id))
       })
-      ins_count <- msi_con$count(sprintf('{"assignment_id":"%s"}', assignment_id))
-      showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", ins_count, assignment_id),
+      ins_count <- nrow(df)
+      showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", 
+                               ins_count, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
-      # Fallback to direct insert if streaming fails for any reason
+      # Fallback to direct insert if streaming fails
       tryCatch({
         safe_df <- normalize_for_mongo(df)
         msi_con$insert(safe_df)
-        ins_count <- msi_con$count(list(assignment_id = assignment_id))
-        showNotification(sprintf("Committed via insert(): %d rows (assignment_id=%s).", ins_count, assignment_id),
+        ins_count <- nrow(df)
+        showNotification(sprintf("Committed via insert(): %d rows (assignment_id=%s).", 
+                                 ins_count, assignment_id),
                          type = "warning", duration = 8)
       }, error = function(e2) {
         showNotification(paste0("MongoDB commit failed: ", conditionMessage(e2)),
@@ -316,6 +318,7 @@ server <- function(input, output, session) {
       })
     })
   })
+  
 }
 
 shinyApp(ui = ui, server = server)
