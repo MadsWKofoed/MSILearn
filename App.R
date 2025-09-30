@@ -11,14 +11,19 @@ library(mongolite)
 library(uuid)
 library(jsonlite)
 
-source("Shiny_Clustering.R")
+source("processing_clustering.R")
 source("Helper_functions.R")
 
 options(shiny.maxRequestSize = 500*1024^2)
 options(shiny.launch.browser = TRUE)
+setCardinalNChunks(nchunks = 5L)
 
 # Reusable Mongo connection (optional, not required to run clustering)
-msi_con <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://localhost")
+msi_con <- mongo(
+  collection = "msi_data",
+  db = "msi_project",
+  url = "mongodb://localhost"
+)
 
 
 
@@ -68,10 +73,7 @@ server <- function(input, output, session) {
     imzml_idx <- grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)
     ibd_idx   <- grepl("\\.ibd$",   input$msi_files$name, ignore.case = TRUE)
     
-    validate(
-      need(sum(imzml_idx) == 1, "Please upload one .imzML file"),
-      need(sum(ibd_idx)   == 1, "Please upload one .ibd file")
-    )
+
     
     uploaded_paths(list(
       imzml = input$msi_files$datapath[imzml_idx],
@@ -272,53 +274,48 @@ server <- function(input, output, session) {
     df <- annotated_data() %||% clustered_data()
     req(df)
     
-    # Ensure Class column
     if (!"Class" %in% names(df)) df$Class <- NA_character_
+    df$Class <- as.character(df$Class)
     
-    # ---- Annotation-only payload (do NOT push thousands of mz_* columns) ----
+    paths <- uploaded_paths()
     assignment_id <- UUIDgenerate()
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
     
-    ann <- data.frame(
-      runNames      = as.character(df$runNames),
-      x             = as.numeric(df$x),
-      y             = as.numeric(df$y),
-      cluster       = as.integer(df$cluster),
-      Class         = as.character(df$Class),
-      assignment_id = assignment_id,
-      committed_at  = committed_at,
-      method        = as.character(input$method),
-      k             = as.integer(input$clusters),
-      orientation   = as.character(input$orientation),
-      stringsAsFactors = FALSE, check.names = FALSE
-    )
-    # Optional file metadata (safe even if NULL)
-    paths <- uploaded_paths()
-    ann$imzml_file     <- if (!is.null(paths)) as.character(paths$imzml_name) else NA_character_
-    ann$ibd_file       <- if (!is.null(paths)) as.character(paths$ibd_name)   else NA_character_
-    ann$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
+    df$row_id         <- seq_len(nrow(df))
+    df$assignment_id  <- assignment_id
+    df$committed_at   <- committed_at
+    df$method         <- input$method
+    df$k              <- as.integer(input$clusters)
+    df$orientation    <- input$orientation
+    df$imzml_file     <- if (!is.null(paths)) paths$imzml_name else NA_character_
+    df$ibd_file       <- if (!is.null(paths)) paths$ibd_name   else NA_character_
+    df$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
-    # Normalize to BSON-safe scalars
-    ann <- normalize_scalar_cols(ann)
-    
-    # Convert rows to plain documents, NA -> NULL
-    docs <- to_docs(ann)
-    
-    # Insert in batches
     tryCatch({
-      withProgress(message = "Committing annotations to MongoDB…", value = 0, {
-        insert_docs_batched(msi_con, docs, batch_size = 5000)
-        incProgress(1)
+      withProgress(message = "Committing to MongoDB…", value = 0, {
+        safe_df <- normalize_for_mongo(df)
+        incProgress(0.5, detail = "Building NDJSON")
+        # primary path: NDJSON import
+        stream_import_to_mongo(msi_con, safe_df)
+        incProgress(1.0, detail = sprintf("assignment_id=%s", assignment_id))
       })
-      n <- msi_con$count(list(assignment_id = assignment_id))
-      showNotification(sprintf("Committed %d annotated pixels (assignment_id=%s).", n, assignment_id),
+      ins_count <- msi_con$count(list(assignment_id = assignment_id))
+      showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", ins_count, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
-      showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
-                       type = "error", duration = 10)
+      # Fallback to direct insert if streaming fails for any reason
+      tryCatch({
+        safe_df <- normalize_for_mongo(df)
+        msi_con$insert(safe_df)
+        ins_count <- msi_con$count(list(assignment_id = assignment_id))
+        showNotification(sprintf("Committed via insert(): %d rows (assignment_id=%s).", ins_count, assignment_id),
+                         type = "warning", duration = 8)
+      }, error = function(e2) {
+        showNotification(paste0("MongoDB commit failed: ", conditionMessage(e2)),
+                         type = "error", duration = 10)
+      })
     })
   })
 }
 
 shinyApp(ui = ui, server = server)
-
