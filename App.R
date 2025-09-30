@@ -16,7 +16,7 @@ source("Helper_functions.R")
 
 options(shiny.maxRequestSize = 500*1024^2)
 options(shiny.launch.browser = TRUE)
-setCardinalNChunks(nchunks = 5L)
+setCardinalNChunks(nchunks = 1L)
 
 # Reusable Mongo connection (optional, not required to run clustering)
 msi_con <- mongo(
@@ -278,7 +278,7 @@ server <- function(input, output, session) {
     df$Class <- as.character(df$Class)
     
     paths <- uploaded_paths()
-    assignment_id <- UUIDgenerate()
+    assignment_id <- as.character(UUIDgenerate())
     committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
     
     df$row_id         <- seq_len(nrow(df))
@@ -299,7 +299,7 @@ server <- function(input, output, session) {
         stream_import_to_mongo(msi_con, safe_df)
         incProgress(1.0, detail = sprintf("assignment_id=%s", assignment_id))
       })
-      ins_count <- msi_con$count(list(assignment_id = assignment_id))
+      ins_count <- msi_con$count(sprintf('{"assignment_id":"%s"}', assignment_id))
       showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", ins_count, assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
