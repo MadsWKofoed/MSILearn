@@ -4,17 +4,21 @@ library(dplyr)
 
 process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
   message("Copying uploaded files to a temporary directory...")
-  temp_dir <- tempdir()
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
+  
   temp_imzml <- file.path(temp_dir, basename(imzml_path))
   temp_ibd   <- file.path(temp_dir, basename(ibd_path))
   file.copy(imzml_path, temp_imzml, overwrite = TRUE)
   file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
   
   message("Reading MSI data...")
-  msi_data <- readImzML(temp_imzml, , memory = FALSE, check = FALSE,
-                        mass.range = NULL, resolution = 10, units = c("ppm"),
-                        guess.max = 1000L, as = "auto", parse.only=FALSE,
-                        verbose = getCardinalVerbose(), chunkopts = list(),
+  msi_data <- readImzML(temp_imzml,
+                        memory = FALSE, check = FALSE,
+                        mass.range = NULL, resolution = 10, units = "ppm",
+                        guess.max = 1000L, as = "auto", parse.only = FALSE,
+                        verbose = getCardinalVerbose(),
+                        chunkopts = list(),
                         BPPARAM = getCardinalBPPARAM())
   
   message("Summarizing reference sample...")
