@@ -14,7 +14,7 @@ library(jsonlite)
 source("processing_clustering.R")
 source("Helper_functions.R")
 
-options(shiny.maxRequestSize = 500*1024^2)
+options(shiny.maxRequestSize = 5000*1024^2)
 options(shiny.launch.browser = TRUE)
 setCardinalNChunks(nchunks = 1L)
 
