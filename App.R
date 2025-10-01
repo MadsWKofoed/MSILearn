@@ -98,6 +98,7 @@ server <- function(input, output, session) {
           process_msi_files(
             imzml_path = paths$imzml,
             ibd_path   = paths$ibd,
+            imzml_name = paths$imzml_name,
             ref_mz_path = "ref_mz.csv"
           )
         }, error = function(e) {

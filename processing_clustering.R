@@ -2,11 +2,13 @@
 library(Cardinal)
 library(dplyr)
 
-process_msi_files <- function(imzml_path, ibd_path, ref_mz_path) {
+process_msi_files <- function(imzml_path, ibd_path, imzml_name, ref_mz_path) {
   message("Copying uploaded files to a temporary directory...")
-  temp_dir <- tempdir()
+  temp_dir <- tempfile()
+  dir.create(temp_dir)
   
-  base <- tools::file_path_sans_ext(basename(imzml_path))
+  # use original name to build consistent basename
+  base <- tools::file_path_sans_ext(basename(imzml_name))
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
   
