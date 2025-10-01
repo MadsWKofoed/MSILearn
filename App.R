@@ -10,6 +10,7 @@ library(RColorBrewer)
 library(mongolite)
 library(uuid)
 library(jsonlite)
+library(BiocParallel)
 
 source("processing_clustering.R")
 source("Helper_functions.R")
@@ -17,6 +18,9 @@ source("Helper_functions.R")
 options(shiny.maxRequestSize = 5000*1024^2)
 options(shiny.launch.browser = TRUE)
 setCardinalNChunks(nchunks = 1L)
+
+bp <- MulticoreParam(workers = parallel::detectCores() - 1)
+register(bp)
 
 # Mongo connection
 msi_con <- mongo(
