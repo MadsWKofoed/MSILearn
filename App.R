@@ -22,7 +22,7 @@ options(shiny.launch.browser = TRUE)
 bp <- MulticoreParam(workers = parallel::detectCores() - 1)
 register(bp)
 
-setCardinalParallel(workers = bp)
+setCardinalParallel(workers = snowWorkers())
 
 
 # Mongo connection
