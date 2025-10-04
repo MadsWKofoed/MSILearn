@@ -20,7 +20,7 @@ process_msi_files <- function(imzml_path, ibd_path, imzml_name, ref_mz_path) {
                         mass.range = NULL, resolution = 10, units = c("ppm"),
                         guess.max = 1000L, as = "auto", parse.only=FALSE,
                         verbose = getCardinalVerbose(), chunkopts = list(),
-                        BPPARAM = getCardinalBPPARAM())
+                        BPPARAM = bpparam())
   
   message("Summarizing reference sample...")
   control_mean <- summarizeFeatures(msi_data, "mean")
@@ -34,7 +34,7 @@ process_msi_files <- function(imzml_path, ibd_path, imzml_name, ref_mz_path) {
   
   message("Binning MSI data...")
   msi_data <- bin(msi_data, ref = mz(control_MSI_ref),
-                  tolerance = 0.5, units = "mz") %>% process()
+                  tolerance = 0.5, units = "mz", BPPARAM = bpparam()) %>% process()
   
   message("Building feature matrix...")
   msi_matrix <- t(as.matrix(spectra(msi_data)))
