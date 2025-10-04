@@ -17,10 +17,16 @@ source("Helper_functions.R")
 
 options(shiny.maxRequestSize = 5000*1024^2)
 options(shiny.launch.browser = TRUE)
-setCardinalNChunks(nchunks = 1L)
+# setCardinalNChunks(nchunks = 1L)
 
 bp <- MulticoreParam(workers = parallel::detectCores() - 1)
 register(bp)
+
+ncores <- parallel::detectCores() - 1
+
+setCardinalBPPARAM(bp)      
+setCardinalNWorkers(ncores)  
+setCardinalNChunks(ncores) 
 
 # Mongo connection
 msi_con <- mongo(
