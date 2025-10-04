@@ -22,11 +22,8 @@ options(shiny.launch.browser = TRUE)
 bp <- MulticoreParam(workers = parallel::detectCores() - 1)
 register(bp)
 
-ncores <- parallel::detectCores() - 1
+setCardinalParallel(workers = bp)
 
-setCardinalBPPARAM(bp)      
-setCardinalNWorkers(ncores)  
-setCardinalNChunks(ncores) 
 
 # Mongo connection
 msi_con <- mongo(
