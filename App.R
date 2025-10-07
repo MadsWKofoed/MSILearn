@@ -1,27 +1,31 @@
-# App.R
+# app.R
+# MSI Clustering + Interactive Annotation (Leaflet-based)
+# ────────────────────────────────────────────────────────────────
 
 library(shiny)
 library(ggplot2)
-library(gridExtra)
 library(png)
 library(grid)
-library(plotly)
 library(RColorBrewer)
 library(mongolite)
 library(uuid)
 library(jsonlite)
 library(BiocParallel)
+library(Cardinal)
+library(leaflet)
+library(leaflet.extras)
+library(sf)
+library(dplyr)
 
 source("processing_clustering.R")
 source("Helper_functions.R")
 
-options(shiny.maxRequestSize = 5000*1024^2)
+options(shiny.maxRequestSize = 5000 * 1024^2)
 options(shiny.launch.browser = TRUE)
 
-
-bp <- parallel::detectCores() - 1
-setCardinalParallel(workers = bp) 
-
+# Parallel backend
+bp <- MulticoreParam(workers = parallel::detectCores() - 1)
+setCardinalParallel(workers = bp)
 
 # Mongo connection
 msi_con <- mongo(
@@ -30,8 +34,9 @@ msi_con <- mongo(
   url = "mongodb://localhost"
 )
 
-
-
+# ────────────────────────────────────────────────────────────────
+# UI
+# ────────────────────────────────────────────────────────────────
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
   tabPanel("Welcome",
@@ -58,7 +63,8 @@ ui <- navbarPage(
                width = 2
              ),
              mainPanel(
-               uiOutput("cluster_layout"), width = 10
+               leafletOutput("msi_leaflet", height = "700px"),
+               width = 10
              )
            )
   ),
@@ -68,100 +74,137 @@ ui <- navbarPage(
   )
 )
 
+# ────────────────────────────────────────────────────────────────
+# SERVER
+# ────────────────────────────────────────────────────────────────
 server <- function(input, output, session) {
   
-  
+  # Reactive storage
   uploaded_paths <- reactiveVal(NULL)
+  processed_data <- reactiveVal(NULL)
+  clustered_data <- reactiveVal(NULL)
+  annotated_data <- reactiveVal(NULL)
+  drawn_polygon <- reactiveVal(NULL)
   
+  # Color palette
+  my_palette <- c(
+    "red", "blue", "green", "orange", "purple", "brown", "pink", "cyan", "magenta", "yellow",
+    "darkred", "darkblue", "darkgreen", "darkorange", "darkviolet", "gold", "gray20", "gray50",
+    "deepskyblue", "springgreen", "navy", "maroon", "olive", "turquoise", "orchid", "salmon",
+    "khaki", "steelblue", "seagreen", "tan"
+  )
+  class_colors <- reactiveVal(c("Unassigned" = "grey80"))
+  next_color_i <- reactiveVal(1)
+  
+  # Upload handling
   observeEvent(input$msi_files, {
     req(input$msi_files)
-    # Match by extension on the *original names*; keep both paths
     imzml_idx <- grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)
-    ibd_idx   <- grepl("\\.ibd$",   input$msi_files$name, ignore.case = TRUE)
-    
-
+    ibd_idx <- grepl("\\.ibd$", input$msi_files$name, ignore.case = TRUE)
     
     uploaded_paths(list(
       imzml = input$msi_files$datapath[imzml_idx],
-      ibd   = input$msi_files$datapath[ibd_idx],
+      ibd = input$msi_files$datapath[ibd_idx],
       imzml_name = input$msi_files$name[imzml_idx],
-      ibd_name   = input$msi_files$name[ibd_idx]
+      ibd_name = input$msi_files$name[ibd_idx]
     ))
+    processed_data(NULL)
+    clustered_data(NULL)
   })
   
-  # Preprocessing and saving dataframe in cache
-  processed_data <- reactiveVal(NULL)
-  
-  
+  # Processing (only once per upload)
   observeEvent(input$run, {
-    paths <- uploaded_paths()
-    req(paths)
+    paths <- uploaded_paths(); req(paths)
     
     if (is.null(processed_data())) {
-      withProgress(message = "Running preprocessing…", value = 0, {
-        incProgress(0.05, detail = "Preparing inputs")
-        df <- tryCatch({
-          process_msi_files(
-            imzml_path = paths$imzml,
-            ibd_path   = paths$ibd,
-            imzml_name = paths$imzml_name,
-            ref_mz_path = "ref_mz.csv"
-          )
-        }, error = function(e) {
-          showNotification(
-            paste("Processing failed:", conditionMessage(e)),
-            type = "error", duration = 10
-          )
-          return(NULL)
-        })
-        incProgress(1)
+      withProgress(message = "Processing MSI files…", value = 0, {
+        df <- process_msi_files(
+          imzml_path = paths$imzml,
+          ibd_path = paths$ibd,
+          imzml_name = paths$imzml_name,
+          ref_mz_path = "ref_mz.csv"
+        )
         processed_data(df)
       })
     }
   })
   
-  
-  # Reset the processed data when new files are used
-  observeEvent(input$msi_files, {
-    processed_data(NULL)  # reset cache
-  })
-  
-  
-  # Clustering on the processed data
-  clustered_data <- eventReactive(input$run, {
+  # Clustering
+  observeEvent(input$run, {
     df <- processed_data(); req(df)
-    out <- if (input$method == "K-means") run_kmeans(df, k = input$clusters) else run_hclust(df, k = input$clusters)
-    out$row_id <- seq_len(nrow(out))   # <- til selection
-    out
+    withProgress(message = "Running clustering…", value = 0, {
+      if (input$method == "K-means") {
+        df <- run_kmeans(df, k = input$clusters)
+      } else {
+        df <- run_hclust(df, k = input$clusters)
+      }
+      df$row_id <- seq_len(nrow(df))
+      clustered_data(df)
+      annotated_data(df)
+    })
   })
   
-  
-  
-  # Histology zoom ranges
-  histology_ranges <- reactiveValues(x = NULL, y = NULL)
-  observeEvent(input$histology_brush, {
-    histology_ranges$x <- c(input$histology_brush$xmin, input$histology_brush$xmax)
-    histology_ranges$y <- c(input$histology_brush$ymin, input$histology_brush$ymax)
+  # ─────────────────────────────
+  # LEAFLET DISPLAY + SELECTION
+  # ─────────────────────────────
+  output$msi_leaflet <- renderLeaflet({
+    df <- clustered_data(); req(df)
+    cols <- brewer.pal(max(df$cluster), "Set3")
+    
+    leaflet(options = leafletOptions(crs = leafletCRS(crsClass = "L.CRS.Simple"))) %>%
+      addTiles() %>%
+      addRasterImage(
+        matrix(df$cluster, nrow = length(unique(df$y)), ncol = length(unique(df$x))),
+        colors = cols, opacity = 0.8
+      ) %>%
+      addDrawToolbar(
+        targetGroup = "draw",
+        polylineOptions = FALSE,
+        circleOptions = FALSE,
+        rectangleOptions = FALSE,
+        circleMarkerOptions = FALSE,
+        markerOptions = FALSE,
+        polygonOptions = drawPolygonOptions(shapeOptions = drawShapeOptions(color = "black"))
+      ) %>%
+      addLayersControl(overlayGroups = "draw", options = layersControlOptions(collapsed = FALSE))
   })
-  observeEvent(input$reset_zoom, {
-    histology_ranges$x <- NULL; histology_ranges$y <- NULL
+  
+  # Capture drawn polygons
+  observeEvent(input$msi_leaflet_draw_new_feature, {
+    feature <- input$msi_leaflet_draw_new_feature
+    coords <- feature$geometry$coordinates[[1]]
+    poly <- st_polygon(list(do.call(rbind, coords))) %>% st_sfc(crs = 4326)
+    drawn_polygon(poly)
   })
   
-  # Class assignment storage & palette
-  annotated_data <- reactiveVal(NULL)
-  observeEvent(input$run, { annotated_data(NULL); class_colors(c("Unassigned" = "grey80")); next_color_i(1) })
+  # Assign class to polygon selection
+  observeEvent(input$assign_class, {
+    df <- annotated_data(); req(df)
+    poly <- drawn_polygon(); req(poly)
+    
+    # Create sf points
+    pts <- st_as_sf(df, coords = c("x", "y"), crs = 4326)
+    inside <- lengths(st_within(pts, poly)) > 0
+    
+    if (!"Class" %in% names(df)) df$Class <- NA_character_
+    df$Class[inside] <- input$class_label
+    annotated_data(df)
+    
+    cols <- class_colors(); lab <- input$class_label
+    if (!(lab %in% names(cols))) {
+      i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
+      next_color_i(if (i == length(my_palette)) 1 else i + 1)
+    }
+    
+    showNotification(
+      sprintf("Assigned '%s' to %d pixels.", input$class_label, sum(inside)),
+      type = "message", duration = 3
+    )
+  })
   
-  my_palette <- c(
-    "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
-    "darkred","darkblue","darkgreen","darkorange","darkviolet","gold","gray20","gray50",
-    "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
-    "khaki","steelblue","seagreen","tan"
-  )
-  class_colors <- reactiveVal(c("Unassigned" = "grey80"))
-  next_color_i <- reactiveVal(1)
-  
+  # Assign all unassigned
   observeEvent(input$assign_all, {
-    df <- annotated_data() %||% clustered_data(); req(df)
+    df <- annotated_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     n_unassigned <- sum(is.na(df$Class))
     if (n_unassigned > 0) {
@@ -179,184 +222,36 @@ server <- function(input, output, session) {
     }
   })
   
-  observeEvent(input$assign_class, {
-    df <- annotated_data() %||% clustered_data(); req(df)
-    sel <- selected_points(); req(nrow(sel) > 0)
-    
-    if (!"Class" %in% names(df)) df$Class <- NA_character_
-    df$Class[sel$row_id] <- input$class_label
-    annotated_data(df)
-    
-    cols <- class_colors(); lab <- input$class_label
-    if (!(lab %in% names(cols))) {
-      i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
-      next_color_i(if (i == length(my_palette)) 1 else i + 1)
-    }
-    
-    showNotification(
-      sprintf("Assigned '%s' to %d pixels.", input$class_label, nrow(sel)),
-      type = "message", duration = 3
-    )
-  })
-
-  
-  
-  plot_ranges <- reactive({
-    df <- clustered_data(); req(df)
-    df$x_plot <- df$x; df$y_plot <- df$y
-    if (input$orientation == "Swap axes") { tmp <- df$x_plot; df$x_plot <- df$y_plot; df$y_plot <- tmp
-    } else if (input$orientation == "Flip X") { df$x_plot <- -df$x_plot
-    } else if (input$orientation == "Flip Y") { df$y_plot <- -df$y_plot
-    } else if (input$orientation == "Flip Both") { df$x_plot <- -df$x_plot; df$y_plot <- -df$y_plot }
-    list(x = range(df$x_plot, na.rm = TRUE), y = range(df$y_plot, na.rm = TRUE))
-  })
-  
-  output$cluster_layout <- renderUI({
-    req(clustered_data())
-    if (is.null(input$histology)) {
-      fluidRow(
-        column(6, plotOutput("cluster_plot", height = "600px",
-                             brush = brushOpts(id = "cluster_brush", resetOnNew = TRUE))),
-        column(6, plotlyOutput("class_plot", height = "600px"))
-      )
-    } else {
-      fluidRow(
-        column(6, plotOutput("histology_plot", height = "500px",
-                             brush = brushOpts(id = "histology_brush", resetOnNew = TRUE)),
-               actionButton("reset_zoom", "Reset Zoom")),
-        column(6, 
-               plotOutput("cluster_plot", height = "600px",
-                          brush = brushOpts(id = "cluster_brush", resetOnNew = TRUE)),
-               plotlyOutput("class_plot", height = "600px"))
-      )
-      
-    }
-  })
-  
-  output$histology_plot <- renderPlot({
-    req(input$histology)
-    img <- png::readPNG(input$histology$datapath)
-    dims <- dim(img)
-    x_range <- histology_ranges$x %||% c(0, dims[2])
-    y_range <- histology_ranges$y %||% c(0, dims[1])
-    ggplot() +
-      annotation_raster(img, xmin = 0, xmax = dims[2], ymin = 0, ymax = dims[1]) +
-      coord_cartesian(xlim = x_range, ylim = y_range, expand = FALSE) +
-      theme_void()
-  })
-  
-  output$cluster_plot <- renderPlot({
-    df <- clustered_data(); req(df)
-    df$x_plot <- df$x
-    df$y_plot <- df$y
-    
-    if (input$orientation == "Swap axes") {
-      tmp <- df$x_plot; df$x_plot <- df$y_plot; df$y_plot <- tmp
-    } else if (input$orientation == "Flip X") {
-      df$x_plot <- -df$x_plot
-    } else if (input$orientation == "Flip Y") {
-      df$y_plot <- -df$y_plot
-    } else if (input$orientation == "Flip Both") {
-      df$x_plot <- -df$x_plot; df$y_plot <- -df$y_plot
-    }
-    
-    p <- ggplot(df, aes(x = x_plot, y = y_plot, fill = factor(cluster))) +
-      geom_tile(width = 1, height = 1) +
-      coord_equal() +
-      scale_fill_brewer(palette = "Set3") +
-      theme_void() +
-      labs(title = "MSI Clustering Result")
-    
-    if (!is.null(input$cluster_brush)) {
-      b <- input$cluster_brush
-      p <- p + 
-        annotate("rect", xmin = b$xmin, xmax = b$xmax, ymin = b$ymin, ymax = b$ymax,
-                 fill = NA, color = "black", linetype = "dashed")
-    }
-    p
-  })
-  
-  selected_points <- reactive({
-    req(input$cluster_brush)
-    brush <- input$cluster_brush
-    df <- annotated_data() %||% clustered_data(); req(df)
-    
-    # Beregn x_plot/y_plot her også
-    df$x_plot <- df$x; df$y_plot <- df$y
-    if (input$orientation == "Swap axes") { tmp <- df$x_plot; df$x_plot <- df$y_plot; df$y_plot <- tmp
-    } else if (input$orientation == "Flip X") { df$x_plot <- -df$x_plot
-    } else if (input$orientation == "Flip Y") { df$y_plot <- -df$y_plot
-    } else if (input$orientation == "Flip Both") { df$x_plot <- -df$x_plot; df$y_plot <- -df$y_plot }
-    
-    with(brush, {
-      df[df$x_plot >= xmin & df$x_plot <= xmax &
-           df$y_plot >= ymin & df$y_plot <= ymax, , drop = FALSE]
-    })
-  })
-  
-  output$class_plot <- renderPlotly({
-    df <- annotated_data() %||% clustered_data(); req(df)
-    if (!"Class" %in% names(df)) df$Class <- NA_character_
-    df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
-    df$x_plot <- df$x; df$y_plot <- df$y
-    if (input$orientation == "Swap axes") { tmp <- df$x_plot; df$x_plot <- df$y_plot; df$y_plot <- tmp
-    } else if (input$orientation == "Flip X") { df$x_plot <- -df$x_plot
-    } else if (input$orientation == "Flip Y") { df$y_plot <- -df$y_plot
-    } else if (input$orientation == "Flip Both") { df$x_plot <- -df$x_plot; df$y_plot <- -df$y_plot }
-    present <- unique(df$Class_plot)
-    cols <- class_colors(); cols_used <- cols[present]; names(cols_used) <- present
-    g <- ggplot(df, aes(x = x_plot, y = y_plot, fill = Class_plot)) +
-      geom_tile(width = 1, height = 1) +
-      scale_fill_manual(values = cols_used, drop = FALSE) +
-      coord_equal() + theme_minimal() +
-      labs(fill = "Class", title = "User Annotation Result")
-    ggplotly(g, tooltip = "fill") %>%
-      layout(
-        dragmode = "zoom",
-        xaxis = list(range = plot_ranges()$x),
-        yaxis = list(range = plot_ranges()$y, scaleanchor = "x", scaleratio = 1)
-      ) %>%
-      config(displaylogo = FALSE,
-             modeBarButtonsToRemove = c("select2d","lasso2d","hoverClosestCartesian",
-                                        "hoverCompareCartesian","toggleSpikelines","toImage"))
-  })
-  
-  # Commit to MongoDB (unchanged logic)
+  # Commit to MongoDB
   observeEvent(input$commit_db, {
-    df <- annotated_data() %||% clustered_data()
-    req(df)
-    
+    df <- annotated_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     df$Class <- as.character(df$Class)
     
     paths <- uploaded_paths()
     assignment_id <- as.character(UUIDgenerate())
-    committed_at  <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
+    committed_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
     
-    df$row_id         <- seq_len(nrow(df))
-    df$assignment_id  <- assignment_id
-    df$committed_at   <- committed_at
-    df$method         <- input$method
-    df$k              <- as.integer(input$clusters)
-    df$orientation    <- input$orientation
-    df$imzml_file     <- if (!is.null(paths)) paths$imzml_name else NA_character_
-    df$ibd_file       <- if (!is.null(paths)) paths$ibd_name   else NA_character_
+    df$assignment_id <- assignment_id
+    df$committed_at <- committed_at
+    df$method <- input$method
+    df$k <- as.integer(input$clusters)
+    df$orientation <- input$orientation
+    df$imzml_file <- if (!is.null(paths)) paths$imzml_name else NA_character_
+    df$ibd_file <- if (!is.null(paths)) paths$ibd_name else NA_character_
     df$histology_file <- if (!is.null(input$histology)) basename(input$histology$name) else NA_character_
     
     tryCatch({
       safe_df <- normalize_for_mongo(df)
       msi_con$insert(safe_df)
-      ins_count <- nrow(df)
-      showNotification(sprintf("Success: committed %d rows (assignment_id=%s).", 
-                               ins_count, assignment_id),
+      showNotification(sprintf("Committed %d rows (assignment_id=%s).",
+                               nrow(df), assignment_id),
                        type = "message", duration = 6)
     }, error = function(e) {
       showNotification(paste0("MongoDB commit failed: ", conditionMessage(e)),
                        type = "error", duration = 10)
     })
   })
-  
-  
 }
 
 shinyApp(ui = ui, server = server)
