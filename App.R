@@ -20,9 +20,7 @@ options(shiny.launch.browser = TRUE)
 
 
 bp <- MulticoreParam(workers = parallel::detectCores() - 1)
-register(bp)
-
-setCardinalParallel(workers = snowWorkers())
+setCardinalParallel(workers = bp) 
 
 
 # Mongo connection
@@ -72,8 +70,6 @@ ui <- navbarPage(
 
 server <- function(input, output, session) {
   
-  sel_raw <- reactive(event_data("plotly_selected", source = "cluster"))
-  sel <- sel_raw %>% debounce(150)
   
   uploaded_paths <- reactiveVal(NULL)
   
@@ -133,25 +129,10 @@ server <- function(input, output, session) {
   
   # Clustering on the processed data
   clustered_data <- eventReactive(input$run, {
-    df <- processed_data()
-    req(df)
-    
-    withProgress(message = "Clustering…", value = 0, {
-      out <- tryCatch({
-        if (input$method == "K-means") {
-          run_kmeans(df, k = input$clusters)
-        } else {
-          run_hclust(df, k = input$clusters)
-        }
-      }, error = function(e) {
-        showNotification(
-          paste("Clustering failed:", conditionMessage(e)),
-          type = "error", duration = 10
-        )
-        return(NULL)
-      })
-      out
-    })
+    df <- processed_data(); req(df)
+    out <- if (input$method == "K-means") run_kmeans(df, k = input$clusters) else run_hclust(df, k = input$clusters)
+    out$row_id <- seq_len(nrow(out))   # <- til selection
+    out
   })
   
   
@@ -199,26 +180,25 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$assign_class, {
-    s <- sel(); req(s); req("key" %in% names(s))
-    idx <- sort(unique(as.integer(s$key)))
     df <- annotated_data() %||% clustered_data(); req(df)
+    sel <- selected_points(); req(nrow(sel) > 0)
+    
     if (!"Class" %in% names(df)) df$Class <- NA_character_
-    df$Class[idx] <- input$class_label
+    df$Class[sel$row_id] <- input$class_label
     annotated_data(df)
+    
     cols <- class_colors(); lab <- input$class_label
     if (!(lab %in% names(cols))) {
       i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
       next_color_i(if (i == length(my_palette)) 1 else i + 1)
     }
-    showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, length(idx)),
-                     type = "message", duration = 3)
+    
+    showNotification(
+      sprintf("Assigned '%s' to %d pixels.", input$class_label, nrow(sel)),
+      type = "message", duration = 3
+    )
   })
-  
-  observeEvent(sel(), {
-    idx <- as.integer(sel()$key)
-    plotlyProxy("cluster_plot", session) %>%
-      plotlyProxyInvoke("restyle", list(selectedpoints = list(idx)), list(1))
-  })
+
   
   
   plot_ranges <- reactive({
@@ -235,7 +215,8 @@ server <- function(input, output, session) {
     req(clustered_data())
     if (is.null(input$histology)) {
       fluidRow(
-        column(6, plotlyOutput("cluster_plot", height = "600px")),
+        column(6, plotOutput("cluster_plot", height = "600px",
+                             brush = brushOpts(id = "cluster_brush", resetOnNew = TRUE))),
         column(6, plotlyOutput("class_plot", height = "600px"))
       )
     } else {
@@ -243,9 +224,12 @@ server <- function(input, output, session) {
         column(6, plotOutput("histology_plot", height = "500px",
                              brush = brushOpts(id = "histology_brush", resetOnNew = TRUE)),
                actionButton("reset_zoom", "Reset Zoom")),
-        column(6, plotlyOutput("cluster_plot", height = "600px"),
+        column(6, 
+               plotOutput("cluster_plot", height = "600px",
+                          brush = brushOpts(id = "cluster_brush", resetOnNew = TRUE)),
                plotlyOutput("class_plot", height = "600px"))
       )
+      
     }
   })
   
@@ -261,34 +245,53 @@ server <- function(input, output, session) {
       theme_void()
   })
   
-  output$cluster_plot <- renderPlotly({
+  output$cluster_plot <- renderPlot({
     df <- clustered_data(); req(df)
+    df$x_plot <- df$x
+    df$y_plot <- df$y
+    
+    if (input$orientation == "Swap axes") {
+      tmp <- df$x_plot; df$x_plot <- df$y_plot; df$y_plot <- tmp
+    } else if (input$orientation == "Flip X") {
+      df$x_plot <- -df$x_plot
+    } else if (input$orientation == "Flip Y") {
+      df$y_plot <- -df$y_plot
+    } else if (input$orientation == "Flip Both") {
+      df$x_plot <- -df$x_plot; df$y_plot <- -df$y_plot
+    }
+    
+    p <- ggplot(df, aes(x = x_plot, y = y_plot, fill = factor(cluster))) +
+      geom_tile(width = 1, height = 1) +
+      coord_equal() +
+      scale_fill_brewer(palette = "Set3") +
+      theme_void() +
+      labs(title = "MSI Clustering Result")
+    
+    if (!is.null(input$cluster_brush)) {
+      b <- input$cluster_brush
+      p <- p + 
+        annotate("rect", xmin = b$xmin, xmax = b$xmax, ymin = b$ymin, ymax = b$ymax,
+                 fill = NA, color = "black", linetype = "dashed")
+    }
+    p
+  })
+  
+  selected_points <- reactive({
+    req(input$cluster_brush)
+    brush <- input$cluster_brush
+    df <- annotated_data() %||% clustered_data(); req(df)
+    
+    # Beregn x_plot/y_plot her også
     df$x_plot <- df$x; df$y_plot <- df$y
     if (input$orientation == "Swap axes") { tmp <- df$x_plot; df$x_plot <- df$y_plot; df$y_plot <- tmp
     } else if (input$orientation == "Flip X") { df$x_plot <- -df$x_plot
     } else if (input$orientation == "Flip Y") { df$y_plot <- -df$y_plot
     } else if (input$orientation == "Flip Both") { df$x_plot <- -df$x_plot; df$y_plot <- -df$y_plot }
-    df$row_id <- seq_len(nrow(df))
-    g <- ggplot(df, aes(x = x_plot, y = y_plot, fill = factor(cluster))) +
-      geom_tile(width = 1, height = 1) + coord_equal() + theme_minimal() +
-      guides(fill = "none") + labs(title = "MSI Clustering Result")
-    fig <- ggplotly(g, tooltip = NULL, dynamicTicks = FALSE, source = "cluster")
-    fig <- event_register(fig, "plotly_selected")
-    fig %>%
-      add_markers(
-        data = df, x = ~x_plot, y = ~y_plot,
-        key = ~row_id, opacity = 0, hoverinfo = "skip",
-        marker = list(symbol = "square", size = 6),
-        showlegend = FALSE, inherit = FALSE, type = "scattergl"
-      ) %>%
-      layout(
-        dragmode = NULL,
-        xaxis = list(range = plot_ranges()$x),
-        yaxis = list(range = plot_ranges()$y, scaleanchor = "x", scaleratio = 1)
-      ) %>%
-      config(displaylogo = FALSE,
-             modeBarButtonsToRemove = c("hoverClosestCartesian","hoverCompareCartesian",
-                                        "toggleSpikelines","toImage"))
+    
+    with(brush, {
+      df[df$x_plot >= xmin & df$x_plot <= xmax &
+           df$y_plot >= ymin & df$y_plot <= ymax, , drop = FALSE]
+    })
   })
   
   output$class_plot <- renderPlotly({
