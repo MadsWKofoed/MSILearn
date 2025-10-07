@@ -17,7 +17,7 @@ source("Helper_functions.R")
 
 options(shiny.maxRequestSize = 5000*1024^2)
 options(shiny.launch.browser = TRUE)
-# setCardinalNChunks(nchunks = 1L)
+
 
 bp <- MulticoreParam(workers = parallel::detectCores() - 1)
 register(bp)
@@ -268,8 +268,8 @@ server <- function(input, output, session) {
       add_markers(
         data = df, x = ~x_plot, y = ~y_plot,
         key = ~row_id, opacity = 0.01, hoverinfo = "skip",
-        marker = list(symbol = "square", size = 8),
-        showlegend = FALSE, inherit = FALSE
+        marker = list(symbol = "square", size = 6),
+        showlegend = FALSE, inherit = FALSE, type = "scattergl"
       ) %>%
       layout(
         dragmode = NULL,
