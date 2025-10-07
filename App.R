@@ -240,7 +240,7 @@ server <- function(input, output, session) {
       )
     } else {
       fluidRow(
-        column(6, plotOutput("histology_plot", height = "600px",
+        column(6, plotOutput("histology_plot", height = "500px",
                              brush = brushOpts(id = "histology_brush", resetOnNew = TRUE)),
                actionButton("reset_zoom", "Reset Zoom")),
         column(6, plotlyOutput("cluster_plot", height = "600px"),
