@@ -72,6 +72,9 @@ ui <- navbarPage(
 
 server <- function(input, output, session) {
   
+  sel_raw <- reactive(event_data("plotly_selected", source = "cluster"))
+  sel <- sel_raw %>% debounce(150)
+  
   uploaded_paths <- reactiveVal(NULL)
   
   observeEvent(input$msi_files, {
@@ -196,8 +199,8 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$assign_class, {
-    sel <- event_data("plotly_selected", source = "cluster"); req(sel); req("key" %in% names(sel))
-    idx <- sort(unique(as.integer(sel$key)))
+    s <- sel(); req(s); req("key" %in% names(s))
+    idx <- sort(unique(as.integer(s$key)))
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     df$Class[idx] <- input$class_label
@@ -210,6 +213,13 @@ server <- function(input, output, session) {
     showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, length(idx)),
                      type = "message", duration = 3)
   })
+  
+  observeEvent(sel(), {
+    idx <- as.integer(sel()$key)
+    plotlyProxy("cluster_plot", session) %>%
+      plotlyProxyInvoke("restyle", list(selectedpoints = list(idx)), list(1))
+  })
+  
   
   plot_ranges <- reactive({
     df <- clustered_data(); req(df)
@@ -267,7 +277,7 @@ server <- function(input, output, session) {
     fig %>%
       add_markers(
         data = df, x = ~x_plot, y = ~y_plot,
-        key = ~row_id, opacity = 0.01, hoverinfo = "skip",
+        key = ~row_id, opacity = 0, hoverinfo = "skip",
         marker = list(symbol = "square", size = 6),
         showlegend = FALSE, inherit = FALSE, type = "scattergl"
       ) %>%
