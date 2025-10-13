@@ -157,8 +157,21 @@ server <- function(input, output, session) {
   output$msi_leaflet <- renderLeaflet({
     df <- clustered_data(); req(df)
     
+    # Choose colors for clusters
+    k <- length(unique(df$cluster))
+    pal <- colorFactor(brewer.pal(min(max(k, 3), 12), "Set3"), df$cluster)
+    
     leaflet(options = leafletOptions(crs = leafletCRS(crsClass = "L.CRS.Simple"))) %>%
-      addTiles() %>%
+      # remove addTiles() because we don't want a world map
+      addRectangles(
+        lng1 = df$x - 0.5,
+        lng2 = df$x + 0.5,
+        lat1 = df$y - 0.5,
+        lat2 = df$y + 0.5,
+        fillColor = pal(df$cluster),
+        fillOpacity = 0.8,
+        stroke = FALSE
+      ) %>%
       addDrawToolbar(
         targetGroup = "draw",
         polygonOptions = drawPolygonOptions(shapeOptions = drawShapeOptions(color = "black")),
@@ -168,18 +181,36 @@ server <- function(input, output, session) {
         circleMarkerOptions = FALSE,
         markerOptions = FALSE,
         editOptions = editToolbarOptions(edit = TRUE, remove = TRUE),
-        featureGroup = "draw",
         position = "topright"
       ) %>%
-      addLayersControl(overlayGroups = "draw", options = layersControlOptions(collapsed = FALSE))
+      addLayersControl(
+        overlayGroups = "draw",
+        options = layersControlOptions(collapsed = FALSE)
+      )
   })
+  
   
   # Capture any drawn polygon/lasso
   observeEvent(input$msi_leaflet_draw_new_feature, {
     feature <- input$msi_leaflet_draw_new_feature
     coords <- feature$geometry$coordinates[[1]]
-    poly <- st_polygon(list(do.call(rbind, coords))) %>% st_sfc(crs = 4326)
+    
+    # Convert to numeric matrix
+    coords <- do.call(rbind, coords)
+    coords <- apply(coords, 2, as.numeric)
+    
+    # Ensure polygon closes
+    if (!all(coords[1, ] == coords[nrow(coords), ])) {
+      coords <- rbind(coords, coords[1, ])
+    }
+    
+    poly <- st_polygon(list(coords)) %>% st_sfc(crs = NA)
+    
+    poly <- st_make_valid(poly)
+    
     drawn_polygons(c(drawn_polygons(), list(poly)))
+    
+    showNotification("Polygon selection added.", type = "message", duration = 2)
   })
   
   # Assign to selection
@@ -187,8 +218,11 @@ server <- function(input, output, session) {
     df <- annotated_data(); req(df)
     polys <- drawn_polygons(); req(length(polys) > 0)
     
-    combined <- do.call(c, polys)
-    pts <- st_as_sf(df, coords = c("x", "y"), crs = 4326)
+    combined <- st_union(do.call(c, polys)) %>% st_make_valid()
+    
+    # Treat coordinates as planar
+    pts <- st_as_sf(df, coords = c("x", "y"), crs = NA)
+    
     inside <- lengths(st_within(pts, combined)) > 0
     
     if (!"Class" %in% names(df)) df$Class <- NA_character_
@@ -204,6 +238,7 @@ server <- function(input, output, session) {
     showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, sum(inside)),
                      type = "message", duration = 3)
   })
+  
   
   # Assign all unassigned
   observeEvent(input$assign_all, {
