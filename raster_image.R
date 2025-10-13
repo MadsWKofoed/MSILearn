@@ -126,20 +126,20 @@ server <- function(input, output, session) {
     })
   })
   
-  # --- Raster color palette and annotation state ---
+  # --- State and color palette ---
   my_palette <- c(
-    "purple","orange","steelblue","seagreen","red","blue","green","brown","pink","cyan","magenta","yellow",
+    "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
     "darkred","darkblue","darkgreen","darkorange","darkviolet","gold","gray20","gray50",
     "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
-    "khaki","tan"
+    "khaki","steelblue","seagreen","tan"
   )
   class_colors <- reactiveVal(c("Unassigned" = "grey80"))
   next_color_i <- reactiveVal(1)
   annotated_data <- reactiveVal(NULL)
   observeEvent(input$run, { annotated_data(NULL); class_colors(c("Unassigned" = "grey80")); next_color_i(1) })
   
-  # --- Function: Raster rendering helper ---
-  make_raster <- function(df, fill_var, colors) {
+  # --- Function: create raster -> base64 PNG ---
+  make_raster_image <- function(df, fill_var, colors) {
     df$x <- df$x - min(df$x) + 1
     df$y <- df$y - min(df$y) + 1
     width <- max(df$x); height <- max(df$y)
@@ -147,7 +147,10 @@ server <- function(input, output, session) {
     mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
     mat[is.na(mat)] <- "Unassigned"
     col_img <- matrix(colors[mat], nrow = height, ncol = width)
-    as.raster(col_img)
+    raster_img <- as.raster(col_img)
+    tmp <- tempfile(fileext = ".png")
+    png::writePNG(raster_img, tmp)
+    base64enc::dataURI(file = tmp, mime = "image/png")
   }
   
   # --- Assign all unassigned pixels ---
@@ -170,74 +173,91 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- Assign selected region via brush ---
+  # --- Assign selected via lasso/box selection ---
   observeEvent(input$assign_class, {
-    brush <- input$cluster_brush; req(brush)
+    sel <- event_data("plotly_selected", source = "cluster"); req(sel)
+    if (!"key" %in% names(sel)) return()
+    idx <- sort(unique(as.integer(sel$key)))
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
-    sel <- df[df$x >= brush$xmin & df$x <= brush$xmax &
-                df$y >= brush$ymin & df$y <= brush$ymax, , drop = FALSE]
-    if (nrow(sel) > 0) {
-      df$Class[df$x %in% sel$x & df$y %in% sel$y] <- input$class_label
-      annotated_data(df)
-      cols <- class_colors(); lab <- input$class_label
-      if (!(lab %in% names(cols))) {
-        i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
-        next_color_i(if (i == length(my_palette)) 1 else i + 1)
-      }
-      showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, nrow(sel)),
-                       type = "message", duration = 3)
-    } else {
-      showNotification("No pixels selected.", type = "warning", duration = 3)
+    df$Class[idx] <- input$class_label
+    annotated_data(df)
+    cols <- class_colors(); lab <- input$class_label
+    if (!(lab %in% names(cols))) {
+      i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
+      next_color_i(if (i == length(my_palette)) 1 else i + 1)
     }
+    showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, length(idx)),
+                     type = "message", duration = 3)
   })
   
-  # --- Cluster raster plot ---
-  output$cluster_plot <- renderPlot({
+  # --- Cluster plot (raster background + invisible points for selection) ---
+  output$cluster_plot <- renderPlotly({
     df <- clustered_data(); req(df)
+    df$row_id <- seq_len(nrow(df))
     cols <- setNames(brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
                      as.character(1:max(df$cluster)))
-    raster_img <- make_raster(df, "cluster", cols)
-    plot(1, type = "n", xlim = c(1, ncol(raster_img)), ylim = c(1, nrow(raster_img)),
-         xlab = "x", ylab = "y", main = "MSI Clustering Result")
-    rasterImage(raster_img, 1, 1, ncol(raster_img), nrow(raster_img))
+    img_uri <- make_raster_image(df, "cluster", cols)
+    
+    fig <- plot_ly(source = "cluster") %>%
+      layout(
+        images = list(
+          list(
+            source = img_uri,
+            xref = "x", yref = "y",
+            x = 0, y = max(df$y),
+            sizex = max(df$x), sizey = max(df$y),
+            sizing = "stretch", layer = "below"
+          )
+        ),
+        title = "MSI Clustering Result",
+        xaxis = list(range = c(0, max(df$x)), title = "x"),
+        yaxis = list(range = c(0, max(df$y)), title = "y", scaleanchor = "x", scaleratio = 1)
+      ) %>%
+      add_markers(
+        data = df, x = ~x, y = ~y, key = ~row_id,
+        opacity = 0.01, hoverinfo = "skip", showlegend = FALSE,
+        marker = list(size = 4, symbol = "square", color = "transparent")
+      ) %>%
+      config(displaylogo = FALSE)
+    event_register(fig, "plotly_selected")
   })
   
-  # --- Class raster plot ---
-  output$class_plot <- renderPlot({
+  # --- Class plot (raster only, reactive to annotation) ---
+  output$class_plot <- renderPlotly({
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
     cols <- class_colors(); present <- unique(df$Class_plot)
     cols_used <- cols[present]; names(cols_used) <- present
-    raster_img <- make_raster(df, "Class_plot", cols_used)
-    plot(1, type = "n", xlim = c(1, ncol(raster_img)), ylim = c(1, nrow(raster_img)),
-         xlab = "x", ylab = "y", main = "User Annotation Result")
-    rasterImage(raster_img, 1, 1, ncol(raster_img), nrow(raster_img))
+    img_uri <- make_raster_image(df, "Class_plot", cols_used)
+    
+    plot_ly() %>%
+      layout(
+        images = list(
+          list(
+            source = img_uri,
+            xref = "x", yref = "y",
+            x = 0, y = max(df$y),
+            sizex = max(df$x), sizey = max(df$y),
+            sizing = "stretch", layer = "below"
+          )
+        ),
+        title = "User Annotation Result",
+        xaxis = list(range = c(0, max(df$x)), title = "x"),
+        yaxis = list(range = c(0, max(df$y)), title = "y", scaleanchor = "x", scaleratio = 1)
+      ) %>%
+      config(displaylogo = FALSE,
+             modeBarButtonsToRemove = c("select2d","lasso2d","hoverClosestCartesian",
+                                        "hoverCompareCartesian","toggleSpikelines","toImage"))
   })
   
-  # --- Zoom reset support ---
-  observeEvent(input$reset_zoom, {
-    output$cluster_plot <- renderPlot({
-      df <- clustered_data(); req(df)
-      cols <- setNames(brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
-                       as.character(1:max(df$cluster)))
-      raster_img <- make_raster(df, "cluster", cols)
-      plot(1, type = "n", xlim = c(1, ncol(raster_img)), ylim = c(1, nrow(raster_img)))
-      rasterImage(raster_img, 1, 1, ncol(raster_img), nrow(raster_img))
-    })
-  })
-  
-  # --- Layout switching ---
+  # --- Layout UI (cluster + class) ---
   output$cluster_layout <- renderUI({
     req(clustered_data())
     fluidRow(
-      column(6,
-             plotOutput("cluster_plot", height = "600px",
-                        brush = brushOpts(id = "cluster_brush", resetOnNew = TRUE)),
-             actionButton("reset_zoom", "Reset Zoom")
-      ),
-      column(6, plotOutput("class_plot", height = "600px"))
+      column(6, plotlyOutput("cluster_plot", height = "600px")),
+      column(6, plotlyOutput("class_plot", height = "600px"))
     )
   })
   
@@ -270,6 +290,7 @@ server <- function(input, output, session) {
     })
   })
 }
+
 
 
 shinyApp(ui = ui, server = server)
