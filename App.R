@@ -1,9 +1,10 @@
 # app.R
-# MSI Clustering + Interactive Annotation (Leaflet-based)
+# MSI Clustering + Histology + Polygon & Lasso Selection
 # ────────────────────────────────────────────────────────────────
 
 library(shiny)
 library(ggplot2)
+library(plotly)
 library(png)
 library(grid)
 library(RColorBrewer)
@@ -12,10 +13,11 @@ library(uuid)
 library(jsonlite)
 library(BiocParallel)
 library(Cardinal)
-library(leaflet)
-library(leaflet.extras)
 library(sf)
 library(dplyr)
+library(leaflet)
+library(leaflet.extras2) # supports lasso/freehand
+library(terra)
 
 source("processing_clustering.R")
 source("Helper_functions.R")
@@ -23,15 +25,11 @@ source("Helper_functions.R")
 options(shiny.maxRequestSize = 5000 * 1024^2)
 options(shiny.launch.browser = TRUE)
 
-# Parallel backend
-<<<<<<< HEAD
-bp <- workers = parallel::detectCores() - 1
-=======
-bp <- parallel::detectCores() - 1
->>>>>>> 0d1c9a890798a9e7f26685c19a53b431e5c29df9
+# Parallel backend for Cardinal
+bp <- MulticoreParam(workers = parallel::detectCores() - 1)
 setCardinalParallel(workers = bp)
 
-# Mongo connection
+# MongoDB connection
 msi_con <- mongo(
   collection = "msi_data",
   db = "msi_project",
@@ -67,7 +65,13 @@ ui <- navbarPage(
                width = 2
              ),
              mainPanel(
-               leafletOutput("msi_leaflet", height = "700px"),
+               fluidRow(
+                 column(6, leafletOutput("msi_leaflet", height = "600px")),
+                 column(6, plotOutput("histology_plot", height = "600px"))
+               ),
+               fluidRow(
+                 column(12, plotlyOutput("class_plot", height = "500px"))
+               ),
                width = 10
              )
            )
@@ -83,12 +87,11 @@ ui <- navbarPage(
 # ────────────────────────────────────────────────────────────────
 server <- function(input, output, session) {
   
-  # Reactive storage
   uploaded_paths <- reactiveVal(NULL)
   processed_data <- reactiveVal(NULL)
   clustered_data <- reactiveVal(NULL)
   annotated_data <- reactiveVal(NULL)
-  drawn_polygon <- reactiveVal(NULL)
+  drawn_polygons <- reactiveVal(list())
   
   # Color palette
   my_palette <- c(
@@ -100,7 +103,7 @@ server <- function(input, output, session) {
   class_colors <- reactiveVal(c("Unassigned" = "grey80"))
   next_color_i <- reactiveVal(1)
   
-  # Upload handling
+  # File upload handling
   observeEvent(input$msi_files, {
     req(input$msi_files)
     imzml_idx <- grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)
@@ -114,12 +117,12 @@ server <- function(input, output, session) {
     ))
     processed_data(NULL)
     clustered_data(NULL)
+    annotated_data(NULL)
   })
   
-  # Processing (only once per upload)
+  # Processing MSI files
   observeEvent(input$run, {
     paths <- uploaded_paths(); req(paths)
-    
     if (is.null(processed_data())) {
       withProgress(message = "Processing MSI files…", value = 0, {
         df <- process_msi_files(
@@ -149,46 +152,44 @@ server <- function(input, output, session) {
   })
   
   # ─────────────────────────────
-  # LEAFLET DISPLAY + SELECTION
+  # LEAFLET MSI PLOT + DRAW TOOLS
   # ─────────────────────────────
   output$msi_leaflet <- renderLeaflet({
     df <- clustered_data(); req(df)
-    cols <- brewer.pal(max(df$cluster), "Set3")
     
     leaflet(options = leafletOptions(crs = leafletCRS(crsClass = "L.CRS.Simple"))) %>%
       addTiles() %>%
-      addRasterImage(
-        matrix(df$cluster, nrow = length(unique(df$y)), ncol = length(unique(df$x))),
-        colors = cols, opacity = 0.8
-      ) %>%
       addDrawToolbar(
         targetGroup = "draw",
+        polygonOptions = drawPolygonOptions(shapeOptions = drawShapeOptions(color = "black")),
+        rectangleOptions = drawRectangleOptions(shapeOptions = drawShapeOptions(color = "black")),
         polylineOptions = FALSE,
         circleOptions = FALSE,
-        rectangleOptions = FALSE,
         circleMarkerOptions = FALSE,
         markerOptions = FALSE,
-        polygonOptions = drawPolygonOptions(shapeOptions = drawShapeOptions(color = "black"))
+        editOptions = editToolbarOptions(edit = TRUE, remove = TRUE),
+        featureGroup = "draw",
+        position = "topright"
       ) %>%
       addLayersControl(overlayGroups = "draw", options = layersControlOptions(collapsed = FALSE))
   })
   
-  # Capture drawn polygons
+  # Capture any drawn polygon/lasso
   observeEvent(input$msi_leaflet_draw_new_feature, {
     feature <- input$msi_leaflet_draw_new_feature
     coords <- feature$geometry$coordinates[[1]]
     poly <- st_polygon(list(do.call(rbind, coords))) %>% st_sfc(crs = 4326)
-    drawn_polygon(poly)
+    drawn_polygons(c(drawn_polygons(), list(poly)))
   })
   
-  # Assign class to polygon selection
+  # Assign to selection
   observeEvent(input$assign_class, {
     df <- annotated_data(); req(df)
-    poly <- drawn_polygon(); req(poly)
+    polys <- drawn_polygons(); req(length(polys) > 0)
     
-    # Create sf points
+    combined <- do.call(c, polys)
     pts <- st_as_sf(df, coords = c("x", "y"), crs = 4326)
-    inside <- lengths(st_within(pts, poly)) > 0
+    inside <- lengths(st_within(pts, combined)) > 0
     
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     df$Class[inside] <- input$class_label
@@ -200,10 +201,8 @@ server <- function(input, output, session) {
       next_color_i(if (i == length(my_palette)) 1 else i + 1)
     }
     
-    showNotification(
-      sprintf("Assigned '%s' to %d pixels.", input$class_label, sum(inside)),
-      type = "message", duration = 3
-    )
+    showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, sum(inside)),
+                     type = "message", duration = 3)
   })
   
   # Assign all unassigned
@@ -226,7 +225,46 @@ server <- function(input, output, session) {
     }
   })
   
-  # Commit to MongoDB
+  # ─────────────────────────────
+  # HISTOLOGY DISPLAY
+  # ─────────────────────────────
+  output$histology_plot <- renderPlot({
+    req(input$histology)
+    img <- png::readPNG(input$histology$datapath)
+    dims <- dim(img)
+    ggplot() +
+      annotation_raster(img, xmin = 0, xmax = dims[2], ymin = 0, ymax = dims[1]) +
+      coord_equal() +
+      theme_void() +
+      labs(title = "Histology Image")
+  })
+  
+  # ─────────────────────────────
+  # CLASS VISUALIZATION
+  # ─────────────────────────────
+  output$class_plot <- renderPlotly({
+    df <- annotated_data(); req(df)
+    if (!"Class" %in% names(df)) df$Class <- NA_character_
+    df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
+    
+    present <- unique(df$Class_plot)
+    cols <- class_colors(); cols_used <- cols[present]; names(cols_used) <- present
+    
+    g <- ggplot(df, aes(x = x, y = y, fill = Class_plot)) +
+      geom_tile(width = 1, height = 1) +
+      scale_fill_manual(values = cols_used, drop = FALSE) +
+      coord_equal() +
+      theme_minimal() +
+      labs(fill = "Class", title = "User Annotation Result")
+    
+    ggplotly(g, tooltip = "fill") %>%
+      layout(dragmode = "zoom") %>%
+      config(displaylogo = FALSE)
+  })
+  
+  # ─────────────────────────────
+  # Mongo commit
+  # ─────────────────────────────
   observeEvent(input$commit_db, {
     df <- annotated_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
