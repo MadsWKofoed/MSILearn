@@ -176,6 +176,7 @@ server <- function(input, output, session) {
   class_colors <- reactiveVal(c("Unassigned" = "grey80"))
   next_color_i <- reactiveVal(1)
   
+  # Assign all Unassigned pixels and give them color
   observeEvent(input$assign_all, {
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
@@ -195,6 +196,7 @@ server <- function(input, output, session) {
     }
   })
   
+  
   observeEvent(input$assign_class, {
     sel <- event_data("plotly_selected", source = "cluster"); req(sel); req("key" %in% names(sel))
     idx <- sort(unique(as.integer(sel$key)))
@@ -210,6 +212,7 @@ server <- function(input, output, session) {
     showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, length(idx)),
                      type = "message", duration = 3)
   })
+  
   
   plot_ranges <- reactive({
     df <- clustered_data(); req(df)
