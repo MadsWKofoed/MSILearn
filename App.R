@@ -24,7 +24,11 @@ options(shiny.maxRequestSize = 5000 * 1024^2)
 options(shiny.launch.browser = TRUE)
 
 # Parallel backend
+<<<<<<< HEAD
 bp <- workers = parallel::detectCores() - 1
+=======
+bp <- parallel::detectCores() - 1
+>>>>>>> 0d1c9a890798a9e7f26685c19a53b431e5c29df9
 setCardinalParallel(workers = bp)
 
 # Mongo connection

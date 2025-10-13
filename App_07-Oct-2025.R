@@ -19,10 +19,8 @@ options(shiny.maxRequestSize = 5000*1024^2)
 options(shiny.launch.browser = TRUE)
 
 
-bp <- MulticoreParam(workers = parallel::detectCores() - 1)
-register(bp)
-
-setCardinalParallel(workers = snowWorkers())
+bp <- parallel::detectCores() - 1
+setCardinalParallel(workers = bp)
 
 
 # Mongo connection
