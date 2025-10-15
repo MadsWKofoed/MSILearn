@@ -11,6 +11,7 @@ library(mongolite)
 library(uuid)
 library(jsonlite)
 library(BiocParallel)
+library(sp)
 
 source("processing_clustering.R")
 source("Helper_functions.R")
@@ -70,6 +71,9 @@ ui <- navbarPage(
 
 server <- function(input, output, session) {
   
+  # needed for point-in-polygon
+  library(sp)
+  
   uploaded_paths <- reactiveVal(NULL)
   
   observeEvent(input$msi_files, {
@@ -126,7 +130,7 @@ server <- function(input, output, session) {
     })
   })
   
-  # --- State and color palette ---
+  # --- State and colors ---
   my_palette <- c(
     "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
     "darkred","darkblue","darkgreen","darkorange","darkviolet","gold","gray20","gray50",
@@ -138,8 +142,8 @@ server <- function(input, output, session) {
   annotated_data <- reactiveVal(NULL)
   observeEvent(input$run, { annotated_data(NULL); class_colors(c("Unassigned" = "grey80")); next_color_i(1) })
   
-  # --- Function: create raster -> base64 PNG ---
-  make_raster_image <- function(df, fill_var, colors) {
+  # --- Raster helper: return base64 PNG for plotly background ---
+  make_raster_png <- function(df, fill_var, colors) {
     df$x <- df$x - min(df$x) + 1
     df$y <- df$y - min(df$y) + 1
     width <- max(df$x); height <- max(df$y)
@@ -147,13 +151,53 @@ server <- function(input, output, session) {
     mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
     mat[is.na(mat)] <- "Unassigned"
     col_img <- matrix(colors[mat], nrow = height, ncol = width)
-    raster_img <- as.raster(col_img)
+    
+    rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
+    rgb_array <- array(NA_real_, dim = c(height, width, 4))
+    rgb_array[,,1] <- matrix(rgb_vals["red", ],    nrow = height, ncol = width)
+    rgb_array[,,2] <- matrix(rgb_vals["green",  ], nrow = height, ncol = width)
+    rgb_array[,,3] <- matrix(rgb_vals["blue",   ], nrow = height, ncol = width)
+    rgb_array[,,4] <- matrix(rgb_vals["alpha",  ], nrow = height, ncol = width)
+    
     tmp <- tempfile(fileext = ".png")
-    png::writePNG(raster_img, tmp)
+    png::writePNG(rgb_array, target = tmp)
     base64enc::dataURI(file = tmp, mime = "image/png")
   }
   
-  # --- Assign all unassigned pixels ---
+  # --- Drawn selection storage (polygon or rect) ---
+  sel_shape <- reactiveVal(NULL)  # list(type="polygon"/"rect", x=..., y=..., x0/x1/y0/y1)
+  
+  # Capture shapes drawn on the plot (lasso/rect), via plotly_relayout
+  observeEvent(event_data("plotly_relayout", source = "cluster"), {
+    ev <- event_data("plotly_relayout", source = "cluster"); req(ev)
+    # Look for new/edited shapes
+    # 'drawclosedpath' provides shapes[...].path like "M x,y L x,y ... Z"
+    path_key <- grep("^shapes\\[[0-9]+\\]\\.path$", names(ev), value = TRUE)
+    rect_keys <- grep("^shapes\\[[0-9]+\\]\\.(x0|x1|y0|y1)$", names(ev), value = TRUE)
+    
+    if (length(path_key) == 1) {
+      path <- ev[[path_key]]
+      # parse "Mx,y Lx,y ..." into numeric vectors
+      coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
+      xy <- do.call(rbind, strsplit(coords, ","))
+      x <- as.numeric(xy[,1]); y <- as.numeric(xy[,2])
+      sel_shape(list(type = "polygon", x = x, y = y))
+      return()
+    }
+    
+    if (length(rect_keys) >= 4) {
+      # collect rectangle values
+      x0k <- grep("x0$", rect_keys, value = TRUE); x1k <- grep("x1$", rect_keys, value = TRUE)
+      y0k <- grep("y0$", rect_keys, value = TRUE); y1k <- grep("y1$", rect_keys, value = TRUE)
+      x0 <- as.numeric(ev[[x0k[1]]]); x1 <- as.numeric(ev[[x1k[1]]])
+      y0 <- as.numeric(ev[[y0k[1]]]); y1 <- as.numeric(ev[[y1k[1]]])
+      sel_shape(list(type = "rect", x0 = min(x0,x1), x1 = max(x0,x1),
+                     y0 = min(y0,y1), y1 = max(y0,y1)))
+      return()
+    }
+  })
+  
+  # --- Assign ALL unassigned ---
   observeEvent(input$assign_all, {
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
@@ -173,86 +217,121 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- Assign selected via lasso/box selection ---
-  observeEvent(input$assign_class, {
-    sel <- event_data("plotly_selected", source = "cluster"); req(sel)
-    if (!"key" %in% names(sel)) return()
-    idx <- sort(unique(as.integer(sel$key)))
-    df <- annotated_data() %||% clustered_data(); req(df)
-    if (!"Class" %in% names(df)) df$Class <- NA_character_
-    df$Class[idx] <- input$class_label
-    annotated_data(df)
-    cols <- class_colors(); lab <- input$class_label
-    if (!(lab %in% names(cols))) {
-      i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
-      next_color_i(if (i == length(my_palette)) 1 else i + 1)
-    }
-    showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, length(idx)),
-                     type = "message", duration = 3)
-  })
-  
-  # --- Cluster plot (raster background + invisible points for selection) ---
+  # --- Cluster Plot (raster + drawing tools) ---
   output$cluster_plot <- renderPlotly({
     df <- clustered_data(); req(df)
-    df$row_id <- seq_len(nrow(df))
     cols <- setNames(brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
                      as.character(1:max(df$cluster)))
-    img_uri <- make_raster_image(df, "cluster", cols)
+    img_uri <- make_raster_png(df, "cluster", cols)
     
-    fig <- plot_ly(source = "cluster") %>%
+    plot_ly(source = "cluster") %>%
       layout(
-        images = list(
-          list(
-            source = img_uri,
-            xref = "x", yref = "y",
-            x = 0, y = max(df$y),
-            sizex = max(df$x), sizey = max(df$y),
-            sizing = "stretch", layer = "below"
-          )
-        ),
+        images = list(list(
+          source = img_uri,
+          xref = "x", yref = "y",
+          x = 0, y = max(df$y),
+          sizex = max(df$x), sizey = max(df$y),
+          sizing = "stretch", layer = "below"
+        )),
+        # default tool: freehand polygon (lasso). You can switch to rectangle in the toolbar.
+        dragmode = "drawclosedpath",
+        newshape = list(line = list(color = "black", width = 1),
+                        fillcolor = "rgba(0,0,0,0.05)"),
         title = "MSI Clustering Result",
         xaxis = list(range = c(0, max(df$x)), title = "x"),
-        yaxis = list(range = c(0, max(df$y)), title = "y", scaleanchor = "x", scaleratio = 1)
+        yaxis = list(range = c(0, max(df$y)), title = "y",
+                     scaleanchor = "x", scaleratio = 1)
       ) %>%
-      add_markers(
-        data = df, x = ~x, y = ~y, key = ~row_id,
-        opacity = 0.01, hoverinfo = "skip", showlegend = FALSE,
-        marker = list(size = 4, symbol = "square", color = "transparent")
-      ) %>%
-      config(displaylogo = FALSE)
-    event_register(fig, "plotly_selected")
+      config(
+        displaylogo = FALSE,
+        modeBarButtonsToAdd = list("drawclosedpath","drawrect","eraseshape"),
+        modeBarButtonsToRemove = c("hoverClosestCartesian","hoverCompareCartesian","toggleSpikelines","toImage")
+      )
   })
   
-  # --- Class plot (raster only, reactive to annotation) ---
+  # --- Class Plot (raster only) ---
   output$class_plot <- renderPlotly({
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
     df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
     cols <- class_colors(); present <- unique(df$Class_plot)
     cols_used <- cols[present]; names(cols_used) <- present
-    img_uri <- make_raster_image(df, "Class_plot", cols_used)
+    img_uri <- make_raster_png(df, "Class_plot", cols_used)
     
     plot_ly() %>%
       layout(
-        images = list(
-          list(
-            source = img_uri,
-            xref = "x", yref = "y",
-            x = 0, y = max(df$y),
-            sizex = max(df$x), sizey = max(df$y),
-            sizing = "stretch", layer = "below"
-          )
-        ),
+        images = list(list(
+          source = img_uri,
+          xref = "x", yref = "y",
+          x = 0, y = max(df$y),
+          sizex = max(df$x), sizey = max(df$y),
+          sizing = "stretch", layer = "below"
+        )),
         title = "User Annotation Result",
         xaxis = list(range = c(0, max(df$x)), title = "x"),
-        yaxis = list(range = c(0, max(df$y)), title = "y", scaleanchor = "x", scaleratio = 1)
+        yaxis = list(range = c(0, max(df$y)), title = "y",
+                     scaleanchor = "x", scaleratio = 1)
       ) %>%
-      config(displaylogo = FALSE,
-             modeBarButtonsToRemove = c("select2d","lasso2d","hoverClosestCartesian",
-                                        "hoverCompareCartesian","toggleSpikelines","toImage"))
+      config(displaylogo = FALSE)
   })
   
-  # --- Layout UI (cluster + class) ---
+  # --- Assign using the LAST drawn shape (lasso polygon OR rectangle) ---
+  observeEvent(input$assign_class, {
+    shape <- sel_shape()
+    if (is.null(shape)) {
+      showNotification("No selection drawn. Use the Lasso or Rectangle tool on the left plot.", type = "warning", duration = 4)
+      return()
+    }
+    
+    df <- annotated_data() %||% clustered_data(); req(df)
+    if (!"Class" %in% names(df)) df$Class <- NA_character_
+    
+    y_max <- max(df$y)
+    
+    if (identical(shape$type, "polygon")) {
+      # flip Y to match image coordinate system (plotly y up, image y down)
+      poly_x <- shape$x
+      poly_y <- y_max - shape$y
+      inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
+    } else if (identical(shape$type, "rect")) {
+      x0 <- shape$x0; x1 <- shape$x1
+      # flip y0/y1
+      yy0 <- y_max - shape$y0; yy1 <- y_max - shape$y1
+      y0 <- min(yy0, yy1); y1 <- max(yy0, yy1)
+      inside <- df$x >= x0 & df$x <= x1 & df$y >= y0 & df$y <= y1
+    } else {
+      showNotification("Unsupported shape type.", type = "error", duration = 4)
+      return()
+    }
+    
+    n_sel <- sum(inside)
+    if (n_sel == 0) {
+      showNotification("The drawn region did not overlap any pixels.", type = "warning", duration = 4)
+      return()
+    }
+    
+    df$Class[inside] <- input$class_label
+    annotated_data(df)
+    
+    # ensure color exists
+    cols <- class_colors(); lab <- input$class_label
+    if (!(lab %in% names(cols))) {
+      i <- next_color_i(); cols[lab] <- my_palette[i]; class_colors(cols)
+      next_color_i(if (i == length(my_palette)) 1 else i + 1)
+    }
+    
+    # Clear shapes from the plot after assignment (tidy UX)
+    try({
+      plotlyProxy("cluster_plot", session) %>%
+        plotlyProxyInvoke("relayout", list(shapes = list()))
+    }, silent = TRUE)
+    sel_shape(NULL)
+    
+    showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, n_sel),
+                     type = "message", duration = 3)
+  })
+  
+  # --- Layout identical to original ---
   output$cluster_layout <- renderUI({
     req(clustered_data())
     fluidRow(
@@ -261,7 +340,7 @@ server <- function(input, output, session) {
     )
   })
   
-  # --- MongoDB commit ---
+  # --- Commit to MongoDB ---
   observeEvent(input$commit_db, {
     df <- annotated_data() %||% clustered_data(); req(df)
     if (!"Class" %in% names(df)) df$Class <- NA_character_
