@@ -13,7 +13,8 @@ library(jsonlite)
 library(BiocParallel)
 library(sp) # needed for point-in-polygon
 
-source("processing_clustering.R")
+source("Clustering.R")
+source("Processing.R")
 source("Helper_functions.R")
 
 options(shiny.maxRequestSize = 5000*1024^2)

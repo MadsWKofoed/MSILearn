@@ -1,0 +1,15 @@
+library(shiny)
+library(plotly)
+library(ggplot2)
+library(RColorBrewer)
+library(mongolite)
+library(uuid)
+library(jsonlite)
+library(BiocParallel)
+library(sp)
+library(Cardinal)
+library(dplyr)
+
+source("global.R")
+
+shinyApp(ui = ui, server = server)
