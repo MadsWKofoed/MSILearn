@@ -1,4 +1,5 @@
 # R/modules/clustering_module.R
+library(plotly)
 
 clustering_module_ui <- function(id) {
   ns <- NS(id)
