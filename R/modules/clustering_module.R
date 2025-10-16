@@ -1,5 +1,4 @@
 # R/modules/clustering_module.R
-library(plotly)
 
 clustering_module_ui <- function(id) {
   ns <- NS(id)
@@ -301,8 +300,8 @@ clustering_module_server <- function(id, msi_con) {
     output$cluster_layout <- renderUI({
       req(clustered_data())
       fluidRow(
-        column(6, plotlyOutput("cluster_plot", height = "600px")),
-        column(6, plotlyOutput("class_plot", height = "600px"))
+        column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
+        column(6, plotlyOutput(ns("class_plot"), height = "600px"))
       )
     })
     
