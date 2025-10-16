@@ -11,7 +11,7 @@ library(mongolite)
 library(uuid)
 library(jsonlite)
 library(BiocParallel)
-library(sp)
+library(sp) # needed for point-in-polygon
 
 source("processing_clustering.R")
 source("Helper_functions.R")
@@ -70,9 +70,6 @@ ui <- navbarPage(
 )
 
 server <- function(input, output, session) {
-  
-  # needed for point-in-polygon
-  library(sp)
   
   uploaded_paths <- reactiveVal(NULL)
   
@@ -168,16 +165,16 @@ server <- function(input, output, session) {
   sel_shape <- reactiveVal(NULL)  # list(type="polygon"/"rect", x=..., y=..., x0/x1/y0/y1)
   
   # Capture shapes drawn on the plot (lasso/rect), via plotly_relayout
+  # --- Capture shapes automatically when drawn ---
   observeEvent(event_data("plotly_relayout", source = "cluster"), {
-    ev <- event_data("plotly_relayout", source = "cluster"); req(ev)
-    # Look for new/edited shapes
-    # 'drawclosedpath' provides shapes[...].path like "M x,y L x,y ... Z"
-    path_key <- grep("^shapes\\[[0-9]+\\]\\.path$", names(ev), value = TRUE)
-    rect_keys <- grep("^shapes\\[[0-9]+\\]\\.(x0|x1|y0|y1)$", names(ev), value = TRUE)
+    ev <- event_data("plotly_relayout", source = "cluster")
+    req(ev)
     
-    if (length(path_key) == 1) {
+    # Look for a new shape definition in relayout data
+    # Works for both lasso (path) and rectangle (x0/x1/y0/y1)
+    if (any(grepl("^shapes\\[[0-9]+\\]\\.path$", names(ev)))) {
+      path_key <- grep("^shapes\\[[0-9]+\\]\\.path$", names(ev), value = TRUE)[1]
       path <- ev[[path_key]]
-      # parse "Mx,y Lx,y ..." into numeric vectors
       coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
       xy <- do.call(rbind, strsplit(coords, ","))
       x <- as.numeric(xy[,1]); y <- as.numeric(xy[,2])
@@ -185,17 +182,21 @@ server <- function(input, output, session) {
       return()
     }
     
-    if (length(rect_keys) >= 4) {
-      # collect rectangle values
-      x0k <- grep("x0$", rect_keys, value = TRUE); x1k <- grep("x1$", rect_keys, value = TRUE)
-      y0k <- grep("y0$", rect_keys, value = TRUE); y1k <- grep("y1$", rect_keys, value = TRUE)
-      x0 <- as.numeric(ev[[x0k[1]]]); x1 <- as.numeric(ev[[x1k[1]]])
-      y0 <- as.numeric(ev[[y0k[1]]]); y1 <- as.numeric(ev[[y1k[1]]])
-      sel_shape(list(type = "rect", x0 = min(x0,x1), x1 = max(x0,x1),
-                     y0 = min(y0,y1), y1 = max(y0,y1)))
+    if (any(grepl("^shapes\\[[0-9]+\\]\\.(x0|x1|y0|y1)$", names(ev)))) {
+      rect_data <- ev[grep("^shapes\\[[0-9]+\\]\\.(x0|x1|y0|y1)$", names(ev))]
+      x0 <- as.numeric(rect_data[grep("x0$", names(rect_data))])
+      x1 <- as.numeric(rect_data[grep("x1$", names(rect_data))])
+      y0 <- as.numeric(rect_data[grep("y0$", names(rect_data))])
+      y1 <- as.numeric(rect_data[grep("y1$", names(rect_data))])
+      sel_shape(list(
+        type = "rect",
+        x0 = min(x0, x1), x1 = max(x0, x1),
+        y0 = min(y0, y1), y1 = max(y0, y1)
+      ))
       return()
     }
   })
+  
   
   # --- Assign ALL unassigned ---
   observeEvent(input$assign_all, {
