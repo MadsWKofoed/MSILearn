@@ -7,12 +7,17 @@ options(shiny.launch.browser = TRUE)
 bp <- parallel::detectCores() - 1
 setCardinalParallel(workers = bp)
 
-# MongoDB connection
+# MongoDB connections
 msi_con <- mongo(
   collection = "msi_data",
   db = "msi_project",
   url = "mongodb://localhost"
 )
+
+mz_ref_db <- mongo(collection = "mz_references",
+                   db = "MSI_database",
+                   url = "mongodb://localhost"
+                   )
 
 # Source function files
 source("R/clustering_functions.R")
