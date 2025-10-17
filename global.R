@@ -31,13 +31,13 @@ ui <- navbarPage(
            h3("Welcome to the MSI Clustering App"),
            p("Upload imzML + ibd files, perform clustering, and compare to histology.")
   ),
+  processing_module_ui("processing"),
   clustering_module_ui("clustering"),
-  prediction_module_ui("prediction"),
-  processing_module_ui("processing")
+  prediction_module_ui("prediction")
 )
 
 server <- function(input, output, session) {
+  processing_module_server("processing")
   clustering_module_server("clustering", msi_con)
   prediction_module_server("prediction")
-  processing_module_server("processing")
 }
