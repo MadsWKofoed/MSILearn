@@ -50,11 +50,10 @@ processing_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     
     # Mongo connection
-    mongo_ref <- mongo(
-      collection = "mz_references",
-      db = "MSI_database",
-      url = "mongodb://localhost:27017"
-    )
+    mongo_ref <- mongo(collection = "mz_references",
+                       db = "msi_project",
+                       url = "mongodb://localhost"
+                       )
     
     # Get reference names from MongoDB
     ref_docs <- reactive({

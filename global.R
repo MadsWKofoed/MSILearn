@@ -14,10 +14,6 @@ msi_con <- mongo(
   url = "mongodb://localhost"
 )
 
-mz_ref_db <- mongo(collection = "mz_references",
-                   db = "MSI_database",
-                   url = "mongodb://localhost"
-                   )
 
 # Source function files
 source("R/clustering_functions.R")
