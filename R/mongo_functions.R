@@ -1,3 +1,5 @@
+# R/mongo_functions.R
+
 sanitize_colnames <- function(nms) {
   nms <- gsub("\\.", "_", nms, perl = TRUE)
   nms <- ifelse(grepl("^\\$", nms), paste0("dollar_", sub("^\\$", "", nms)), nms)

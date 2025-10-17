@@ -22,6 +22,7 @@ source("R/mongo_functions.R")
 # Source modules
 source("R/modules/clustering_module.R")
 source("R/modules/prediction_module.R")
+source("R/modules/processing_module.R")
 
 # Global UI
 ui <- navbarPage(
@@ -31,10 +32,12 @@ ui <- navbarPage(
            p("Upload imzML + ibd files, perform clustering, and compare to histology.")
   ),
   clustering_module_ui("clustering"),
-  prediction_module_ui("prediction")
+  prediction_module_ui("prediction"),
+  processing_module_ui("processing")
 )
 
 server <- function(input, output, session) {
   clustering_module_server("clustering", msi_con)
   prediction_module_server("prediction")
+  processing_module_server("processing")
 }

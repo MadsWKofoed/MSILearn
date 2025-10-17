@@ -1,3 +1,5 @@
+# R/modules/prediction_module.R
+
 prediction_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Prediction",

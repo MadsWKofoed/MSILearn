@@ -1,4 +1,4 @@
-
+# R/processing_functions.R
 
 process_msi_files <- function(imzml_path, ibd_path, imzml_name, ref_mz_path) {
   message("Copying uploaded files to a temporary directory...")
