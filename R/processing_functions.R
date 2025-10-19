@@ -54,18 +54,26 @@
 
 
 
-process_msi_files <- function(imzml_path, ibd_path, imzml_name, ref_mz_path) {
+process_msi_files <- function(imzml_path, ibd_path, imzml_name,
+                              ref_mz_values, ref_source, ref_name,
+                              snr, tolerance) {
+  
   base <- tools::file_path_sans_ext(basename(imzml_name))
   run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
   
   mongo_meta <- mongo(collection = "processing_runs", db = "MSI_database")
   grid <- gridfs(db = "MSI_database")
   
-  # Create document for the run
   mongo_meta$insert(list(
     run_id = run_id,
     sample_name = imzml_name,
     created_at = Sys.time(),
+    parameters = list(
+      SNR = snr,
+      tolerance = tolerance,
+      reference_source = ref_source,
+      reference_name = ref_name
+    ),
     stages = list()
   ))
   
@@ -77,36 +85,28 @@ process_msi_files <- function(imzml_path, ibd_path, imzml_name, ref_mz_path) {
   file.copy(imzml_path, temp_imzml, overwrite = TRUE)
   file.copy(ibd_path, temp_ibd, overwrite = TRUE)
   
-  msi_data <- readImzML(temp_imzml, , memory = FALSE, check = FALSE,
-                        mass.range = NULL, resolution = 10, units = c("ppm"),
-                        guess.max = 1000L, as = "auto", parse.only = FALSE,
-                        verbose = getCardinalVerbose(), chunkopts = list(),
-                        BPPARAM = bpparam())
-  
-  # --- Save raw ---
+  msi_data <- readImzML(temp_imzml, , memory = FALSE)
   save_stage_to_mongo(msi_data, run_id, "raw")
   
-  # --- Summarize features (e.g., mean spectrum) ---
-  message("Summarizing features (mean spectrum)...")
+  # Summary
   msi_summary <- summarizeFeatures(msi_data, "mean")
   save_stage_to_mongo(msi_summary, run_id, "summary",
                       params = list(method = "mean"))
   
-  # --- Peak picking / SNR processing ---
-  message("Performing SNR processing...")
-  msi_data_snr <- peakPick(msi_data, SNR = 3)
-  save_stage_to_mongo(msi_data_snr, run_id, "snr", params = list(SNR = 3))
+  # SNR
+  msi_data_snr <- peakPick(msi_data, SNR = snr)
+  save_stage_to_mongo(msi_data_snr, run_id, "snr", params = list(SNR = snr))
   
-  # --- Alignment + binning ---
-  message("Aligning and binning MSI data...")
-  ref_mz <- read.csv(ref_mz_path)
+  # Align + bin using user’s reference
   msi_data_aligned <- msi_data_snr %>%
-    peakAlign(ref = as.numeric(ref_mz[, 1]), tolerance = 0.5, units = "mz") %>%
-    bin(ref = as.numeric(ref_mz[, 1]), tolerance = 0.5, units = "mz") %>%
+    peakAlign(ref = ref_mz_values, tolerance = tolerance, units = "mz") %>%
+    bin(ref = ref_mz_values, tolerance = tolerance, units = "mz") %>%
     process()
   
   save_stage_to_mongo(msi_data_aligned, run_id, "aligned_binned",
-                      params = list(tolerance = 0.5, units = "mz"))
+                      params = list(tolerance = tolerance,
+                                    reference_name = ref_name,
+                                    reference_source = ref_source))
   
   message("Processing complete. Run ID: ", run_id)
   return(run_id)

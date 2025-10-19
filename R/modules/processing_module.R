@@ -48,51 +48,68 @@ processing_module_ui <- function(id) {
 
 processing_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
+    ns <- session$ns
     
-    # Mongo connection
+    # Mongo connection for reference lists
     mongo_ref <- mongo(collection = "mz_references",
                        db = "msi_project",
-                       url = "mongodb://localhost"
-                       )
+                       url = "mongodb://localhost")
     
-    # Get reference names from MongoDB
+    # --- Fetch available reference lists from MongoDB ---
     ref_docs <- reactive({
       mongo_ref$find(fields = '{"_id": 0, "reference_name": 1}')
     })
     
     observe({
-      updateSelectInput(session, "ref_csv_mongo",
-                        choices = unique(ref_docs()$reference_name))
+      refs <- unique(ref_docs()$reference_name)
+      if (length(refs) == 0) refs <- "No references in DB"
+      updateSelectInput(session, "ref_csv_mongo", choices = refs)
     })
     
-    # Reactive that returns the actual m/z vector depending on source
+    # --- Determine which reference list to use ---
     selected_mz <- reactive({
       req(input$ref_source)
       if (input$ref_source == "Upload your own") {
         req(input$ref_csv)
         mz_data <- read.csv(input$ref_csv$datapath)
-        mz_col <- mz_data[[1]]  # assume first column is mz
-        return(mz_col)
+        mz_col <- mz_data[[1]]  # assume first column contains m/z values
+        return(list(source = "uploaded", name = input$ref_csv$name, values = mz_col))
       } else {
         req(input$ref_csv_mongo)
-        doc <- mongo_ref$find(
-          paste0('{"reference_name": "', input$ref_csv_mongo, '"}')
-        )
-        return(doc$mz_values[[1]])
+        doc <- mongo_ref$find(paste0('{"reference_name": "', input$ref_csv_mongo, '"}'))
+        return(list(source = "database", name = input$ref_csv_mongo, values = doc$mz_values[[1]]))
       }
     })
     
-    
-    # Example: when running processing
+    # --- Run processing ---
     observeEvent(input$run_processing, {
+      req(input$msi_files)
       mz_ref <- selected_mz()
       
-      cat("Using", length(mz_ref), "m/z reference values\n")
+      # Expect exactly two uploaded files: imzML and ibd
+      imzml_file <- input$msi_files$datapath[grepl("\\.imzML$", input$msi_files$name)]
+      ibd_file   <- input$msi_files$datapath[grepl("\\.ibd$", input$msi_files$name)]
       
-      # Continue with your alignment / processing logic...
+      # Parameters chosen by the user
+      snr_val <- input$snr
+      tol_val <- input$tolerance
+      
+      # --- Call your processing function ---
+      run_id <- process_msi_files(
+        imzml_path = imzml_file,
+        ibd_path   = ibd_file,
+        imzml_name = input$msi_files$name[grepl("\\.imzML$", input$msi_files$name)],
+        ref_mz_path = NULL,          # we’ll pass vector directly, not path
+        ref_mz_values = mz_ref$values,
+        ref_source = mz_ref$source,
+        ref_name = mz_ref$name,
+        snr = snr_val,
+        tolerance = tol_val
+      )
+      
+      showNotification(paste("Processing completed, run ID:", run_id))
     })
-    
   })
-  
 }
+
 
