@@ -29,3 +29,73 @@ normalize_for_mongo <- function(df) {
 }
 
 
+
+
+
+# Upload data at different stages during processing
+save_stage_to_mongo <- function(msi_object, run_id, stage_name, params = list(),
+                                db_name = "MSI_database",
+                                mongo_url = "mongodb://localhost") {
+  
+  # Create temp file and save object
+  temp_path <- tempfile(pattern = paste0(stage_name, "_"), fileext = ".rds")
+  saveRDS(msi_object, temp_path)
+  
+  # Connect to MongoDB + GridFS
+  mongo_meta <- mongo(collection = "processing_runs", db = db_name, url = mongo_url)
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  
+  # Upload file to GridFS
+  grid_id <- grid$upload(temp_path, name = paste0(run_id, "_", stage_name, ".rds"))
+  
+  # Build stage metadata
+  stage_doc <- list(
+    gridfs_id = grid_id,
+    parameters = params,
+    timestamp = Sys.time(),
+    file_name = paste0(run_id, "_", stage_name, ".rds")
+  )
+  
+  # Update the metadata collection
+  mongo_meta$update(
+    paste0('{"run_id": "', run_id, '"}'),
+    paste0('{$set: {"stages.', stage_name, '": ',
+           jsonlite::toJSON(stage_doc, auto_unbox = TRUE), '}}')
+  )
+  
+  message("Saved stage '", stage_name, "' to MongoDB with GridFS ID: ", grid_id)
+  invisible(grid_id)
+}
+
+
+# Retrieve data from any stage
+load_stage_from_mongo <- function(run_id, stage_name,
+                                  db_name = "MSI_database",
+                                  mongo_url = "mongodb://localhost:27017") {
+  # Connect to MongoDB + GridFS
+  mongo_meta <- mongo(collection = "processing_runs", db = db_name, url = mongo_url)
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  
+  # Retrieve metadata for this run
+  run_doc <- mongo_meta$find(paste0('{"run_id": "', run_id, '"}'))
+  
+  if (nrow(run_doc) == 0) {
+    stop("No run found with run_id: ", run_id)
+  }
+  
+  # Check stage existence
+  stages <- run_doc$stages[[1]]
+  if (is.null(stages[[stage_name]])) {
+    stop("Stage '", stage_name, "' not found for run_id ", run_id)
+  }
+  
+  # Extract GridFS id and download
+  grid_id <- stages[[stage_name]]$gridfs_id
+  temp_path <- tempfile(pattern = paste0(stage_name, "_"), fileext = ".rds")
+  grid$download(grid_id, temp_path)
+  
+  # Load R object
+  obj <- readRDS(temp_path)
+  message("Loaded stage '", stage_name, "' for run ", run_id)
+  return(obj)
+}

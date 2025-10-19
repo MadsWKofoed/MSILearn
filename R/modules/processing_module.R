@@ -86,7 +86,9 @@ processing_module_server <- function(id) {
     # Example: when running processing
     observeEvent(input$run_processing, {
       mz_ref <- selected_mz()
+      
       cat("Using", length(mz_ref), "m/z reference values\n")
+      
       # Continue with your alignment / processing logic...
     })
     
