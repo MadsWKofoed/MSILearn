@@ -35,37 +35,49 @@ normalize_for_mongo <- function(df) {
 # Upload data at different stages during processing
 save_stage_to_mongo <- function(msi_object, run_id, stage_name, params = list(),
                                 db_name = "MSI_database",
-                                mongo_url = "mongodb://localhost") {
+                                mongo_url = "mongodb://localhost:27017") {
   
-  # Create temp file and save object
+  # --- Save R object temporarily
   temp_path <- tempfile(pattern = paste0(stage_name, "_"), fileext = ".rds")
   saveRDS(msi_object, temp_path)
   
-  # Connect to MongoDB + GridFS
+  # --- Connections
   mongo_meta <- mongo(collection = "processing_runs", db = db_name, url = mongo_url)
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
-  # Upload file to GridFS
+  # --- Upload to GridFS
   grid_id <- grid$upload(temp_path, name = paste0(run_id, "_", stage_name, ".rds"))
   
-  # Build stage metadata
-  stage_doc <- list(
-    gridfs_id = grid_id,
-    parameters = params,
-    timestamp = Sys.time(),
-    file_name = paste0(run_id, "_", stage_name, ".rds")
+  # --- Prepare fields
+  timestamp <- format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ")
+  file_name <- paste0(run_id, "_", stage_name, ".rds")
+  
+  # --- Convert parameters safely
+  if (length(params) == 0) {
+    params_json <- "{}"  # empty JSON object
+  } else {
+    params_json <- jsonlite::toJSON(params, auto_unbox = TRUE)
+  }
+  
+  # --- Construct JSON string manually
+  json_update <- paste0(
+    '{"$set": {"stages.', stage_name, '": {',
+    '"gridfs_id": "', grid_id$id, '", ',
+    '"parameters": ', params_json, ', ',
+    '"timestamp": "', timestamp, '", ',
+    '"file_name": "', file_name, '"}}}'
   )
   
-  # Update the metadata collection
+  # --- Update metadata document
   mongo_meta$update(
     paste0('{"run_id": "', run_id, '"}'),
-    paste0('{$set: {"stages.', stage_name, '": ',
-           jsonlite::toJSON(stage_doc, auto_unbox = TRUE), '}}')
+    json_update
   )
   
-  message("Saved stage '", stage_name, "' to MongoDB with GridFS ID: ", grid_id)
-  invisible(grid_id)
+  message("Saved stage '", stage_name, "' to MongoDB with GridFS ID: ", grid_id$id)
+  invisible(grid_id$id)
 }
+
 
 
 # Retrieve data from any stage

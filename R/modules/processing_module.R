@@ -1,5 +1,4 @@
 # R/modules/processing_module.R
-
 processing_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Processing",
@@ -7,7 +6,7 @@ processing_module_ui <- function(id) {
              sidebarPanel(
                fileInput(ns("msi_files"), "Upload imzML + ibd files", multiple = TRUE,
                          accept = c(".imzML", ".ibd")),
-
+               
                radioButtons(
                  ns("ref_source"),
                  "Reference list source:",
@@ -15,36 +14,36 @@ processing_module_ui <- function(id) {
                  selected = "From database"
                ),
                
-               # Only show this if "Upload your own" is chosen
                conditionalPanel(
                  condition = sprintf("input['%s'] == 'Upload your own'", ns("ref_source")),
                  fileInput(ns("ref_csv"), "Upload list of m/z for alignment",
                            multiple = FALSE, accept = ".csv")
                ),
                
-               # Only show this if "From database" is chosen
                conditionalPanel(
                  condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
-                 selectInput(ns("ref_csv_mongo"), "Select reference list from DB:", choices = NULL)
+                 selectInput(ns("ref_csv_mongo"), "Select reference list from DB:", choices = "Loading...")
                ),
                
-               numericInput(ns("snr"), "Signal to Noise Ratio (SNR):", value = 3, min = 1.5, max = 30, step = 0.1),
+               numericInput(ns("snr"), "Signal to Noise Ratio (SNR):", value = 3,
+                            min = 1.5, max = 30, step = 0.1),
                
-               numericInput(ns("tolerance"), "Binning tolerance:", value = 0.5, min = 0.1, max = 3, step = 0.1),
+               numericInput(ns("tolerance"), "Binning tolerance:", value = 0.5,
+                            min = 0.1, max = 3, step = 0.1),
                
-               
-               actionButton(ns("run_processing"), "Run Processing"),
-               
-
-               actionButton(ns("commit_db"), "Commit processed data to MongoDB"),
+               actionButton(ns("run_processing"), "Run Full Processing"),
+               br(), br(),
+               textOutput(ns("run_status")),
                width = 2
              ),
-             mainPanel(uiOutput(ns("illustration_layout")), width = 10)
-             
-             # Select among the m/z's to illustrate heatmap of the MSI data colored according to intensity
+             mainPanel(
+               uiOutput(ns("illustration_layout")),
+               width = 10
+             )
            )
   )
 }
+
 
 processing_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
@@ -55,61 +54,75 @@ processing_module_server <- function(id) {
                        db = "msi_project",
                        url = "mongodb://localhost")
     
-    # --- Fetch available reference lists from MongoDB ---
+    # --- Populate reference list dropdown ---
     ref_docs <- reactive({
       mongo_ref$find(fields = '{"_id": 0, "reference_name": 1}')
     })
     
     observe({
       refs <- unique(ref_docs()$reference_name)
-      if (length(refs) == 0) refs <- "No references in DB"
+      if (length(refs) == 0) refs <- "No references found"
       updateSelectInput(session, "ref_csv_mongo", choices = refs)
     })
     
-    # --- Determine which reference list to use ---
+    # --- Reactive for reference source ---
     selected_mz <- reactive({
       req(input$ref_source)
       if (input$ref_source == "Upload your own") {
         req(input$ref_csv)
         mz_data <- read.csv(input$ref_csv$datapath)
-        mz_col <- mz_data[[1]]  # assume first column contains m/z values
-        return(list(source = "uploaded", name = input$ref_csv$name, values = mz_col))
+        return(list(
+          source = "uploaded",
+          name = input$ref_csv$name,
+          values = mz_data[[1]]
+        ))
       } else {
         req(input$ref_csv_mongo)
         doc <- mongo_ref$find(paste0('{"reference_name": "', input$ref_csv_mongo, '"}'))
-        return(list(source = "database", name = input$ref_csv_mongo, values = doc$mz_values[[1]]))
+        return(list(
+          source = "database",
+          name = input$ref_csv_mongo,
+          values = doc$mz_values[[1]]
+        ))
       }
     })
     
-    # --- Run processing ---
+    # --- Full processing pipeline ---
     observeEvent(input$run_processing, {
       req(input$msi_files)
       mz_ref <- selected_mz()
       
-      # Expect exactly two uploaded files: imzML and ibd
       imzml_file <- input$msi_files$datapath[grepl("\\.imzML$", input$msi_files$name)]
       ibd_file   <- input$msi_files$datapath[grepl("\\.ibd$", input$msi_files$name)]
+      imzml_name <- input$msi_files$name[grepl("\\.imzML$", input$msi_files$name)]
       
-      # Parameters chosen by the user
       snr_val <- input$snr
       tol_val <- input$tolerance
       
-      # --- Call your processing function ---
-      run_id <- process_msi_files(
-        imzml_path = imzml_file,
-        ibd_path   = ibd_file,
-        imzml_name = input$msi_files$name[grepl("\\.imzML$", input$msi_files$name)],
-        ref_mz_path = NULL,          # we’ll pass vector directly, not path
-        ref_mz_values = mz_ref$values,
-        ref_source = mz_ref$source,
-        ref_name = mz_ref$name,
-        snr = snr_val,
-        tolerance = tol_val
-      )
+      output$run_status <- renderText("Processing started...")
       
-      showNotification(paste("Processing completed, run ID:", run_id))
+      run_id <- tryCatch({
+        process_msi_pipeline(
+          imzml_path = imzml_file,
+          ibd_path   = ibd_file,
+          imzml_name = imzml_name,
+          ref_mz_values = mz_ref$values,
+          ref_source = mz_ref$source,
+          ref_name = mz_ref$name,
+          snr = snr_val,
+          tolerance = tol_val
+        )
+      }, error = function(e) {
+        output$run_status <- renderText(paste("Error:", e$message))
+        return(NULL)
+      })
+      
+      if (!is.null(run_id)) {
+        output$run_status <- renderText(paste("Processing complete. Run ID:", run_id))
+      }
     })
   })
 }
+
 
 
