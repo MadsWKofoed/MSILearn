@@ -149,10 +149,6 @@ process_reference_creation <- function(run_id, control_mean, ref_mz_values, snr,
   control_SNR_ref <- control_mean %>%
     peakPick(SNR = snr)
   
-  save_stage_to_mongo(control_SNR_ref, run_id, "mean_snr_reference",
-                      params = list(SNR = snr,
-                                    reference_name = ref_name,
-                                    reference_source = ref_source))
   invisible(control_SNR_ref)
 }
 
@@ -187,10 +183,6 @@ process_binning_and_matrix <- function(run_id, msi_data, control_SNR_ref, ref_mz
   )
   colnames(full_df) <- c("runNames", "x", "y", mz_names)
   
-  save_stage_to_mongo(full_df, run_id, "binned_dataframe",
-                      params = list(SNR = snr,
-                                    tolerance = tolerance,
-                                    columns = ncol(full_df)))
   
   invisible(full_df)
 }
@@ -201,31 +193,96 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
                                  ref_mz_values, ref_source, ref_name,
                                  snr, tolerance) {
   
-  run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-  mongo_meta <- mongo(collection = "processing_runs", db = "MSI_database")
-  mongo_meta$insert(list(
-    run_id = run_id,
-    sample_name = imzml_name,
-    created_at = Sys.time(),
-    parameters = list(
-      SNR = snr,
-      tolerance = tolerance,
-      reference_source = ref_source,
-      reference_name = ref_name
-    ),
-    stages = setNames(list(), character(0))
-  ))
+  mongo_meta <- mongo(collection = "processing_runs", db = "MSI_database", url = "mongodb://localhost")
   
-  step1 <- process_import_and_summary(imzml_path, ibd_path, imzml_name, run_id)
-  step2 <- process_reference_creation(run_id, step1$control_mean,
-                                      ref_mz_values, snr, 
-                                      ref_name, ref_source)
-  step3 <- process_binning_and_matrix(run_id, step1$msi_data,
-                                      step2, ref_mz_values, snr, tolerance)
+  # --- Check if dataset already exists in DB ---
+  existing_run <- mongo_meta$find(paste0('{"sample_name": "', imzml_name, '"}'))
   
-  message("Processing complete. Run ID: ", run_id)
+  if (nrow(existing_run) > 0) {
+    # Dataset already in DB → reuse raw
+    run_id <- existing_run$run_id[[1]]
+    message("Found existing dataset for sample: ", imzml_name)
+    
+    stages <- colnames(existing_run$stages)
+    raw_available <- "raw" %in% stages
+    
+    if (!raw_available) {
+      stop("Existing record found, but no raw stage present in database.")
+    }
+    
+    # --- Load existing raw stage ---
+    message("Loading existing raw MSI data from database...")
+    raw <- load_stage_from_mongo(run_id, "raw")
+    
+  } else {
+    # --- New dataset: create new run and process raw stage ---
+    run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+    message("Creating new run: ", run_id)
+    
+    mongo_meta$insert(list(
+      run_id = run_id,
+      sample_name = imzml_name,
+      created_at = Sys.time(),
+      parameters = list(
+        reference_source = ref_source,
+        reference_name = ref_name
+      ),
+      stages = setNames(list(), character(0))  # Initialize stages as an empty object
+    ))
+    
+    # Import raw data and save
+    step1 <- process_import_and_summary(imzml_path, ibd_path, imzml_name, run_id)
+    raw <- step1$msi_data
+  }
+  
+  # --- Build parameter-specific stage names ---
+  snr_tag <- gsub("\\.", "_", sprintf("%.3f", snr))
+  tol_tag <- gsub("\\.", "_", sprintf("%.3f", tolerance))
+  
+  mean_stage_name <- paste0("mean_snr_reference_SNR", snr_tag)
+  binned_stage_name <- paste0("binned_dataframe_SNR", snr_tag, "_tol", tol_tag)
+  
+  # --- Check if this parameter version already exists ---
+  run_doc <- mongo_meta$find(paste0('{"run_id": "', run_id, '"}'))
+  existing_stages <- names(run_doc$stages[[1]])
+  
+  if (binned_stage_name %in% existing_stages) {
+    message("⚠️ Dataset with SNR=", snr, " and tolerance=", tolerance, " already exists. Skipping.")
+    showNotification(
+      paste("This parameter combination (SNR=", snr, ", tol=", tolerance, ") already exists for this dataset."),
+      type = "warning", duration = 8
+    )
+    return(invisible(run_id))
+  }
+  
+  # --- Process missing reference and binned stages ---
+  message("Processing new version: SNR=", snr, " tol=", tolerance)
+  
+  # Generate mean spectrum and reference
+  control_mean <- summarizeFeatures(raw, "mean")
+  control_SNR_ref <- process_reference_creation(run_id, control_mean,
+                                                ref_mz_values, snr,
+                                                ref_name, ref_source)
+  
+  # Save versioned reference stage
+  save_stage_to_mongo(control_SNR_ref, run_id, mean_stage_name,
+                      params = list(SNR = snr, reference_name = ref_name, reference_source = ref_source))
+  
+  # Build new binned matrix
+  df <- process_binning_and_matrix(run_id, raw, control_SNR_ref,
+                                   ref_mz_values, snr, tolerance)
+  
+  # Save versioned binned dataframe
+  save_stage_to_mongo(df, run_id, binned_stage_name,
+                      params = list(SNR = snr, tolerance = tolerance, columns = ncol(df)))
+  
+  message("✅ Processing complete for ", imzml_name, " (run_id=", run_id, ")")
+  showNotification(paste("Processing complete for", imzml_name, "with SNR=", snr, " tol=", tolerance),
+                   type = "message", duration = 8)
   invisible(run_id)
 }
+
+
 
 
 
