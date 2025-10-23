@@ -8,192 +8,130 @@ sanitize_colnames <- function(nms) {
 
 normalize_for_mongo <- function(df) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
-  # factors -> character
-  is_fac  <- vapply(df, is.factor, logical(1))
-  if (any(is_fac)) df[is_fac] <- lapply(df[is_fac], as.character)
-  # list-cols -> scalar character
-  is_list <- vapply(df, is.list, logical(1))
-  if (any(is_list)) {
-    df[is_list] <- lapply(df[is_list], function(col)
-      vapply(col, function(x) if (length(x) == 0) NA_character_ else as.character(x[[1]]), character(1))
-    )
+  for (col in names(df)) {
+    if (is.factor(df[[col]])) {
+      df[[col]] <- as.character(df[[col]])
+    }
   }
-  # NaN/Inf -> NA
-  is_num <- vapply(df, is.numeric, logical(1))
-  if (any(is_num)) {
-    df[is_num] <- lapply(df[is_num], function(x) { x[is.nan(x) | is.infinite(x)] <- NA_real_; x })
-  }
-  rownames(df) <- NULL
-  names(df) <- sanitize_colnames(names(df))
   df
 }
 
 
-
-
-
-# Upload data at different stages during processing
-save_stage_to_mongo <- function(msi_object, run_id, stage_name, params = list(),
+# --- Save artifact + create metadata row ---
+save_stage_to_mongo <- function(msi_object, run_id, stage_type, 
+                                sample_name,
+                                params = list(),
                                 db_name = "MSI_database",
-                                mongo_url = "mongodb://localhost",
-                                bucket = "fs") {
+                                mongo_url = "mongodb://localhost") {
   
-  fs_files  <- mongo(collection = paste0(bucket, ".files"),  db = db_name, url = mongo_url)
-  fs_chunks <- mongo(collection = paste0(bucket, ".chunks"), db = db_name, url = mongo_url)
-  mongo_meta <- mongo(collection = "processing_runs", db = db_name, url = mongo_url)
+  # Save RDS to GridFS
+  temp_path <- tempfile(pattern = paste0(stage_type, "_"), fileext = ".rds")
+  saveRDS(msi_object, temp_path)
   
-  # serialize object to raw
-  data_raw <- serialize(msi_object, connection = NULL)
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  grid_id <- grid$upload(temp_path, name = paste0(run_id, "_", stage_type, ".rds"))
   
-  # make simple 24-hex id
-  file_id <- paste0(format(as.hexmode(sample(0:255, 12, replace = TRUE)), width = 2), collapse = "")
+  # Create metadata row
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                      db = db_name, url = mongo_url)
   
-  chunk_size <- 255 * 1024
-  n_chunks <- ceiling(length(data_raw) / chunk_size)
-  
-  # ---- INSERT USING JSON STRINGS ----
-  file_doc <- jsonlite::toJSON(list(
-    `_id`      = file_id,
-    filename   = paste0(run_id, "_", stage_name, ".rds"),
-    length     = length(data_raw),
-    chunkSize  = chunk_size,
-    uploadDate = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ")
-  ), auto_unbox = TRUE)
-  
-  fs_files$insert(file_doc)
-  
-  for (i in seq_len(n_chunks)) {
-    chunk_start <- (i - 1) * chunk_size + 1
-    chunk_end   <- min(i * chunk_size, length(data_raw))
-    chunk_data  <- data_raw[chunk_start:chunk_end]
-    
-    chunk_doc <- jsonlite::toJSON(list(
-      files_id = file_id,
-      n        = i - 1L,
-      data     = chunk_data
-    ), auto_unbox = TRUE)
-    
-    fs_chunks$insert(chunk_doc)
-  }
-  
-  # update metadata doc
-  timestamp <- format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ")
-  file_name <- paste0(run_id, "_", stage_name, ".rds")
-  params_json <- if (length(params) == 0) "{}" else jsonlite::toJSON(params, auto_unbox = TRUE)
-  
-  json_update <- paste0(
-    '{"$set": {"stages.', stage_name, '": {',
-    '"gridfs_id": "', file_id, '", ',
-    '"parameters": ', params_json, ', ',
-    '"timestamp": "', timestamp, '", ',
-    '"file_name": "', file_name, '"}}}'
+  metadata_row <- list(
+    gridfs_id = as.character(grid_id$id),
+    run_id = run_id,
+    sample_name = sample_name,
+    stage_type = stage_type,
+    created_at = Sys.time()
   )
   
-  mongo_meta$update(paste0('{"run_id": "', run_id, '"}'), json_update)
-  message("✓ Saved stage '", stage_name, "' for run ", run_id, " to GridFS.")
-  invisible(file_id)
+  # Add all parameters as flat fields
+  metadata_row <- c(metadata_row, params)
+  
+  mongo_meta$insert(metadata_row)
+  
+  message("Saved '", stage_type, "' (GridFS ID: ", grid_id$id, ")")
+  invisible(grid_id$id)
 }
 
 
-
-
-
-
-# --- Function to load a GridFS file directly into R ---
-load_gridfs_rds <- function(gridfs_id,
-                            db = "MSI_database",
-                            url = "mongodb://localhost",
-                            bucket = "fs") {
+# --- Query artifacts (returns dataframe) ---
+query_artifacts <- function(sample_name = NULL, 
+                            stage_type = NULL,
+                            snr = NULL, 
+                            tolerance = NULL,
+                            reference_name = NULL,
+                            run_id = NULL,
+                            db_name = "MSI_database",
+                            mongo_url = "mongodb://localhost") {
   
-  fs_files  <- mongo(collection = paste0(bucket, ".files"),  db = db, url = url)
-  fs_chunks <- mongo(collection = paste0(bucket, ".chunks"), db = db, url = url)
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                      db = db_name, url = mongo_url)
   
-  # --- Check file document ---
-  file_doc <- fs_files$find(sprintf('{"_id": "%s"}', gridfs_id))
-  if (nrow(file_doc) == 0) stop("File not found in GridFS.")
+  # Build query
+  query_parts <- list()
+  if (!is.null(sample_name)) query_parts$sample_name <- sample_name
+  if (!is.null(stage_type)) query_parts$stage_type <- stage_type
+  if (!is.null(snr)) query_parts$snr <- snr
+  if (!is.null(tolerance)) query_parts$tolerance <- tolerance
+  if (!is.null(reference_name)) query_parts$reference_name <- reference_name
+  if (!is.null(run_id)) query_parts$run_id <- run_id
   
-  # --- Retrieve chunks ---
-  chunk_docs <- fs_chunks$find(sprintf('{"files_id": "%s"}', gridfs_id))
-  if (nrow(chunk_docs) == 0) stop("No chunks found for this file.")
+  query_json <- if (length(query_parts) == 0) {
+    '{}'
+  } else {
+    jsonlite::toJSON(query_parts, auto_unbox = TRUE)
+  }
   
-  # --- Sort chunks and decode base64 ---
-  chunk_docs <- chunk_docs[order(chunk_docs$n), ]
-  chunk_data_list <- lapply(chunk_docs$data, base64decode)
-  
-  # --- Combine chunks ---
-  data_raw <- do.call(c, chunk_data_list)
-  
-  # --- Write and read RDS ---
-  tmpfile <- tempfile(fileext = ".rds")
-  writeBin(data_raw, tmpfile)
-  obj <- readRDS(tmpfile)
-  
-  return(obj)
+  results <- mongo_meta$find(query_json)
+  results
 }
 
 
-
-
-
-# Retrieve data from any stage
-# --- Load an object from MongoDB (GridFS) ---
-load_stage_from_mongo <- function(run_id, stage_name,
-                                  db_name = "MSI_database",
-                                  mongo_url = "mongodb://localhost",
-                                  bucket = "fs") {
-  # Connect to metadata collection
-  mongo_meta <- mongo(collection = "processing_runs", db = db_name, url = mongo_url)
+# --- Load artifact by gridfs_id ---
+load_artifact_by_id <- function(gridfs_id,
+                                db_name = "MSI_database",
+                                mongo_url = "mongodb://localhost") {
   
-  # Retrieve metadata document
-  run_doc <- mongo_meta$find(sprintf('{"run_id": "%s"}', run_id))
-  if (nrow(run_doc) == 0) stop("No run found with run_id: ", run_id)
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
-  # --- Safely extract stages structure ---
-  stages_obj <- run_doc$stages[[1]]
-  if (is.null(names(stages_obj))) {
-    stages_obj <- run_doc$stages
-  }
+  temp_path <- tempfile(pattern = "artifact_", fileext = ".rds")
+  grid$download(gridfs_id, temp_path)
   
-  # Handle case where we're inside a single stage
-  if (all(c("gridfs_id", "parameters", "timestamp", "file_name") %in% names(stages_obj))) {
-    # Go up one level if we accidentally went inside one stage
-    stages_obj <- run_doc$stages
-  }
-  
-  stage_names <- names(stages_obj)
-  if (!(stage_name %in% stage_names)) {
-    stop("Stage '", stage_name, "' not found for run_id ", run_id)
-  }
-  
-  # --- Extract GridFS ID ---
-  gridfs_id <- stages_obj[[stage_name]]$gridfs_id
-  if (is.null(gridfs_id) || is.na(gridfs_id)) {
-    stop("No GridFS ID found for stage '", stage_name, "'.")
-  }
-  
-  message("Loading stage '", stage_name, "' for run ", run_id, " (GridFS ID: ", gridfs_id, ")")
-  
-  # --- Load directly from GridFS ---
-  obj <- load_gridfs_rds(gridfs_id = gridfs_id, db = db_name, url = mongo_url, bucket = bucket)
-  
-  message("✓ Successfully loaded stage '", stage_name, "' from MongoDB.")
-  return(obj)
+  obj <- readRDS(temp_path)
+  message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
+  obj
 }
 
 
-
-
-list_binned_stages <- function(run_id,
-                               db_name = "MSI_database",
-                               mongo_url = "mongodb://localhost") {
-  mongo_meta <- mongo(collection = "processing_runs", db = db_name, url = mongo_url)
-  run_doc <- mongo_meta$find(paste0('{"run_id": "', run_id, '"}'))
-  if (nrow(run_doc) == 0) return(character(0))
+# --- Load artifact by query (gets first match) ---
+load_artifact <- function(sample_name = NULL, 
+                          stage_type = NULL,
+                          snr = NULL, 
+                          tolerance = NULL,
+                          reference_name = NULL,
+                          run_id = NULL,
+                          db_name = "MSI_database",
+                          mongo_url = "mongodb://localhost") {
   
-  stages_obj <- run_doc$stages[[1]]
-  if (is.null(names(stages_obj))) stages_obj <- run_doc$stages
-  stage_names <- names(stages_obj)
+  artifacts <- query_artifacts(
+    sample_name = sample_name,
+    stage_type = stage_type,
+    snr = snr,
+    tolerance = tolerance,
+    reference_name = reference_name,
+    run_id = run_id,
+    db_name = db_name,
+    mongo_url = mongo_url
+  )
   
-  grep("^binned_dataframe", stage_names, value = TRUE)
+  if (nrow(artifacts) == 0) {
+    stop("No artifacts found matching query")
+  }
+  
+  if (nrow(artifacts) > 1) {
+    message("Multiple artifacts found (", nrow(artifacts), "), loading first match")
+  }
+  
+  gridfs_id <- artifacts$gridfs_id[1]
+  load_artifact_by_id(gridfs_id, db_name, mongo_url)
 }
 
