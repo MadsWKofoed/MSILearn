@@ -5,14 +5,17 @@ clustering_module_ui <- function(id) {
   tabPanel("Clustering",
            sidebarLayout(
              sidebarPanel(
-               fileInput(ns("msi_files"), "Upload imzML + ibd files", multiple = TRUE,
-                         accept = c(".imzML", ".ibd")),
-               fileInput(ns("histology"), "Optional: Upload histology image",
-                         accept = c(".png", ".jpg", ".jpeg", ".tif")),
+               selectInput(ns("run_select"), "Select dataset (run):", choices = "Loading..."),
+               uiOutput(ns("snr_ui")),
+               uiOutput(ns("tol_ui")),
+               actionButton(ns("load_dataset"), "Load selected dataset"),
+               tags$hr(),
+               
                numericInput(ns("clusters"), "Number of clusters:", value = 3, min = 2, max = 30),
-               selectInput(ns("method"), "Clustering method:",
-                           choices = c("K-means", "Hierarchical")),
-               actionButton(ns("run"), "Run Clustering"),
+               selectInput(ns("method"), "Clustering method:", choices = c("K-means", "Hierarchical")),
+               actionButton(ns("run_clustering"), "Run Clustering"),
+               tags$hr(),
+               
                selectInput(ns("orientation"), "Orientation adjustment:",
                            choices = c("Default", "Swap axes", "Flip X", "Flip Y", "Flip Both")),
                textInput(ns("class_label"), "Assign Class:", value = "Class1"),
@@ -22,73 +25,108 @@ clustering_module_ui <- function(id) {
                actionButton(ns("commit_db"), "Commit to MongoDB"),
                width = 2
              ),
-             mainPanel(uiOutput(ns("cluster_layout")), width = 10)
+             mainPanel(
+               uiOutput(ns("cluster_layout")),
+               textOutput(ns("status_text")),
+               width = 10
+             )
            )
   )
 }
+
+
 
 clustering_module_server <- function(id, msi_con) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-
-    uploaded_paths <- reactiveVal(NULL)
+    mongo_meta <- mongo(collection = "processing_runs", db = "MSI_database", url = "mongodb://localhost")
+    mongo_data <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://localhost")
+    
     processed_data <- reactiveVal(NULL)
     clustered_data <- reactiveVal(NULL)
     annotated_data <- reactiveVal(NULL)
     
-    
-    observeEvent(input$msi_files, {
-      req(input$msi_files)
-      imzml_idx <- grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)
-      ibd_idx   <- grepl("\\.ibd$",   input$msi_files$name, ignore.case = TRUE)
-      uploaded_paths(list(
-        imzml = input$msi_files$datapath[imzml_idx],
-        ibd   = input$msi_files$datapath[ibd_idx],
-        imzml_name = input$msi_files$name[imzml_idx],
-        ibd_name   = input$msi_files$name[ibd_idx]
-      ))
-    })
-    
-    
-    observeEvent(input$run, {
-      paths <- uploaded_paths(); req(paths)
-      if (is.null(processed_data())) {
-        withProgress(message = "Running preprocessing…", value = 0, {
-          incProgress(0.05, detail = "Preparing inputs")
-          df <- tryCatch({
-            process_msi_files(
-              imzml_path = paths$imzml,
-              ibd_path   = paths$ibd,
-              imzml_name = paths$imzml_name,
-              ref_mz_path = "ref_mz.csv"
-            )
-          }, error = function(e) {
-            showNotification(paste("Processing failed:", conditionMessage(e)),
-                             type = "error", duration = 10)
-            return(NULL)
-          })
-          incProgress(1)
-          processed_data(df)
-        })
+    # --- Load all runs ---
+    observe({
+      runs <- mongo_meta$find(fields = '{"_id":0, "run_id":1, "sample_name":1}')
+      if (nrow(runs) == 0) {
+        updateSelectInput(session, "run_select", choices = "No runs found")
+      } else {
+        choices <- setNames(runs$run_id, paste(runs$sample_name, "(", runs$run_id, ")"))
+        updateSelectInput(session, "run_select", choices = choices)
       }
     })
     
-    observeEvent(input$msi_files, { processed_data(NULL) })
+    # --- Update SNR dropdown when run is selected ---
+    output$snr_ui <- renderUI({
+      req(input$run_select)
+      run_doc <- mongo_meta$find(paste0('{"run_id": "', input$run_select, '"}'))
+      stages_obj <- run_doc$stages[[1]]
+      stage_names <- list_binned_stages(input$run_select)
+      
+      # Extract all SNR values from stage names
+      snr_values <- unique(sub(".*_SNR([0-9.]+)_.*", "\\1", grep("binned_dataframe", stage_names, value = TRUE)))
+      snr_values <- snr_values[snr_values != ".*"]  # remove bad matches
+      snr_values <- sort(unique(as.numeric(snr_values)))
+      
+      selectInput(ns("snr_select"), "Select SNR:", choices = snr_values)
+    })
     
-    clustered_data <- eventReactive(input$run, {
+    # --- Update tolerance dropdown when SNR is selected ---
+    output$tol_ui <- renderUI({
+      req(input$run_select, input$snr_select)
+      run_doc <- mongo_meta$find(paste0('{"run_id": "', input$run_select, '"}'))
+      stages_obj <- run_doc$stages[[1]]
+      stage_names <- list_binned_stages(input$run_select)
+      
+      pattern <- paste0("binned_dataframe_SNR", input$snr_select, "_tol")
+      tol_values <- unique(sub(".*_tol([0-9.]+)_.*", "\\1", grep(pattern, stage_names, value = TRUE)))
+      tol_values <- tol_values[tol_values != ".*"]
+      tol_values <- sort(unique(as.numeric(tol_values)))
+      
+      selectInput(ns("tol_select"), "Select tolerance:", choices = tol_values)
+    })
+    
+    # --- Load selected dataset ---
+    observeEvent(input$load_dataset, {
+      req(input$run_select, input$snr_select, input$tol_select)
+      run_id <- input$run_select
+      
+      # Find matching stage name
+      run_doc <- mongo_meta$find(paste0('{"run_id": "', run_id, '"}'))
+      stages_obj <- run_doc$stages[[1]]
+      stage_names <- list_binned_stages(input$run_select)
+      match_pattern <- paste0("binned_dataframe_SNR", input$snr_select, "_tol", input$tol_select)
+      match_stage <- grep(match_pattern, stage_names, value = TRUE)
+      
+      if (length(match_stage) == 0) {
+        showNotification("No matching dataset found for selected parameters.", type = "error")
+        return()
+      }
+      
+      stage_to_load <- match_stage[1]
+      message("Loading stage: ", stage_to_load)
+      df <- load_stage_from_mongo(run_id, stage_to_load)
+      
+      processed_data(df)
+      output$status_text <- renderText(paste("Loaded dataset:", stage_to_load))
+      showNotification(paste("Loaded dataset:", stage_to_load), type = "message")
+    })
+    
+    # --- Clustering (same as before) ---
+    observeEvent(input$run_clustering, {
       df <- processed_data(); req(df)
-      withProgress(message = "Clustering…", value = 0, {
-        out <- tryCatch({
-          if (input$method == "K-means") run_kmeans(df, k = input$clusters)
-          else run_hclust(df, k = input$clusters)
-        }, error = function(e) {
-          showNotification(paste("Clustering failed:", conditionMessage(e)),
-                           type = "error", duration = 10)
-          return(NULL)
-        })
-        out
+      withProgress(message = "Clustering...", value = 0, {
+        clustered <- if (input$method == "K-means")
+          run_kmeans(df, input$clusters)
+        else
+          run_hclust(df, input$clusters)
+        clustered_data(clustered)
+        annotated_data(NULL)
+        incProgress(1)
       })
+      output$status_text <- renderText("Clustering complete.")
     })
     
     # --- State and colors ---
