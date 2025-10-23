@@ -95,11 +95,14 @@ load_artifact_by_id <- function(gridfs_id,
   
   # Read raw bytes directly from GridFS
   query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
-  raw_data <- grid$read(query)
+  result <- grid$read(query)
   
-  if (length(raw_data) == 0) {
+  if (is.null(result) || length(result) == 0) {
     stop("GridFS file not found: ", gridfs_id)
   }
+  
+  # Extract raw data (grid$read returns list)
+  raw_data <- result[[1]]
   
   # Write to temp file and read as RDS
   temp_path <- tempfile(pattern = "artifact_", fileext = ".rds")
@@ -109,6 +112,7 @@ load_artifact_by_id <- function(gridfs_id,
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
   obj
 }
+
 
 # --- Load artifact by query (gets first match) ---
 load_artifact <- function(sample_name = NULL, 
