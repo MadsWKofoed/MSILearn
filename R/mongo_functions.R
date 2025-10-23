@@ -103,11 +103,14 @@ load_artifact_by_id <- function(gridfs_id,
   
   filename <- file_info$filename[1]
   
-  # Export (download) using filename to temp file
-  temp_path <- tempfile(pattern = "artifact_", fileext = ".rds")
-  grid$export(filename, temp_path)
+  # Download to temp directory
+  temp_dir <- tempdir()
+  grid$download(filename, temp_dir)
   
-  obj <- readRDS(temp_path)
+  # Read the downloaded file
+  downloaded_path <- file.path(temp_dir, filename)
+  obj <- readRDS(downloaded_path)
+  
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
   obj
 }
