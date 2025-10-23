@@ -93,7 +93,7 @@ load_artifact_by_id <- function(gridfs_id,
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
-  # Find file by _id to get filename
+  # Find file by _id
   query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
   file_info <- grid$find(query)
   
@@ -101,40 +101,16 @@ load_artifact_by_id <- function(gridfs_id,
     stop("GridFS file not found: ", gridfs_id)
   }
   
-  message("Columns in file_info: ", paste(colnames(file_info), collapse = ", "))
-  message("file_info structure:")
-  print(str(file_info))
-  
-  # Try different column names
-  if ("name" %in% colnames(file_info)) {
-    filename <- file_info$name[1]
-  } else if ("filename" %in% colnames(file_info)) {
-    filename <- file_info$filename[1]
-  } else {
-    stop("Cannot find filename column in GridFS metadata")
-  }
-  
-  message("Filename from GridFS: ", filename)
+  filename <- file_info$name[1]
   
   # Download to temp directory
   temp_dir <- tempdir()
-  message("Temp directory: ", temp_dir)
-  
   grid$download(filename, temp_dir)
   
-  # Check if file exists
+  # Read the downloaded file
   downloaded_path <- file.path(temp_dir, filename)
-  message("Looking for file at: ", downloaded_path)
-  message("File exists: ", file.exists(downloaded_path))
-  
-  if (!file.exists(downloaded_path)) {
-    # List files in temp_dir to see what was downloaded
-    files_in_temp <- list.files(temp_dir, pattern = "\\.rds$", full.names = TRUE)
-    message("RDS files in temp dir: ", paste(files_in_temp, collapse = ", "))
-    stop("Downloaded file not found at expected path")
-  }
-  
   obj <- readRDS(downloaded_path)
+  
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
   obj
 }
