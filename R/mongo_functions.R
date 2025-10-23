@@ -101,7 +101,19 @@ load_artifact_by_id <- function(gridfs_id,
     stop("GridFS file not found: ", gridfs_id)
   }
   
-  filename <- file_info$filename[1]
+  message("Columns in file_info: ", paste(colnames(file_info), collapse = ", "))
+  message("file_info structure:")
+  print(str(file_info))
+  
+  # Try different column names
+  if ("name" %in% colnames(file_info)) {
+    filename <- file_info$name[1]
+  } else if ("filename" %in% colnames(file_info)) {
+    filename <- file_info$filename[1]
+  } else {
+    stop("Cannot find filename column in GridFS metadata")
+  }
+  
   message("Filename from GridFS: ", filename)
   
   # Download to temp directory
