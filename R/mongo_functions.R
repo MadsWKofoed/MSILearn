@@ -102,15 +102,27 @@ load_artifact_by_id <- function(gridfs_id,
   }
   
   filename <- file_info$filename[1]
+  message("Filename from GridFS: ", filename)
   
   # Download to temp directory
   temp_dir <- tempdir()
+  message("Temp directory: ", temp_dir)
+  
   grid$download(filename, temp_dir)
   
-  # Read the downloaded file
+  # Check if file exists
   downloaded_path <- file.path(temp_dir, filename)
-  obj <- readRDS(downloaded_path)
+  message("Looking for file at: ", downloaded_path)
+  message("File exists: ", file.exists(downloaded_path))
   
+  if (!file.exists(downloaded_path)) {
+    # List files in temp_dir to see what was downloaded
+    files_in_temp <- list.files(temp_dir, pattern = "\\.rds$", full.names = TRUE)
+    message("RDS files in temp dir: ", paste(files_in_temp, collapse = ", "))
+    stop("Downloaded file not found at expected path")
+  }
+  
+  obj <- readRDS(downloaded_path)
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
   obj
 }
