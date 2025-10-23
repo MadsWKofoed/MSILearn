@@ -93,20 +93,19 @@ load_artifact_by_id <- function(gridfs_id,
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
-  # Read raw bytes directly from GridFS
+  # Find file by _id to get filename
   query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
-  result <- grid$read(query)
+  file_info <- grid$find(query)
   
-  if (is.null(result) || length(result) == 0) {
+  if (nrow(file_info) == 0) {
     stop("GridFS file not found: ", gridfs_id)
   }
   
-  # Extract raw data (grid$read returns list)
-  raw_data <- result[[1]]
+  filename <- file_info$filename[1]
   
-  # Write to temp file and read as RDS
+  # Export (download) using filename to temp file
   temp_path <- tempfile(pattern = "artifact_", fileext = ".rds")
-  writeBin(raw_data, temp_path)
+  grid$export(filename, temp_path)
   
   obj <- readRDS(temp_path)
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
