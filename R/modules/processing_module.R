@@ -49,12 +49,10 @@ processing_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    # Mongo connection for reference lists
     mongo_ref <- mongo(collection = "mz_references",
                        db = "msi_project",
                        url = "mongodb://localhost")
     
-    # --- Populate reference list dropdown ---
     ref_docs <- reactive({
       mongo_ref$find(fields = '{"_id": 0, "reference_name": 1}')
     })
@@ -65,7 +63,6 @@ processing_module_server <- function(id) {
       updateSelectInput(session, "ref_csv_mongo", choices = refs)
     })
     
-    # --- Reactive for reference source ---
     selected_mz <- reactive({
       req(input$ref_source)
       if (input$ref_source == "Upload your own") {
@@ -87,7 +84,7 @@ processing_module_server <- function(id) {
       }
     })
     
-    # --- Full processing pipeline ---
+    # --- Updated processing with smart error handling ---
     observeEvent(input$run_processing, {
       req(input$msi_files)
       mz_ref <- selected_mz()
@@ -99,7 +96,7 @@ processing_module_server <- function(id) {
       snr_val <- input$snr
       tol_val <- input$tolerance
       
-      output$run_status <- renderText("Processing started...")
+      output$run_status <- renderText("Checking for existing data...")
       
       run_id <- tryCatch({
         process_msi_pipeline(
@@ -113,12 +110,34 @@ processing_module_server <- function(id) {
           tolerance = tol_val
         )
       }, error = function(e) {
-        output$run_status <- renderText(paste("Error:", e$message))
+        msg <- conditionMessage(e)
+        
+        # Check if it's the "already exists" error
+        if (grepl("identical parameters already exists", msg)) {
+          output$run_status <- renderText("⚠️ Data already processed with these exact parameters. No action needed.")
+          showNotification(
+            "This dataset with identical parameters already exists in the database.",
+            type = "warning",
+            duration = 8
+          )
+        } else {
+          output$run_status <- renderText(paste("❌ Error:", msg))
+          showNotification(
+            paste("Processing failed:", msg),
+            type = "error",
+            duration = 10
+          )
+        }
         return(NULL)
       })
       
       if (!is.null(run_id)) {
-        output$run_status <- renderText(paste("Processing complete. Run ID:", run_id))
+        output$run_status <- renderText(paste("✅ Processing complete. Run ID:", run_id))
+        showNotification(
+          paste("Processing successful! Run ID:", run_id),
+          type = "message",
+          duration = 6
+        )
       }
     })
   })

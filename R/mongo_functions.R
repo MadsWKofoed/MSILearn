@@ -149,3 +149,76 @@ load_artifact <- function(sample_name = NULL,
   load_artifact_by_id(gridfs_id, db_name, mongo_url)
 }
 
+
+
+# --- Check if artifact exists ---
+artifact_exists <- function(sample_name, stage_type, params = list(),
+                           db_name = "MSI_database",
+                           mongo_url = "mongodb://localhost") {
+  
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                      db = db_name, url = mongo_url)
+  
+  # Build query with sample_name, stage_type, and all params
+  query_parts <- list(
+    sample_name = sample_name,
+    stage_type = stage_type
+  )
+  query_parts <- c(query_parts, params)
+  
+  query_json <- jsonlite::toJSON(query_parts, auto_unbox = TRUE)
+  results <- mongo_meta$find(query_json)
+  
+  nrow(results) > 0
+}
+
+
+# --- Find what stages exist for a sample ---
+get_existing_stages <- function(sample_name, 
+                               db_name = "MSI_database",
+                               mongo_url = "mongodb://localhost") {
+  
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                      db = db_name, url = mongo_url)
+  
+  query <- sprintf('{"sample_name": "%s"}', sample_name)
+  results <- mongo_meta$find(query)
+  
+  if (nrow(results) == 0) return(NULL)
+  
+  # Return list of stages with their parameters
+  stages <- lapply(seq_len(nrow(results)), function(i) {
+    row <- results[i, ]
+    list(
+      stage_type = row$stage_type,
+      run_id = row$run_id,
+      gridfs_id = row$gridfs_id,
+      snr = row$snr,
+      tolerance = row$tolerance,
+      reference_name = row$reference_name,
+      reference_source = row$reference_source
+    )
+  })
+  
+  stages
+}
+
+
+# --- Find compatible run_id (same sample + raw stage exists) ---
+find_compatible_run <- function(sample_name,
+                               db_name = "MSI_database",
+                               mongo_url = "mongodb://localhost") {
+  
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                      db = db_name, url = mongo_url)
+  
+  # Find raw stage for this sample
+  query <- sprintf('{"sample_name": "%s", "stage_type": "raw"}', sample_name)
+  results <- mongo_meta$find(query)
+  
+  if (nrow(results) == 0) return(NULL)
+  
+  # Return first run_id (assuming one raw per sample)
+  results$run_id[1]
+}
+
