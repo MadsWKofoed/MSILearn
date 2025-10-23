@@ -93,8 +93,19 @@ load_artifact_by_id <- function(gridfs_id,
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
+  # Find file in GridFS by _id
+  query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
+  file_info <- grid$find(query)
+  
+  if (nrow(file_info) == 0) {
+    stop("GridFS file not found: ", gridfs_id)
+  }
+  
+  # Download using filename (GridFS prefers this)
+  filename <- file_info$filename[1]
   temp_path <- tempfile(pattern = "artifact_", fileext = ".rds")
-  grid$download(gridfs_id, temp_path)
+  
+  grid$download(filename, temp_path)
   
   obj <- readRDS(temp_path)
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
