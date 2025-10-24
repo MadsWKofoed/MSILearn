@@ -152,22 +152,34 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
     control_mean <- step1$control_mean
   }
   
-  # --- STEP 2: Load or create reference (ONLY based on SNR) ---
+  # --- STEP 2: Load or create reference (FIXED: check before creating) ---
   ref_exists <- !is.null(existing_stages) && 
     any(sapply(existing_stages, function(s) {
       s$stage_type == "mean_snr_reference" &&
-        identical(s$snr, snr)
+        !is.null(s$snr) &&  # Add NULL check
+        identical(as.numeric(s$snr), as.numeric(snr))  # Force numeric comparison
     }))
   
   if (ref_exists) {
     message("Reference with SNR=", snr, " already exists. Reusing...")
     
+    # Query more precisely
     ref_artifact <- query_artifacts(
       sample_name = imzml_name,
       stage_type = "mean_snr_reference",
-      snr = snr
+      snr = as.numeric(snr)
     )
-    control_SNR_ref <- load_artifact_by_id(ref_artifact$gridfs_id[1])
+    
+    if (nrow(ref_artifact) > 0) {
+      control_SNR_ref <- load_artifact_by_id(ref_artifact$gridfs_id[1])
+    } else {
+      # Fallback if query fails
+      message("Query failed, creating new reference...")
+      control_SNR_ref <- process_reference_creation(
+        run_id, control_mean, ref_mz_values, snr, 
+        ref_name, ref_source, imzml_name
+      )
+    }
     
   } else {
     message("Creating new reference with SNR=", snr, "...")
