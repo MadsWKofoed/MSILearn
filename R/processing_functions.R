@@ -102,22 +102,36 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
                                  ref_mz_values, ref_source, ref_name,
                                  snr, tolerance) {
   
-  # Check what already exists for this sample
-  existing_stages <- get_existing_stages(imzml_name)
+  # --- STEP 0: Check if EXACT combination already exists (FØRST!) ---
+  # Query directly from MongoDB, not cached results
+  existing_binned <- query_artifacts(
+    sample_name = imzml_name,
+    stage_type = "binned_dataframe"
+  )
   
-  # --- STEP 0: Check if EXACT combination already exists ---
-  if (!is.null(existing_stages)) {
-    exact_binned_match <- any(sapply(existing_stages, function(s) {
-      s$stage_type == "binned_dataframe" &&
-        identical(s$snr, snr) &&
-        identical(s$tolerance, tolerance) &&
-        identical(s$reference_name, ref_name)
-    }))
-    
-    if (exact_binned_match) {
-      stop("Processing with identical parameters already exists. No action needed.")
+  if (nrow(existing_binned) > 0) {
+    # Check each existing binned result
+    for (i in seq_len(nrow(existing_binned))) {
+      row <- existing_binned[i, ]
+      
+      # Use all.equal for numeric comparison
+      snr_match <- !is.null(row$snr) && 
+                   isTRUE(all.equal(as.numeric(row$snr), as.numeric(snr)))
+      
+      tol_match <- !is.null(row$tolerance) && 
+                   isTRUE(all.equal(as.numeric(row$tolerance), as.numeric(tolerance)))
+      
+      ref_match <- !is.null(row$reference_name) && 
+                   identical(as.character(row$reference_name), as.character(ref_name))
+      
+      if (snr_match && tol_match && ref_match) {
+        stop("Processing with identical parameters already exists. No action needed.")
+      }
     }
   }
+  
+  # Only NOW fetch cached stages for reuse logic
+  existing_stages <- get_existing_stages(imzml_name)
   
   # --- STEP 1: Load or import raw data + control_mean ---
   raw_exists <- !is.null(existing_stages) && 
@@ -152,35 +166,29 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
     control_mean <- step1$control_mean
   }
   
-  # --- STEP 2: Load or create reference (FIXED: check before creating) ---
-  ref_exists <- !is.null(existing_stages) && 
-    any(sapply(existing_stages, function(s) {
-      s$stage_type == "mean_snr_reference" &&
-        !is.null(s$snr) &&  # Add NULL check
-        identical(as.numeric(s$snr), as.numeric(snr))  # Force numeric comparison
-    }))
+  # --- STEP 2: Load or create reference ---
+  # Query directly to avoid race conditions
+  existing_refs <- query_artifacts(
+    sample_name = imzml_name,
+    stage_type = "mean_snr_reference"
+  )
+  
+  ref_exists <- FALSE
+  if (nrow(existing_refs) > 0) {
+    for (i in seq_len(nrow(existing_refs))) {
+      row <- existing_refs[i, ]
+      if (!is.null(row$snr) && 
+          isTRUE(all.equal(as.numeric(row$snr), as.numeric(snr)))) {
+        ref_exists <- TRUE
+        existing_ref_id <- row$gridfs_id
+        break
+      }
+    }
+  }
   
   if (ref_exists) {
     message("Reference with SNR=", snr, " already exists. Reusing...")
-    
-    # Query more precisely
-    ref_artifact <- query_artifacts(
-      sample_name = imzml_name,
-      stage_type = "mean_snr_reference",
-      snr = as.numeric(snr)
-    )
-    
-    if (nrow(ref_artifact) > 0) {
-      control_SNR_ref <- load_artifact_by_id(ref_artifact$gridfs_id[1])
-    } else {
-      # Fallback if query fails
-      message("Query failed, creating new reference...")
-      control_SNR_ref <- process_reference_creation(
-        run_id, control_mean, ref_mz_values, snr, 
-        ref_name, ref_source, imzml_name
-      )
-    }
-    
+    control_SNR_ref <- load_artifact_by_id(existing_ref_id)
   } else {
     message("Creating new reference with SNR=", snr, "...")
     control_SNR_ref <- process_reference_creation(
