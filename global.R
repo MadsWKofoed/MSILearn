@@ -10,7 +10,7 @@ setCardinalParallel(workers = bp)
 # MongoDB connections
 msi_con <- mongo(
   collection = "msi_data",
-  db = "msi_project",
+  db = "MSI_database",  
   url = "mongodb://localhost"
 )
 

@@ -40,7 +40,7 @@ clustering_module_server <- function(id, msi_con) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
-    mongo_meta <- mongo(collection = "processing_runs", db = "MSI_database", url = "mongodb://localhost")
+    mongo_meta <- mongo(collection = "processing_artifacts_metadata", db = "MSI_database", url = "mongodb://localhost")
     mongo_data <- mongo(collection = "msi_data", db = "msi_project", url = "mongodb://localhost")
     
     processed_data <- reactiveVal(NULL)

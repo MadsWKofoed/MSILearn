@@ -150,7 +150,6 @@ load_artifact <- function(sample_name = NULL,
 }
 
 
-
 # --- Check if artifact exists ---
 artifact_exists <- function(sample_name, stage_type, params = list(),
                            db_name = "MSI_database",
@@ -221,4 +220,3 @@ find_compatible_run <- function(sample_name,
   # Return first run_id (assuming one raw per sample)
   results$run_id[1]
 }
-

@@ -21,6 +21,10 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
   message("Summarizing features (mean spectrum)...")
   control_mean <- summarizeFeatures(msi_data, "mean")
   
+  # Save control_mean for reuse
+  save_stage_to_mongo(control_mean, run_id, "control_mean",
+                      sample_name = imzml_name)
+  
   invisible(list(msi_data = msi_data, control_mean = control_mean))
 }
 
@@ -103,35 +107,45 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
   # Check what already exists for this sample
   existing_stages <- get_existing_stages(imzml_name)
   
-  # --- STEP 1: Check if raw data exists ---
-  raw_exists <- any(sapply(existing_stages, function(s) s$stage_type == "raw"))
-  
-  if (raw_exists) {
-    message("Raw data already exists for this sample.")
-    
-    # Check if exact same processing already exists
-    exact_match <- any(sapply(existing_stages, function(s) {
+  # --- STEP 0: Check if EXACT combination already exists ---
+  if (!is.null(existing_stages)) {
+    exact_binned_match <- any(sapply(existing_stages, function(s) {
       s$stage_type == "binned_dataframe" &&
         identical(s$snr, snr) &&
         identical(s$tolerance, tolerance) &&
         identical(s$reference_name, ref_name)
     }))
     
-    if (exact_match) {
+    if (exact_binned_match) {
       stop("Processing with identical parameters already exists. No action needed.")
     }
+  }
+  
+  # --- STEP 1: Load or import raw data + control_mean ---
+  raw_exists <- !is.null(existing_stages) && 
+    any(sapply(existing_stages, function(s) s$stage_type == "raw"))
+  
+  if (raw_exists) {
+    message("Raw data already exists. Reusing...")
     
-    # Use existing run_id
     run_id <- find_compatible_run(imzml_name)
     message("Reusing existing run_id: ", run_id)
     
-    # Load raw data
     raw_artifact <- query_artifacts(sample_name = imzml_name, stage_type = "raw")
     msi_data <- load_artifact_by_id(raw_artifact$gridfs_id[1])
-    control_mean <- summarizeFeatures(msi_data, "mean")
+    
+    control_mean_artifact <- query_artifacts(sample_name = imzml_name, stage_type = "control_mean")
+    
+    if (nrow(control_mean_artifact) > 0) {
+      message("Loading existing control_mean...")
+      control_mean <- load_artifact_by_id(control_mean_artifact$gridfs_id[1])
+    } else {
+      message("Recalculating control_mean from raw data...")
+      control_mean <- summarizeFeatures(msi_data, "mean")
+      save_stage_to_mongo(control_mean, run_id, "control_mean", sample_name = imzml_name)
+    }
     
   } else {
-    # No raw data - start from beginning
     message("No existing data found. Starting full import...")
     run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
     
@@ -140,21 +154,20 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
     control_mean <- step1$control_mean
   }
   
-  # --- STEP 2: Check if reference with same SNR exists ---
-  ref_exists <- any(sapply(existing_stages, function(s) {
-    s$stage_type == "mean_snr_reference" &&
-      identical(s$snr, snr) &&
-      identical(s$reference_name, ref_name)
-  }))
+  # --- STEP 2: Load or create reference (ONLY based on SNR) ---
+  ref_exists <- !is.null(existing_stages) && 
+    any(sapply(existing_stages, function(s) {
+      s$stage_type == "mean_snr_reference" &&
+        identical(s$snr, snr)
+    }))
   
   if (ref_exists) {
-    message("Reference with SNR=", snr, " and reference='", ref_name, "' already exists. Reusing...")
+    message("Reference with SNR=", snr, " already exists. Reusing...")
     
     ref_artifact <- query_artifacts(
       sample_name = imzml_name,
       stage_type = "mean_snr_reference",
-      snr = snr,
-      reference_name = ref_name
+      snr = snr
     )
     control_SNR_ref <- load_artifact_by_id(ref_artifact$gridfs_id[1])
     
@@ -166,13 +179,13 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
     )
   }
   
-  # --- STEP 3: Always run binning (new tolerance or reference combination) ---
-  message("Running binning with tolerance=", tolerance, "...")
+  # --- STEP 3: Always run binning ---
+  message("Running binning (tolerance=", tolerance, ", ref='", ref_name, "')...")
   binned_df <- process_binning_and_matrix(
     run_id, msi_data, control_SNR_ref, ref_mz_values, snr, tolerance,
     ref_name, ref_source, imzml_name
   )
   
-  message("Processing complete. Run ID: ", run_id)
+  message("✅ Processing complete. Run ID: ", run_id)
   invisible(run_id)
 }
