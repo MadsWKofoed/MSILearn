@@ -1,4 +1,5 @@
 library(shiny)
+library(shinyjs)
 library(plotly)
 library(ggplot2)
 library(RColorBrewer)

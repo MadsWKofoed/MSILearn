@@ -28,6 +28,7 @@ source("R/modules/processing_module.R")
 # Global UI
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
+  seShinyjs(),
   tabPanel("Welcome",
            h3("Welcome to the MSI Clustering App"),
            p("Upload imzML + ibd files, perform clustering, and compare to histology.")
