@@ -28,7 +28,7 @@ source("R/modules/processing_module.R")
 # Global UI
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
-  seShinyjs(),
+  useShinyjs(),  # Add this line
   tabPanel("Welcome",
            h3("Welcome to the MSI Clustering App"),
            p("Upload imzML + ibd files, perform clustering, and compare to histology.")
@@ -37,6 +37,7 @@ ui <- navbarPage(
   clustering_module_ui("clustering"),
   prediction_module_ui("prediction")
 )
+
 
 server <- function(input, output, session) {
   processing_module_server("processing")
