@@ -192,10 +192,10 @@ get_existing_stages <- function(sample_name,
       stage_type = row$stage_type,
       run_id = row$run_id,
       gridfs_id = row$gridfs_id,
-      snr = row$snr,
-      tolerance = row$tolerance,
-      reference_name = row$reference_name,
-      reference_source = row$reference_source
+      snr = if ("snr" %in% names(row)) row$snr else NULL,
+      tolerance = if ("tolerance" %in% names(row)) row$tolerance else NULL,
+      reference_name = if ("reference_name" %in% names(row)) row$reference_name else NULL
+      # reference_source removed - not used for comparison
     )
   })
   

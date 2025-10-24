@@ -41,9 +41,7 @@ process_reference_creation <- function(run_id, control_mean, ref_mz_values, snr,
     "mean_snr_reference",
     sample_name = sample_name,
     params = list(
-      snr = snr,
-      reference_name = ref_name,
-      reference_source = ref_source
+      snr = snr
     )
   )
   
