@@ -285,19 +285,28 @@ clustering_module_server <- function(id, msi_con) {
     
     # --- Capture drawn shapes ---
 # --- Capture drawn shapes (auto-detect completion) ---
-observeEvent(event_data("plotly_relayout", source = "cluster"), {
-  ev <- event_data("plotly_relayout", source = "cluster")
-  req(ev)
-  
-  # Check if shapes array was updated (shape completed)
-  if ("shapes" %in% names(ev)) {
-    shapes_list <- ev$shapes
-    if (length(shapes_list) > 0) {
-      latest_shape <- shapes_list[[length(shapes_list)]]
+    observeEvent(event_data("plotly_relayout", source = "cluster"), {
+      ev <- event_data("plotly_relayout", source = "cluster")
+      req(ev)
       
-      # Polygon/lasso
-      if (!is.null(latest_shape$path)) {
-        path <- latest_shape$path
+      # Print debug info
+      cat("\n=== RELAYOUT EVENT ===\n")
+      cat("Event keys:", paste(names(ev), collapse = ", "), "\n")
+      
+      # Try to capture any shape-related event
+      for (key in names(ev)) {
+        if (grepl("shapes", key)) {
+          cat("Shape key found:", key, "\n")
+          cat("Value:", str(ev[[key]]), "\n")
+        }
+      }
+      
+      # Method 1: Direct path capture
+      if (any(grepl("\\.path$", names(ev)))) {
+        path_key <- grep("\\.path$", names(ev), value = TRUE)[1]
+        path <- ev[[path_key]]
+        cat("Captured path:", path, "\n")
+        
         coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
         xy <- do.call(rbind, strsplit(coords, ","))
         x <- as.numeric(xy[,1])
@@ -306,31 +315,35 @@ observeEvent(event_data("plotly_relayout", source = "cluster"), {
         sel_shape(list(type = "polygon", x = x, y = y))
         
         showNotification(
-          paste0("✓ Polygon captured (", length(x), " points). Click 'Assign to Selection'."),
+          paste0("✓ Polygon captured (", length(x), " points)"),
           type = "message", 
           duration = 3
         )
       }
       
-      # Rectangle
-      else if (!is.null(latest_shape$x0)) {
-        sel_shape(list(
-          type = "rect",
-          x0 = latest_shape$x0,
-          x1 = latest_shape$x1,
-          y0 = latest_shape$y0,
-          y1 = latest_shape$y1
-        ))
+      # Method 2: Rectangle
+      if (any(grepl("\\.(x0|x1|y0|y1)$", names(ev)))) {
+        rect_keys <- grep("\\.(x0|x1|y0|y1)$", names(ev), value = TRUE)
+        cat("Rectangle keys:", paste(rect_keys, collapse = ", "), "\n")
         
-        showNotification(
-          "✓ Rectangle captured. Click 'Assign to Selection'.",
-          type = "message", 
-          duration = 3
-        )
+        x0 <- ev[[grep("x0$", rect_keys, value = TRUE)]]
+        x1 <- ev[[grep("x1$", rect_keys, value = TRUE)]]
+        y0 <- ev[[grep("y0$", rect_keys, value = TRUE)]]
+        y1 <- ev[[grep("y1$", rect_keys, value = TRUE)]]
+        
+        if (!is.null(x0) && !is.null(x1) && !is.null(y0) && !is.null(y1)) {
+          sel_shape(list(
+            type = "rect",
+            x0 = min(x0, x1), x1 = max(x0, x1),
+            y0 = min(y0, y1), y1 = max(y0, y1)
+          ))
+          
+          showNotification("✓ Rectangle captured", type = "message", duration = 3)
+        }
       }
-    }
-  }
-})
+      
+      cat("======================\n\n")
+    })
     
     # --- Assign to selection ---
     observeEvent(input$assign_class, {
