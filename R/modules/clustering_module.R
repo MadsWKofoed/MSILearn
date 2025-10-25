@@ -474,6 +474,7 @@ clustering_module_server <- function(id, msi_con) {
       img_uri <- make_raster_png(df, "cluster", cols)
       
       p <- plot_ly(source = "cluster") %>%
+        add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%  # Dummy trace
         layout(
           images = list(list(
             source = img_uri,
@@ -488,7 +489,8 @@ clustering_module_server <- function(id, msi_con) {
           title = "MSI Clustering Result",
           xaxis = list(range = c(0, max(df$x)), title = "x"),
           yaxis = list(range = c(0, max(df$y)), title = "y",
-                      scaleanchor = "x", scaleratio = 1)
+                      scaleanchor = "x", scaleratio = 1),
+          showlegend = FALSE
         ) %>%
         config(
           displaylogo = FALSE,
@@ -497,77 +499,55 @@ clustering_module_server <- function(id, msi_con) {
                                     "toggleSpikelines", "toImage")
         )
       
-      # Register event
-      event_register(p, 'plotly_relayout')
-      
       p
     })
     
     # --- Class plot ---
-    output$class_plot <- renderPlotly({
-      df <- annotated_data() %||% clustered_data()
-      req(df)
-      if (!"Class" %in% names(df)) df$Class <- NA_character_
-      df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
-      
-      cols <- class_colors()
-      present <- unique(df$Class_plot)
-      cols_used <- cols[present]
-      names(cols_used) <- present
-      
-      img_uri <- make_raster_png(df, "Class_plot", cols_used)
-      
-      # Build plot with traces for legend
-      p <- plot_ly()
-      
-      # Add legend traces first
-      for (i in seq_along(cols_used)) {
-        class_name <- names(cols_used)[i]
-        p <- add_trace(
-          p,
-          x = NULL,
-          y = NULL,
-          type = "scatter",  # Already specified
-          mode = "markers",  # Already specified
-          marker = list(
-            size = 10,
-            color = cols_used[class_name],
-            symbol = "square"
-          ),
-          name = class_name,
-          showlegend = TRUE,
-          hoverinfo = "skip"  # Change from "none" to "skip"
-        )
-      }
-      
-      # Add layout with image
-      p <- layout(
-        p,
-        images = list(list(
-          source = img_uri,
-          xref = "x", yref = "y",
-          x = 0, y = max(df$y),
-          sizex = max(df$x), sizey = max(df$y),
-          sizing = "stretch", layer = "below"
-        )),
-        title = "User Annotation Result",
-        xaxis = list(range = c(0, max(df$x)), title = "x"),
-        yaxis = list(range = c(0, max(df$y)), title = "y",
-                    scaleanchor = "x", scaleratio = 1),
-        legend = list(
-          orientation = "v",
+output$class_plot <- renderPlotly({
+  df <- annotated_data() %||% clustered_data()
+  req(df)
+  if (!"Class" %in% names(df)) df$Class <- NA_character_
+  df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
+  
+  cols <- class_colors()
+  present <- unique(df$Class_plot)
+  cols_used <- cols[present]
+  names(cols_used) <- present
+  
+  img_uri <- make_raster_png(df, "Class_plot", cols_used)
+  
+  # Build plot WITHOUT dummy traces - use legend entries directly in layout
+  p <- plot_ly() %>%
+    layout(
+      images = list(list(
+        source = img_uri,
+        xref = "x", yref = "y",
+        x = 0, y = max(df$y),
+        sizex = max(df$x), sizey = max(df$y),
+        sizing = "stretch", layer = "below"
+      )),
+      title = "User Annotation Result",
+      xaxis = list(range = c(0, max(df$x)), title = "x"),
+      yaxis = list(range = c(0, max(df$y)), title = "y",
+                  scaleanchor = "x", scaleratio = 1),
+      # Add legend using annotations instead
+      annotations = lapply(seq_along(cols_used), function(i) {
+        list(
           x = 1.02,
-          y = 1,
+          y = 1 - (i-1) * 0.05,
+          xref = "paper",
+          yref = "paper",
+          text = paste0('<span style="color:', cols_used[i], '">■</span> ', names(cols_used)[i]),
+          showarrow = FALSE,
           xanchor = "left",
-          yanchor = "top",
-          bgcolor = "rgba(255, 255, 255, 0.9)",
-          bordercolor = "rgba(0, 0, 0, 0.5)",
-          borderwidth = 1
+          font = list(size = 12)
         )
-      )
-      
-      config(p, displaylogo = FALSE)
-    })
+      })
+    ) %>%
+    config(displaylogo = FALSE)
+  
+  p
+})
     
     # --- Layout ---
     output$cluster_layout <- renderUI({
