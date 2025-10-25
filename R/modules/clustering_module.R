@@ -283,66 +283,89 @@ clustering_module_server <- function(id, msi_con) {
     # --- Selection storage ---
     sel_shape <- reactiveVal(NULL)
     
-    # --- Capture drawn shapes ---
-# --- Capture drawn shapes (auto-detect completion) ---
+    
+    # --- Capture drawn shapes (auto-detect completion) ---
     observeEvent(event_data("plotly_relayout", source = "cluster"), {
       ev <- event_data("plotly_relayout", source = "cluster")
       req(ev)
       
-      # Print debug info
-      cat("\n=== RELAYOUT EVENT ===\n")
-      cat("Event keys:", paste(names(ev), collapse = ", "), "\n")
-      
-      # Try to capture any shape-related event
-      for (key in names(ev)) {
-        if (grepl("shapes", key)) {
-          cat("Shape key found:", key, "\n")
-          cat("Value:", str(ev[[key]]), "\n")
-        }
-      }
-      
-      # Method 1: Direct path capture
-      if (any(grepl("\\.path$", names(ev)))) {
-        path_key <- grep("\\.path$", names(ev), value = TRUE)[1]
+      # Method 1: Direct path key (works after editing)
+      if (any(grepl("shapes\\[\\d+\\]\\.path$", names(ev)))) {
+        path_key <- grep("shapes\\[\\d+\\]\\.path$", names(ev), value = TRUE)[1]
         path <- ev[[path_key]]
-        cat("Captured path:", path, "\n")
         
-        coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
-        xy <- do.call(rbind, strsplit(coords, ","))
-        x <- as.numeric(xy[,1])
-        y <- as.numeric(xy[,2])
-        
-        sel_shape(list(type = "polygon", x = x, y = y))
-        
-        showNotification(
-          paste0("✓ Polygon captured (", length(x), " points)"),
-          type = "message", 
-          duration = 3
-        )
+        if (!is.null(path) && nchar(path) > 0) {
+          coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
+          xy <- do.call(rbind, strsplit(coords, ","))
+          x <- as.numeric(xy[,1])
+          y <- as.numeric(xy[,2])
+          
+          sel_shape(list(type = "polygon", x = x, y = y))
+          
+          showNotification(
+            paste0("✓ Polygon captured (", length(x), " points)"),
+            type = "message", 
+            duration = 2
+          )
+        }
+        return()
       }
       
-      # Method 2: Rectangle
-      if (any(grepl("\\.(x0|x1|y0|y1)$", names(ev)))) {
-        rect_keys <- grep("\\.(x0|x1|y0|y1)$", names(ev), value = TRUE)
-        cat("Rectangle keys:", paste(rect_keys, collapse = ", "), "\n")
+      # Method 2: shapes array (works on first draw)
+      if ("shapes" %in% names(ev)) {
+        shapes_data <- ev$shapes
         
-        x0 <- ev[[grep("x0$", rect_keys, value = TRUE)]]
-        x1 <- ev[[grep("x1$", rect_keys, value = TRUE)]]
-        y0 <- ev[[grep("y0$", rect_keys, value = TRUE)]]
-        y1 <- ev[[grep("y1$", rect_keys, value = TRUE)]]
-        
-        if (!is.null(x0) && !is.null(x1) && !is.null(y0) && !is.null(y1)) {
-          sel_shape(list(
-            type = "rect",
-            x0 = min(x0, x1), x1 = max(x0, x1),
-            y0 = min(y0, y1), y1 = max(y0, y1)
-          ))
+        # Check if it's a data.frame (from first event)
+        if (is.data.frame(shapes_data) && nrow(shapes_data) > 0) {
+          last_row <- shapes_data[nrow(shapes_data), ]
           
-          showNotification("✓ Rectangle captured", type = "message", duration = 3)
+          if (!is.null(last_row$path) && nchar(last_row$path) > 0) {
+            path <- last_row$path
+            coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
+            xy <- do.call(rbind, strsplit(coords, ","))
+            x <- as.numeric(xy[,1])
+            y <- as.numeric(xy[,2])
+            
+            sel_shape(list(type = "polygon", x = x, y = y))
+            
+            showNotification(
+              paste0("✓ Polygon captured (", length(x), " points)"),
+              type = "message", 
+              duration = 2
+            )
+          }
+        }
+        return()
+      }
+      
+      # Method 3: Rectangle (direct coordinates)
+      if (any(grepl("shapes\\[\\d+\\]\\.(x0|x1|y0|y1)$", names(ev)))) {
+        rect_keys <- grep("shapes\\[\\d+\\]\\.(x0|x1|y0|y1)$", names(ev), value = TRUE)
+        
+        x0_key <- grep("x0$", rect_keys, value = TRUE)
+        x1_key <- grep("x1$", rect_keys, value = TRUE)
+        y0_key <- grep("y0$", rect_keys, value = TRUE)
+        y1_key <- grep("y1$", rect_keys, value = TRUE)
+        
+        if (length(x0_key) > 0 && length(x1_key) > 0 && 
+            length(y0_key) > 0 && length(y1_key) > 0) {
+          
+          x0 <- ev[[x0_key]]
+          x1 <- ev[[x1_key]]
+          y0 <- ev[[y0_key]]
+          y1 <- ev[[y1_key]]
+          
+          if (!is.null(x0) && !is.null(x1) && !is.null(y0) && !is.null(y1)) {
+            sel_shape(list(
+              type = "rect",
+              x0 = min(x0, x1), x1 = max(x0, x1),
+              y0 = min(y0, y1), y1 = max(y0, y1)
+            ))
+            
+            showNotification("✓ Rectangle captured", type = "message", duration = 2)
+          }
         }
       }
-      
-      cat("======================\n\n")
     })
     
     # --- Assign to selection ---
