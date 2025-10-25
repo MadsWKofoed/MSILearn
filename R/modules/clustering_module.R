@@ -283,24 +283,52 @@ clustering_module_server <- function(id, msi_con) {
     # --- Selection storage ---
     sel_shape <- reactiveVal(NULL)
     
-# --- Capture lasso selection ---
-observeEvent(event_data("plotly_selected", source = "cluster"), {
-  selected <- event_data("plotly_selected", source = "cluster")
-  req(selected)
+    # --- Capture drawn shapes ---
+# --- Capture drawn shapes (auto-detect completion) ---
+observeEvent(event_data("plotly_relayout", source = "cluster"), {
+  ev <- event_data("plotly_relayout", source = "cluster")
+  req(ev)
   
-  if (nrow(selected) > 0) {
-    sel_indices <- selected$pointNumber + 1
-    
-    sel_shape(list(
-      type = "indices",
-      indices = sel_indices
-    ))
-    
-    showNotification(
-      paste0("✓ ", length(sel_indices), " pixels selected"),
-      type = "message",
-      duration = 2
-    )
+  # Check if shapes array was updated (shape completed)
+  if ("shapes" %in% names(ev)) {
+    shapes_list <- ev$shapes
+    if (length(shapes_list) > 0) {
+      latest_shape <- shapes_list[[length(shapes_list)]]
+      
+      # Polygon/lasso
+      if (!is.null(latest_shape$path)) {
+        path <- latest_shape$path
+        coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
+        xy <- do.call(rbind, strsplit(coords, ","))
+        x <- as.numeric(xy[,1])
+        y <- as.numeric(xy[,2])
+        
+        sel_shape(list(type = "polygon", x = x, y = y))
+        
+        showNotification(
+          paste0("✓ Polygon captured (", length(x), " points). Click 'Assign to Selection'."),
+          type = "message", 
+          duration = 3
+        )
+      }
+      
+      # Rectangle
+      else if (!is.null(latest_shape$x0)) {
+        sel_shape(list(
+          type = "rect",
+          x0 = latest_shape$x0,
+          x1 = latest_shape$x1,
+          y0 = latest_shape$y0,
+          y1 = latest_shape$y1
+        ))
+        
+        showNotification(
+          "✓ Rectangle captured. Click 'Assign to Selection'.",
+          type = "message", 
+          duration = 3
+        )
+      }
+    }
   }
 })
     
@@ -308,7 +336,7 @@ observeEvent(event_data("plotly_selected", source = "cluster"), {
     observeEvent(input$assign_class, {
       shape <- sel_shape()
       if (is.null(shape)) {
-        showNotification("No selection made. Use lasso tool.", 
+        showNotification("No selection drawn. Use Lasso or Rectangle tool.", 
                         type = "warning", duration = 4)
         return()
       }
@@ -317,9 +345,12 @@ observeEvent(event_data("plotly_selected", source = "cluster"), {
       req(df)
       if (!"Class" %in% names(df)) df$Class <- NA_character_
       
-      # Handle index-based selection (NEW METHOD)
-      if (identical(shape$type, "indices")) {
-        inside <- seq_len(nrow(df)) %in% shape$indices
+      y_max <- max(df$y)
+      
+      if (identical(shape$type, "polygon")) {
+        poly_x <- shape$x
+        poly_y <- y_max - shape$y
+        inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
       } else if (identical(shape$type, "rect")) {
         x0 <- shape$x0
         x1 <- shape$x1
@@ -405,15 +436,7 @@ observeEvent(event_data("plotly_selected", source = "cluster"), {
       )
       img_uri <- make_raster_png(df, "cluster", cols)
       
-      plot_ly(
-        data = df,
-        x = ~x, 
-        y = ~y,
-        type = "scatter",
-        mode = "markers",
-        marker = list(size = 1, opacity = 0),
-        source = "cluster"
-      ) %>%
+      plot_ly(source = "cluster") %>%
         layout(
           images = list(list(
             source = img_uri,
@@ -422,13 +445,20 @@ observeEvent(event_data("plotly_selected", source = "cluster"), {
             sizex = max(df$x), sizey = max(df$y),
             sizing = "stretch", layer = "below"
           )),
-          dragmode = "lasso",
+          dragmode = "drawclosedpath",
+          newshape = list(line = list(color = "black", width = 1),
+                         fillcolor = "rgba(0,0,0,0.05)"),
           title = "MSI Clustering Result",
           xaxis = list(range = c(0, max(df$x)), title = "x"),
           yaxis = list(range = c(0, max(df$y)), title = "y",
                       scaleanchor = "x", scaleratio = 1)
         ) %>%
-        config(displaylogo = FALSE)
+        config(
+          displaylogo = FALSE,
+          modeBarButtonsToAdd = list("drawclosedpath", "drawrect", "eraseshape"),
+          modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
+                                    "toggleSpikelines", "toImage")
+        )
     })
     
     # --- Class plot ---
