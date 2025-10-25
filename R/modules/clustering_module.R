@@ -453,6 +453,7 @@ observeEvent(event_data("plotly_relayout", source = "cluster"), {
           yaxis = list(range = c(0, max(df$y)), title = "y",
                       scaleanchor = "x", scaleratio = 1)
         ) %>%
+        event_register("plotly_relayout") %>%  # Add this line
         config(
           displaylogo = FALSE,
           modeBarButtonsToAdd = list("drawclosedpath", "drawrect", "eraseshape"),
