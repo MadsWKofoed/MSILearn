@@ -461,6 +461,7 @@ clustering_module_server <- function(id, msi_con) {
       }
     })
     
+    
     # --- Cluster plot ---
     output$cluster_plot <- renderPlotly({
       df <- clustered_data()
@@ -472,7 +473,7 @@ clustering_module_server <- function(id, msi_con) {
       )
       img_uri <- make_raster_png(df, "cluster", cols)
       
-      plot_ly(source = "cluster") %>%
+      p <- plot_ly(source = "cluster") %>%
         layout(
           images = list(list(
             source = img_uri,
@@ -483,7 +484,7 @@ clustering_module_server <- function(id, msi_con) {
           )),
           dragmode = "drawclosedpath",
           newshape = list(line = list(color = "black", width = 1),
-                         fillcolor = "rgba(0,0,0,0.05)"),
+                        fillcolor = "rgba(0,0,0,0.05)"),
           title = "MSI Clustering Result",
           xaxis = list(range = c(0, max(df$x)), title = "x"),
           yaxis = list(range = c(0, max(df$y)), title = "y",
@@ -495,6 +496,11 @@ clustering_module_server <- function(id, msi_con) {
           modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
                                     "toggleSpikelines", "toImage")
         )
+      
+      # Register event
+      event_register(p, 'plotly_relayout')
+      
+      p
     })
     
     # --- Class plot ---
@@ -521,8 +527,8 @@ clustering_module_server <- function(id, msi_con) {
           p,
           x = NULL,
           y = NULL,
-          type = "scatter",
-          mode = "markers",
+          type = "scatter",  # Already specified
+          mode = "markers",  # Already specified
           marker = list(
             size = 10,
             color = cols_used[class_name],
@@ -530,7 +536,7 @@ clustering_module_server <- function(id, msi_con) {
           ),
           name = class_name,
           showlegend = TRUE,
-          hoverinfo = "none"
+          hoverinfo = "skip"  # Change from "none" to "skip"
         )
       }
       
