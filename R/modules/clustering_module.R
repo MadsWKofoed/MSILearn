@@ -462,7 +462,6 @@ clustering_module_server <- function(id, msi_con) {
     })
     
     # --- Cluster plot ---
-    # --- Cluster plot ---
     output$cluster_plot <- renderPlotly({
       df <- clustered_data()
       req(df)
@@ -490,7 +489,6 @@ clustering_module_server <- function(id, msi_con) {
           yaxis = list(range = c(0, max(df$y)), title = "y",
                       scaleanchor = "x", scaleratio = 1)
         ) %>%
-        # REMOVE THIS LINE: event_register("plotly_relayout") %>%
         config(
           displaylogo = FALSE,
           modeBarButtonsToAdd = list("drawclosedpath", "drawrect", "eraseshape"),
@@ -513,65 +511,56 @@ clustering_module_server <- function(id, msi_con) {
       
       img_uri <- make_raster_png(df, "Class_plot", cols_used)
       
-      # Create plot
+      # Build plot with traces for legend
       p <- plot_ly()
       
-      # Add invisible trace for image extent
-      p <- p %>%
-        add_trace(
-          x = c(0, max(df$x)),
-          y = c(0, max(df$y)),
+      # Add legend traces first
+      for (i in seq_along(cols_used)) {
+        class_name <- names(cols_used)[i]
+        p <- add_trace(
+          p,
+          x = NULL,
+          y = NULL,
           type = "scatter",
           mode = "markers",
-          marker = list(opacity = 0),
-          hoverinfo = "none",
-          showlegend = FALSE
+          marker = list(
+            size = 10,
+            color = cols_used[class_name],
+            symbol = "square"
+          ),
+          name = class_name,
+          showlegend = TRUE,
+          hoverinfo = "none"
         )
-      
-      # Add legend traces (one per class)
-      for (class_name in names(cols_used)) {
-        p <- p %>%
-          add_trace(
-            x = NULL,
-            y = NULL,
-            type = "scatter",
-            mode = "markers",
-            marker = list(
-              size = 10,
-              color = cols_used[class_name],
-              symbol = "square"
-            ),
-            name = class_name,
-            showlegend = TRUE,
-            hoverinfo = "none"
-          )
       }
       
-      p %>%
-        layout(
-          images = list(list(
-            source = img_uri,
-            xref = "x", yref = "y",
-            x = 0, y = max(df$y),
-            sizex = max(df$x), sizey = max(df$y),
-            sizing = "stretch", layer = "below"
-          )),
-          title = "User Annotation Result",
-          xaxis = list(range = c(0, max(df$x)), title = "x"),
-          yaxis = list(range = c(0, max(df$y)), title = "y",
-                      scaleanchor = "x", scaleratio = 1),
-          legend = list(
-            orientation = "v",
-            x = 1.02,
-            y = 1,
-            xanchor = "left",
-            yanchor = "top",
-            bgcolor = "rgba(255, 255, 255, 0.8)",
-            bordercolor = "rgba(0, 0, 0, 0.3)",
-            borderwidth = 1
-          )
-        ) %>%
-        config(displaylogo = FALSE)
+      # Add layout with image
+      p <- layout(
+        p,
+        images = list(list(
+          source = img_uri,
+          xref = "x", yref = "y",
+          x = 0, y = max(df$y),
+          sizex = max(df$x), sizey = max(df$y),
+          sizing = "stretch", layer = "below"
+        )),
+        title = "User Annotation Result",
+        xaxis = list(range = c(0, max(df$x)), title = "x"),
+        yaxis = list(range = c(0, max(df$y)), title = "y",
+                    scaleanchor = "x", scaleratio = 1),
+        legend = list(
+          orientation = "v",
+          x = 1.02,
+          y = 1,
+          xanchor = "left",
+          yanchor = "top",
+          bgcolor = "rgba(255, 255, 255, 0.9)",
+          bordercolor = "rgba(0, 0, 0, 0.5)",
+          borderwidth = 1
+        )
+      )
+      
+      config(p, displaylogo = FALSE)
     })
     
     # --- Layout ---
