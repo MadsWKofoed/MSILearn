@@ -549,11 +549,8 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get current color mapping
+  # Get current color mapping - START with Unassigned grey
   cols_used <- class_colors()
-  
-  # FORCE Unassigned to always be grey (both in map and for missing pixels)
-  cols_used["Unassigned"] <- "grey80"
   
   # Get all unique classes in the data
   present_classes <- unique(df$Class)
@@ -572,6 +569,9 @@ output$class_plot <- renderPlotly({
     }
   }
   
+  # ALWAYS force Unassigned to grey AFTER all assignments
+  cols_used["Unassigned"] <- "grey80"
+  
   # Update the reactive value
   class_colors(cols_used)
   
@@ -581,8 +581,9 @@ output$class_plot <- renderPlotly({
   # Build plot
   p <- plot_ly()
   
-  # Add legend entries - Unassigned LAST, only show classes that exist
-  assigned_classes <- setdiff(names(cols_used), "Unassigned")
+  # Add legend entries - ONLY show classes that actually exist in data
+  # Unassigned LAST
+  assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
   for (class_name in class_order) {
@@ -595,13 +596,12 @@ output$class_plot <- renderPlotly({
         marker = list(
           size = 10,
           color = cols_used[class_name],
-          symbol = "square",
-          opacity = 1  # Changed from 0 to 1 so legend is visible
+          symbol = "square"
         ),
         name = class_name,
         showlegend = TRUE,
         hoverinfo = "skip",
-        visible = "legendonly"  # Make markers invisible but keep legend
+        visible = "legendonly"
       )
   }
   
