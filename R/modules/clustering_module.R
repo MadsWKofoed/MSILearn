@@ -551,13 +551,28 @@ output$cluster_plot <- renderPlotly({
 })
     
 # --- Class plot (use class version) ---
+# --- Class plot (use class version) ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
   if (!"Class" %in% names(df)) df$Class <- NA_character_
   
+  # DEBUG: Print info
+  cat("\n=== CLASS PLOT DEBUG ===\n")
+  cat("Total pixels in df:", nrow(df), "\n")
+  cat("x range:", min(df$x), "to", max(df$x), "\n")
+  cat("y range:", min(df$y), "to", max(df$y), "\n")
+  cat("Unique x values:", length(unique(df$x)), "\n")
+  cat("Unique y values:", length(unique(df$y)), "\n")
+  cat("Class column summary:\n")
+  print(table(df$Class, useNA = "always"))
+  cat("========================\n")
+  
   # Convert NA to "Unassigned" for plotting
   df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", as.character(df$Class))
+  
+  cat("Class_plot column summary:\n")
+  print(table(df$Class_plot, useNA = "always"))
   
   cols <- class_colors()
   
@@ -574,6 +589,9 @@ output$class_plot <- renderPlotly({
   if ("Unassigned" %in% present && !"Unassigned" %in% names(cols_used)) {
     cols_used["Unassigned"] <- "grey80"
   }
+  
+  cat("Colors being used:\n")
+  print(cols_used)
   
   img_uri <- make_class_raster_png(df, "Class_plot", cols_used)
   
