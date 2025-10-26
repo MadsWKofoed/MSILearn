@@ -561,17 +561,15 @@ output$class_plot <- renderPlotly({
   
   cols <- class_colors()
   
-  # Ensure Unassigned color exists
-  if (!"Unassigned" %in% names(cols)) {
-    cols["Unassigned"] <- "grey80"
-  }
+  # FORCE Unassigned to always be grey80 (override if changed)
+  cols["Unassigned"] <- "grey80"
   
   # Get unique classes present in data
   present <- unique(df$Class_plot)
   cols_used <- cols[intersect(names(cols), present)]
   
-  # Ensure Unassigned is in cols_used
-  if ("Unassigned" %in% present && !"Unassigned" %in% names(cols_used)) {
+  # Double-check Unassigned is grey
+  if ("Unassigned" %in% names(cols_used)) {
     cols_used["Unassigned"] <- "grey80"
   }
   
