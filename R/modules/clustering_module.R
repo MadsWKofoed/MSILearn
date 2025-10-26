@@ -502,7 +502,6 @@ clustering_module_server <- function(id, msi_con) {
       p
     })
     
-    
     # --- Class plot ---
     output$class_plot <- renderPlotly({
       df <- annotated_data() %||% clustered_data()
@@ -521,17 +520,19 @@ clustering_module_server <- function(id, msi_con) {
       p <- plot_ly()
       
       # Add dummy trace for each class (for legend)
+      # Use actual coordinates but make them invisible
       for (class_name in names(cols_used)) {
         p <- p %>%
           add_trace(
-            x = NA,
-            y = NA,
+            x = c(0, 0),  # Two points at same location
+            y = c(0, 0),
             type = "scatter",
             mode = "markers",
             marker = list(
               size = 10,
               color = cols_used[class_name],
-              symbol = "square"
+              symbol = "square",
+              opacity = 0  # Make invisible
             ),
             name = class_name,
             showlegend = TRUE,
@@ -558,7 +559,7 @@ clustering_module_server <- function(id, msi_con) {
             y = 1,
             xanchor = "left",
             yanchor = "top",
-            bgcolor = "rgba(255, 255, 255, 0.8)",
+            bgcolor = "rgba(255, 255, 255, 0.9)",
             bordercolor = "black",
             borderwidth = 1
           )
@@ -567,6 +568,9 @@ clustering_module_server <- function(id, msi_con) {
       
       p
     })
+
+
+
     
     # --- Layout ---
     output$cluster_layout <- renderUI({
