@@ -257,39 +257,66 @@ clustering_module_server <- function(id, msi_con) {
       next_color_i(1)
     })
     
-    # --- Raster helper ---
-    make_raster_png <- function(df, fill_var, colors) {
-      df$x <- df$x - min(df$x) + 1
-      df$y <- df$y - min(df$y) + 1
-      width <- max(df$x)
-      height <- max(df$y)
-      
-      # Create matrix and fill with actual values (including NA)
-      mat <- matrix("Unassigned", nrow = height, ncol = width)  # Default to Unassigned
-      mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
-      
-      # Replace NA with "Unassigned"
-      mat[is.na(mat)] <- "Unassigned"
-      
-      # Ensure "Unassigned" is in colors
-      if (!"Unassigned" %in% names(colors)) {
-        colors["Unassigned"] <- "grey80"
-      }
-      
-      # Map colors
-      col_img <- matrix(colors[mat], nrow = height, ncol = width)
-      
-      rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
-      rgb_array <- array(NA_real_, dim = c(height, width, 4))
-      rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
-      rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
-      rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
-      rgb_array[,,4] <- matrix(rgb_vals["alpha", ], nrow = height, ncol = width)
-      
-      tmp <- tempfile(fileext = ".png")
-      png::writePNG(rgb_array, target = tmp)
-      base64enc::dataURI(file = tmp, mime = "image/png")
-    }
+# --- Raster helper for CLUSTER plot (transparent background) ---
+make_cluster_raster_png <- function(df, fill_var, colors) {
+  df$x <- df$x - min(df$x) + 1
+  df$y <- df$y - min(df$y) + 1
+  width <- max(df$x)
+  height <- max(df$y)
+  
+  # Create EMPTY matrix (NA = transparent)
+  mat <- matrix(NA_character_, nrow = height, ncol = width)
+  mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
+  
+  col_img <- matrix(colors[mat], nrow = height, ncol = width)
+  
+  rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
+  rgb_array <- array(NA_real_, dim = c(height, width, 4))
+  rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
+  rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
+  rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
+  rgb_array[,,4] <- matrix(rgb_vals["alpha", ], nrow = height, ncol = width)
+  
+  # Make NA pixels transparent
+  na_pixels <- is.na(mat)
+  rgb_array[,,4][na_pixels] <- 0
+  
+  tmp <- tempfile(fileext = ".png")
+  png::writePNG(rgb_array, target = tmp)
+  base64enc::dataURI(file = tmp, mime = "image/png")
+}
+
+# --- Raster helper for CLASS plot (show all pixels) ---
+make_class_raster_png <- function(df, fill_var, colors) {
+  df$x <- df$x - min(df$x) + 1
+  df$y <- df$y - min(df$y) + 1
+  width <- max(df$x)
+  height <- max(df$y)
+  
+  # Fill with "Unassigned" (so all pixels show)
+  mat <- matrix("Unassigned", nrow = height, ncol = width)
+  
+  for (i in seq_len(nrow(df))) {
+    mat[df$y[i], df$x[i]] <- df[[fill_var]][i]
+  }
+  
+  if (!"Unassigned" %in% names(colors)) {
+    colors["Unassigned"] <- "grey80"
+  }
+  
+  col_img <- matrix(colors[mat], nrow = height, ncol = width)
+  
+  rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
+  rgb_array <- array(NA_real_, dim = c(height, width, 4))
+  rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
+  rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
+  rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
+  rgb_array[,,4] <- matrix(rgb_vals["alpha", ], nrow = height, ncol = width)
+  
+  tmp <- tempfile(fileext = ".png")
+  png::writePNG(rgb_array, target = tmp)
+  base64enc::dataURI(file = tmp, mime = "image/png")
+}
     
     # --- Selection storage ---
     sel_shape <- reactiveVal(NULL)
@@ -473,54 +500,54 @@ clustering_module_server <- function(id, msi_con) {
     })
     
     
-    # --- Cluster plot ---
-    output$cluster_plot <- renderPlotly({
-      df <- clustered_data()
-      req(df)
-      
-      cols <- setNames(
-        brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
-        as.character(1:max(df$cluster))
-      )
-      img_uri <- make_raster_png(df, "cluster", cols)
-      
-      p <- plot_ly(source = "cluster") %>%
-        add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%  # Dummy trace
-        layout(
-          images = list(list(
-            source = img_uri,
-            xref = "x", yref = "y",
-            x = 0, y = max(df$y),
-            sizex = max(df$x), sizey = max(df$y),
-            sizing = "stretch", layer = "below"
-          )),
-          dragmode = "drawclosedpath",
-          newshape = list(line = list(color = "black", width = 1),
-                        fillcolor = "rgba(0,0,0,0.05)"),
-          title = "MSI Clustering Result",
-          xaxis = list(range = c(0, max(df$x)), title = "x"),
-          yaxis = list(range = c(0, max(df$y)), title = "y",
-                      scaleanchor = "x", scaleratio = 1),
-          showlegend = FALSE
-        ) %>%
-        config(
-          displaylogo = FALSE,
-          modeBarButtonsToAdd = list("drawclosedpath", "drawrect", "eraseshape"),
-          modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
-                                    "toggleSpikelines", "toImage")
-        )
-      
-      p
-    })
+# --- Cluster plot (use cluster version) ---
+output$cluster_plot <- renderPlotly({
+  df <- clustered_data()
+  req(df)
+  
+  cols <- setNames(
+    brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
+    as.character(1:max(df$cluster))
+  )
+  img_uri <- make_cluster_raster_png(df, "cluster", cols)  # <-- Use cluster version
+  
+  p <- plot_ly(source = "cluster") %>%
+    add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
+    layout(
+      images = list(list(
+        source = img_uri,
+        xref = "x", yref = "y",
+        x = 0, y = max(df$y),
+        sizex = max(df$x), sizey = max(df$y),
+        sizing = "stretch", layer = "below"
+      )),
+      dragmode = "drawclosedpath",
+      newshape = list(line = list(color = "black", width = 1),
+                    fillcolor = "rgba(0,0,0,0.05)"),
+      title = "MSI Clustering Result",
+      xaxis = list(range = c(0, max(df$x)), title = "x"),
+      yaxis = list(range = c(0, max(df$y)), title = "y",
+                  scaleanchor = "x", scaleratio = 1),
+      showlegend = FALSE
+    ) %>%
+    config(
+      displaylogo = FALSE,
+      modeBarButtonsToAdd = list("drawclosedpath", "drawrect", "eraseshape"),
+      modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
+                                "toggleSpikelines", "toImage")
+    )
+  
+  p
+})
     
-    # --- Class plot ---
+# --- Class plot (use class version) ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
   if (!"Class" %in% names(df)) df$Class <- NA_character_
   
-  # Keep NA as NA, don't convert yet
-  df$Class_plot <- df$Class
+  # Convert NA to "Unassigned" for plotting
+  df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", as.character(df$Class))
   
   cols <- class_colors()
   
@@ -529,22 +556,25 @@ output$class_plot <- renderPlotly({
     cols["Unassigned"] <- "grey80"
   }
   
-  # Get all classes including NA (which will be Unassigned)
+  # Get unique classes present in data
   present <- unique(df$Class_plot)
-  present <- c(present[!is.na(present)], "Unassigned")
-  
   cols_used <- cols[intersect(names(cols), present)]
   
-  # Now convert NA to "Unassigned" for plotting
-  df$Class_plot <- ifelse(is.na(df$Class_plot), "Unassigned", df$Class_plot)
+  # Ensure Unassigned is always in cols_used
+  if ("Unassigned" %in% present && !"Unassigned" %in% names(cols_used)) {
+    cols_used["Unassigned"] <- "grey80"
+  }
   
-  img_uri <- make_raster_png(df, "Class_plot", cols_used)
+  img_uri <- make_class_raster_png(df, "Class_plot", cols_used)
   
   # Start with empty plot
   p <- plot_ly()
   
-  # Add dummy trace for each class (for legend)
-  for (class_name in names(cols_used)) {
+  # Add dummy trace for each class (for legend) - sorted with Unassigned last
+  class_order <- c(setdiff(names(cols_used), "Unassigned"), "Unassigned")
+  class_order <- intersect(class_order, names(cols_used))
+  
+  for (class_name in class_order) {
     p <- p %>%
       add_trace(
         x = c(0, 0),
