@@ -263,9 +263,20 @@ clustering_module_server <- function(id, msi_con) {
       df$y <- df$y - min(df$y) + 1
       width <- max(df$x)
       height <- max(df$y)
-      mat <- matrix(NA_character_, nrow = height, ncol = width)
+      
+      # Create matrix and fill with actual values (including NA)
+      mat <- matrix("Unassigned", nrow = height, ncol = width)  # Default to Unassigned
       mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
+      
+      # Replace NA with "Unassigned"
       mat[is.na(mat)] <- "Unassigned"
+      
+      # Ensure "Unassigned" is in colors
+      if (!"Unassigned" %in% names(colors)) {
+        colors["Unassigned"] <- "grey80"
+      }
+      
+      # Map colors
       col_img <- matrix(colors[mat], nrow = height, ncol = width)
       
       rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
@@ -503,71 +514,83 @@ clustering_module_server <- function(id, msi_con) {
     })
     
     # --- Class plot ---
-    output$class_plot <- renderPlotly({
-      df <- annotated_data() %||% clustered_data()
-      req(df)
-      if (!"Class" %in% names(df)) df$Class <- NA_character_
-      df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
-      
-      cols <- class_colors()
-      present <- unique(df$Class_plot)
-      cols_used <- cols[present]
-      names(cols_used) <- present
-      
-      img_uri <- make_raster_png(df, "Class_plot", cols_used)
-      
-      # Start with empty plot
-      p <- plot_ly()
-      
-      # Add dummy trace for each class (for legend)
-      # Use actual coordinates but make them invisible
-      for (class_name in names(cols_used)) {
-        p <- p %>%
-          add_trace(
-            x = c(0, 0),  # Two points at same location
-            y = c(0, 0),
-            type = "scatter",
-            mode = "markers",
-            marker = list(
-              size = 10,
-              color = cols_used[class_name],
-              symbol = "square",
-              opacity = 0  # Make invisible
-            ),
-            name = class_name,
-            showlegend = TRUE,
-            hoverinfo = "skip"
-          )
-      }
-      
-      # Add image and layout
-      p <- p %>%
-        layout(
-          images = list(list(
-            source = img_uri,
-            xref = "x", yref = "y",
-            x = 0, y = max(df$y),
-            sizex = max(df$x), sizey = max(df$y),
-            sizing = "stretch", layer = "below"
-          )),
-          title = "User Annotation Result",
-          xaxis = list(range = c(0, max(df$x)), title = "x"),
-          yaxis = list(range = c(0, max(df$y)), title = "y",
-                      scaleanchor = "x", scaleratio = 1),
-          legend = list(
-            x = 1.02,
-            y = 1,
-            xanchor = "left",
-            yanchor = "top",
-            bgcolor = "rgba(255, 255, 255, 0.9)",
-            bordercolor = "black",
-            borderwidth = 1
-          )
-        ) %>%
-        config(displaylogo = FALSE)
-      
-      p
-    })
+output$class_plot <- renderPlotly({
+  df <- annotated_data() %||% clustered_data()
+  req(df)
+  if (!"Class" %in% names(df)) df$Class <- NA_character_
+  
+  # Keep NA as NA, don't convert yet
+  df$Class_plot <- df$Class
+  
+  cols <- class_colors()
+  
+  # Ensure Unassigned color exists
+  if (!"Unassigned" %in% names(cols)) {
+    cols["Unassigned"] <- "grey80"
+  }
+  
+  # Get all classes including NA (which will be Unassigned)
+  present <- unique(df$Class_plot)
+  present <- c(present[!is.na(present)], "Unassigned")
+  
+  cols_used <- cols[intersect(names(cols), present)]
+  
+  # Now convert NA to "Unassigned" for plotting
+  df$Class_plot <- ifelse(is.na(df$Class_plot), "Unassigned", df$Class_plot)
+  
+  img_uri <- make_raster_png(df, "Class_plot", cols_used)
+  
+  # Start with empty plot
+  p <- plot_ly()
+  
+  # Add dummy trace for each class (for legend)
+  for (class_name in names(cols_used)) {
+    p <- p %>%
+      add_trace(
+        x = c(0, 0),
+        y = c(0, 0),
+        type = "scatter",
+        mode = "markers",
+        marker = list(
+          size = 10,
+          color = cols_used[class_name],
+          symbol = "square",
+          opacity = 0
+        ),
+        name = class_name,
+        showlegend = TRUE,
+        hoverinfo = "skip"
+      )
+  }
+  
+  # Add image and layout
+  p <- p %>%
+    layout(
+      images = list(list(
+        source = img_uri,
+        xref = "x", yref = "y",
+        x = 0, y = max(df$y),
+        sizex = max(df$x), sizey = max(df$y),
+        sizing = "stretch", layer = "below"
+      )),
+      title = "User Annotation Result",
+      xaxis = list(range = c(0, max(df$x)), title = "x"),
+      yaxis = list(range = c(0, max(df$y)), title = "y",
+                  scaleanchor = "x", scaleratio = 1),
+      legend = list(
+        x = 1.02,
+        y = 1,
+        xanchor = "left",
+        yanchor = "top",
+        bgcolor = "rgba(255, 255, 255, 0.9)",
+        bordercolor = "black",
+        borderwidth = 1
+      )
+    ) %>%
+    config(displaylogo = FALSE)
+  
+  p
+})
 
 
 
