@@ -571,27 +571,39 @@ output$class_plot <- renderPlotly({
   
   cols <- class_colors()
   
-  # FORCE Unassigned to always be grey80 (override if changed)
+  # FORCE Unassigned to always be grey80
   cols["Unassigned"] <- "grey80"
   
   # Get unique classes present in data
   present <- unique(df$Class_plot)
-  cols_used <- cols[intersect(names(cols), present)]
   
-  # Double-check Unassigned is grey
-  if ("Unassigned" %in% names(cols_used)) {
-    cols_used["Unassigned"] <- "grey80"
+  # Build cols_used with ALL classes from class_colors PLUS present classes
+  all_classes <- unique(c(names(cols), present))
+  cols_used <- setNames(character(length(all_classes)), all_classes)
+  
+  # Fill in colors: use existing color if available, otherwise grey80 for Unassigned
+  for (cls in all_classes) {
+    if (cls %in% names(cols)) {
+      cols_used[cls] <- cols[cls]
+    } else if (cls == "Unassigned") {
+      cols_used[cls] <- "grey80"
+    }
   }
   
-  # Use SAME function as cluster plot - just with Class_plot instead of cluster
+  # Filter to only keep classes that have a valid color
+  cols_used <- cols_used[cols_used != ""]
+  
+  # Ensure Unassigned is ALWAYS grey80
+  cols_used["Unassigned"] <- "grey80"
+  
+  # Use SAME function as cluster plot
   img_uri <- make_cluster_raster_png(df, "Class_plot", cols_used)
   
   # Start with empty plot
   p <- plot_ly()
   
-  # Add dummy trace for each class (for legend) - sorted with Unassigned last
+  # Add dummy trace for each class - sorted with Unassigned last
   class_order <- c(setdiff(names(cols_used), "Unassigned"), "Unassigned")
-  class_order <- intersect(class_order, names(cols_used))
   
   for (class_name in class_order) {
     p <- p %>%
