@@ -287,46 +287,6 @@ make_cluster_raster_png <- function(df, fill_var, colors) {
 }
 
 
-# --- Raster helper for CLASS plot (show ALL pixels including unassigned) ---
-make_class_raster_png <- function(df, fill_var, colors) {
-  # Don't shift coordinates - use original range
-  x_min <- min(df$x)
-  x_max <- max(df$x)
-  y_min <- min(df$y)
-  y_max <- max(df$y)
-  
-  width <- x_max - x_min + 1
-  height <- y_max - y_min + 1
-  
-  # Create matrix filled with "Unassigned" for ALL positions
-  mat <- matrix("Unassigned", nrow = height, ncol = width)
-  
-  # Fill in actual values from df (adjusted for matrix indexing)
-  for (i in seq_len(nrow(df))) {
-    x_idx <- df$x[i] - x_min + 1
-    y_idx <- df$y[i] - y_min + 1
-    mat[y_idx, x_idx] <- as.character(df[[fill_var]][i])
-  }
-  
-  # Ensure "Unassigned" color exists
-  if (!"Unassigned" %in% names(colors)) {
-    colors["Unassigned"] <- "grey80"
-  }
-  
-  # Map colors
-  col_img <- matrix(colors[mat], nrow = height, ncol = width)
-  
-  rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
-  rgb_array <- array(NA_real_, dim = c(height, width, 4))
-  rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
-  rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
-  rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
-  rgb_array[,,4] <- matrix(rgb_vals["alpha", ], nrow = height, ncol = width)
-  
-  tmp <- tempfile(fileext = ".png")
-  png::writePNG(rgb_array, target = tmp)
-  base64enc::dataURI(file = tmp, mime = "image/png")
-}
     
     # --- Selection storage ---
     sel_shape <- reactiveVal(NULL)
@@ -427,9 +387,12 @@ observeEvent(input$assign_class, {
   df <- annotated_data() %||% clustered_data()
   req(df)
   
-  # Initialize Class column if missing
-  if (!"Class" %in% names(df)) df$Class <- "Unassigned"
-  df$Class[is.na(df$Class)] <- "Unassigned"
+  # Initialize Class column if missing - ALL pixels start as "Unassigned"
+  if (!"Class" %in% names(df)) {
+    df$Class <- "Unassigned"
+  } else {
+    df$Class[is.na(df$Class)] <- "Unassigned"
+  }
   df$Class <- as.character(df$Class)
   
   y_max <- max(df$y)
@@ -461,12 +424,13 @@ observeEvent(input$assign_class, {
   df$Class[inside] <- lab
   annotated_data(df)
   
-  # Update colors - add new class if needed
+  # Update colors - ONLY add if it's a NEW class (not Unassigned)
   cols <- class_colors()
   
-  if (!(lab %in% names(cols))) {
+  if (lab != "Unassigned" && !(lab %in% names(cols))) {
     i <- next_color_i()
     cols[lab] <- my_palette[i]
+    cols["Unassigned"] <- "grey80"  # Re-ensure Unassigned is grey
     class_colors(cols)
     next_color_i(if (i >= length(my_palette)) 1 else i + 1)
   }
@@ -489,8 +453,11 @@ observeEvent(input$assign_all, {
   df <- annotated_data() %||% clustered_data()
   req(df)
   
-  if (!"Class" %in% names(df)) df$Class <- "Unassigned"
-  df$Class[is.na(df$Class)] <- "Unassigned"
+  if (!"Class" %in% names(df)) {
+    df$Class <- "Unassigned"
+  } else {
+    df$Class[is.na(df$Class)] <- "Unassigned"
+  }
   df$Class <- as.character(df$Class)
   
   n_unassigned <- sum(df$Class == "Unassigned")
@@ -500,12 +467,13 @@ observeEvent(input$assign_all, {
     df$Class[df$Class == "Unassigned"] <- lab
     annotated_data(df)
     
-    # Update colors
+    # Update colors - ONLY add if it's a NEW class
     cols <- class_colors()
     
-    if (!(lab %in% names(cols))) {
+    if (lab != "Unassigned" && !(lab %in% names(cols))) {
       i <- next_color_i()
       cols[lab] <- my_palette[i]
+      cols["Unassigned"] <- "grey80"  # Re-ensure
       class_colors(cols)
       next_color_i(if (i >= length(my_palette)) 1 else i + 1)
     }
@@ -565,40 +533,28 @@ output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
   
-  # Initialize Class column if missing
-  if (!"Class" %in% names(df)) df$Class <- "Unassigned"
-  
-  # Replace NA with "Unassigned"
-  df$Class[is.na(df$Class)] <- "Unassigned"
+  # Initialize Class column if missing - ALL pixels start as "Unassigned"
+  if (!"Class" %in% names(df)) {
+    df$Class <- "Unassigned"
+  } else {
+    df$Class[is.na(df$Class)] <- "Unassigned"
+  }
   df$Class <- as.character(df$Class)
   
-  # Get all unique classes
-  unique_classes <- unique(df$Class)
-  
-  # Build color mapping
+  # Get current color mapping - should ALWAYS contain at least Unassigned
   cols_used <- class_colors()
   
-  # Ensure every class in the data has a color
-  for (cls in unique_classes) {
-    if (!cls %in% names(cols_used)) {
-      if (cls == "Unassigned") {
-        cols_used["Unassigned"] <- "grey80"
-      } else {
-        # This shouldn't happen if assign logic works correctly
-        cols_used[cls] <- "black"
-      }
-    }
-  }
+  # Force Unassigned to be grey80 (in case it got corrupted)
+  cols_used["Unassigned"] <- "grey80"
   
-  # Create image
+  # Create image using current colors
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
   
-  # Build plot with legend showing ALL colors from class_colors()
+  # Build plot
   p <- plot_ly()
   
-  # Sort: Unassigned last
-  all_legend_classes <- names(cols_used)
-  class_order <- c(setdiff(all_legend_classes, "Unassigned"), "Unassigned")
+  # Add legend entries - Unassigned LAST
+  class_order <- c(setdiff(names(cols_used), "Unassigned"), "Unassigned")
   
   for (class_name in class_order) {
     p <- p %>%
