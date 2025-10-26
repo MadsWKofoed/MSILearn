@@ -502,52 +502,71 @@ clustering_module_server <- function(id, msi_con) {
       p
     })
     
+    
     # --- Class plot ---
-output$class_plot <- renderPlotly({
-  df <- annotated_data() %||% clustered_data()
-  req(df)
-  if (!"Class" %in% names(df)) df$Class <- NA_character_
-  df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
-  
-  cols <- class_colors()
-  present <- unique(df$Class_plot)
-  cols_used <- cols[present]
-  names(cols_used) <- present
-  
-  img_uri <- make_raster_png(df, "Class_plot", cols_used)
-  
-  # Build plot WITHOUT dummy traces - use legend entries directly in layout
-  p <- plot_ly() %>%
-    layout(
-      images = list(list(
-        source = img_uri,
-        xref = "x", yref = "y",
-        x = 0, y = max(df$y),
-        sizex = max(df$x), sizey = max(df$y),
-        sizing = "stretch", layer = "below"
-      )),
-      title = "User Annotation Result",
-      xaxis = list(range = c(0, max(df$x)), title = "x"),
-      yaxis = list(range = c(0, max(df$y)), title = "y",
-                  scaleanchor = "x", scaleratio = 1),
-      # Add legend using annotations instead
-      annotations = lapply(seq_along(cols_used), function(i) {
-        list(
-          x = 1.02,
-          y = 1 - (i-1) * 0.05,
-          xref = "paper",
-          yref = "paper",
-          text = paste0('<span style="color:', cols_used[i], '">■</span> ', names(cols_used)[i]),
-          showarrow = FALSE,
-          xanchor = "left",
-          font = list(size = 12)
-        )
-      })
-    ) %>%
-    config(displaylogo = FALSE)
-  
-  p
-})
+    output$class_plot <- renderPlotly({
+      df <- annotated_data() %||% clustered_data()
+      req(df)
+      if (!"Class" %in% names(df)) df$Class <- NA_character_
+      df$Class_plot <- ifelse(is.na(df$Class), "Unassigned", df$Class)
+      
+      cols <- class_colors()
+      present <- unique(df$Class_plot)
+      cols_used <- cols[present]
+      names(cols_used) <- present
+      
+      img_uri <- make_raster_png(df, "Class_plot", cols_used)
+      
+      # Start with empty plot
+      p <- plot_ly()
+      
+      # Add dummy trace for each class (for legend)
+      for (class_name in names(cols_used)) {
+        p <- p %>%
+          add_trace(
+            x = NA,
+            y = NA,
+            type = "scatter",
+            mode = "markers",
+            marker = list(
+              size = 10,
+              color = cols_used[class_name],
+              symbol = "square"
+            ),
+            name = class_name,
+            showlegend = TRUE,
+            hoverinfo = "skip"
+          )
+      }
+      
+      # Add image and layout
+      p <- p %>%
+        layout(
+          images = list(list(
+            source = img_uri,
+            xref = "x", yref = "y",
+            x = 0, y = max(df$y),
+            sizex = max(df$x), sizey = max(df$y),
+            sizing = "stretch", layer = "below"
+          )),
+          title = "User Annotation Result",
+          xaxis = list(range = c(0, max(df$x)), title = "x"),
+          yaxis = list(range = c(0, max(df$y)), title = "y",
+                      scaleanchor = "x", scaleratio = 1),
+          legend = list(
+            x = 1.02,
+            y = 1,
+            xanchor = "left",
+            yanchor = "top",
+            bgcolor = "rgba(255, 255, 255, 0.8)",
+            bordercolor = "black",
+            borderwidth = 1
+          )
+        ) %>%
+        config(displaylogo = FALSE)
+      
+      p
+    })
     
     # --- Layout ---
     output$cluster_layout <- renderUI({
