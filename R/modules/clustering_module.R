@@ -417,97 +417,107 @@ make_class_raster_png <- function(df, fill_var, colors) {
     })
     
     # --- Assign to selection ---
-    observeEvent(input$assign_class, {
-      shape <- sel_shape()
-      if (is.null(shape)) {
-        showNotification("No selection drawn. Use Lasso or Rectangle tool.", 
-                        type = "warning", duration = 4)
-        return()
-      }
-      
-      df <- annotated_data() %||% clustered_data()
-      req(df)
-      if (!"Class" %in% names(df)) df$Class <- NA_character_
-      
-      y_max <- max(df$y)
-      
-      if (identical(shape$type, "polygon")) {
-        poly_x <- shape$x
-        poly_y <- y_max - shape$y
-        inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
-      } else if (identical(shape$type, "rect")) {
-        x0 <- shape$x0
-        x1 <- shape$x1
-        yy0 <- y_max - shape$y0
-        yy1 <- y_max - shape$y1
-        y0 <- min(yy0, yy1)
-        y1 <- max(yy0, yy1)
-        inside <- df$x >= x0 & df$x <= x1 & df$y >= y0 & df$y <= y1
-      } else {
-        showNotification("Unsupported shape type.", type = "error", duration = 4)
-        return()
-      }
-      
-      n_sel <- sum(inside)
-      if (n_sel == 0) {
-        showNotification("No pixels in selection.", type = "warning", duration = 4)
-        return()
-      }
-      
-      df$Class[inside] <- input$class_label
-      annotated_data(df)
-      
-      # Update colors
-      cols <- class_colors()
-      lab <- input$class_label
-      if (!(lab %in% names(cols))) {
-        i <- next_color_i()
-        cols[lab] <- my_palette[i]
-        class_colors(cols)
-        next_color_i(if (i == length(my_palette)) 1 else i + 1)
-      }
-      
-      # Clear shapes
-      try({
-        plotlyProxy("cluster_plot", session) %>%
-          plotlyProxyInvoke("relayout", list(shapes = list()))
-      }, silent = TRUE)
-      sel_shape(NULL)
-      
-      showNotification(
-        sprintf("Assigned '%s' to %d pixels.", input$class_label, n_sel),
-        type = "message", duration = 3
-      )
-    })
+# --- Assign to selection ---
+observeEvent(input$assign_class, {
+  shape <- sel_shape()
+  if (is.null(shape)) {
+    showNotification("No selection drawn. Use Lasso or Rectangle tool.", 
+                    type = "warning", duration = 4)
+    return()
+  }
+  
+  df <- annotated_data() %||% clustered_data()
+  req(df)
+  if (!"Class" %in% names(df)) df$Class <- NA_character_
+  
+  y_max <- max(df$y)
+  
+  if (identical(shape$type, "polygon")) {
+    poly_x <- shape$x
+    poly_y <- y_max - shape$y
+    inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
+  } else if (identical(shape$type, "rect")) {
+    x0 <- shape$x0
+    x1 <- shape$x1
+    yy0 <- y_max - shape$y0
+    yy1 <- y_max - shape$y1
+    y0 <- min(yy0, yy1)
+    y1 <- max(yy0, yy1)
+    inside <- df$x >= x0 & df$x <= x1 & df$y >= y0 & df$y <= y1
+  } else {
+    showNotification("Unsupported shape type.", type = "error", duration = 4)
+    return()
+  }
+  
+  n_sel <- sum(inside)
+  if (n_sel == 0) {
+    showNotification("No pixels in selection.", type = "warning", duration = 4)
+    return()
+  }
+  
+  df$Class[inside] <- input$class_label
+  annotated_data(df)
+  
+  # Update colors - NEVER touch Unassigned
+  cols <- class_colors()
+  lab <- input$class_label
+  
+  # Only add new color if it's NOT "Unassigned" and doesn't exist yet
+  if (lab != "Unassigned" && !(lab %in% names(cols))) {
+    i <- next_color_i()
+    cols[lab] <- my_palette[i]
+    # Ensure Unassigned stays grey80
+    cols["Unassigned"] <- "grey80"
+    class_colors(cols)
+    next_color_i(if (i == length(my_palette)) 1 else i + 1)
+  }
+  
+  # Clear shapes
+  try({
+    plotlyProxy("cluster_plot", session) %>%
+      plotlyProxyInvoke("relayout", list(shapes = list()))
+  }, silent = TRUE)
+  sel_shape(NULL)
+  
+  showNotification(
+    sprintf("Assigned '%s' to %d pixels.", input$class_label, n_sel),
+    type = "message", duration = 3
+  )
+})
+
+# --- Assign all unassigned ---
+observeEvent(input$assign_all, {
+  df <- annotated_data() %||% clustered_data()
+  req(df)
+  if (!"Class" %in% names(df)) df$Class <- NA_character_
+  n_unassigned <- sum(is.na(df$Class))
+  
+  if (n_unassigned > 0) {
+    df$Class[is.na(df$Class)] <- input$class_label
+    annotated_data(df)
     
-    # --- Assign all unassigned ---
-    observeEvent(input$assign_all, {
-      df <- annotated_data() %||% clustered_data()
-      req(df)
-      if (!"Class" %in% names(df)) df$Class <- NA_character_
-      n_unassigned <- sum(is.na(df$Class))
-      
-      if (n_unassigned > 0) {
-        df$Class[is.na(df$Class)] <- input$class_label
-        annotated_data(df)
-        
-        cols <- class_colors()
-        lab <- input$class_label
-        if (!(lab %in% names(cols))) {
-          i <- next_color_i()
-          cols[lab] <- my_palette[i]
-          class_colors(cols)
-          next_color_i(if (i == length(my_palette)) 1 else i + 1)
-        }
-        
-        showNotification(
-          sprintf("Assigned '%s' to %d pixels.", input$class_label, n_unassigned),
-          type = "message", duration = 3
-        )
-      } else {
-        showNotification("No unassigned pixels.", type = "warning", duration = 3)
-      }
-    })
+    # Update colors - NEVER touch Unassigned
+    cols <- class_colors()
+    lab <- input$class_label
+    
+    # Only add new color if it's NOT "Unassigned" and doesn't exist yet
+    if (lab != "Unassigned" && !(lab %in% names(cols))) {
+      i <- next_color_i()
+      cols[lab] <- my_palette[i]
+      # Ensure Unassigned stays grey80
+      cols["Unassigned"] <- "grey80"
+      class_colors(cols)
+      next_color_i(if (i == length(my_palette)) 1 else i + 1)
+    }
+    
+    showNotification(
+      sprintf("Assigned '%s' to %d pixels.", input$class_label, n_unassigned),
+      type = "message", duration = 3
+    )
+  } else {
+    showNotification("No unassigned pixels.", type = "warning", duration = 3)
+  }
+})
     
     
 # --- Cluster plot (use cluster version) ---
