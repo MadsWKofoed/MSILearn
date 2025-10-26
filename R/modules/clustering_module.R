@@ -286,24 +286,34 @@ make_cluster_raster_png <- function(df, fill_var, colors) {
   base64enc::dataURI(file = tmp, mime = "image/png")
 }
 
-# --- Raster helper for CLASS plot (show all pixels) ---
+
+# --- Raster helper for CLASS plot (show ALL pixels including unassigned) ---
 make_class_raster_png <- function(df, fill_var, colors) {
-  df$x <- df$x - min(df$x) + 1
-  df$y <- df$y - min(df$y) + 1
-  width <- max(df$x)
-  height <- max(df$y)
+  # Don't shift coordinates - use original range
+  x_min <- min(df$x)
+  x_max <- max(df$x)
+  y_min <- min(df$y)
+  y_max <- max(df$y)
   
-  # Fill with "Unassigned" (so all pixels show)
+  width <- x_max - x_min + 1
+  height <- y_max - y_min + 1
+  
+  # Create matrix filled with "Unassigned" for ALL positions
   mat <- matrix("Unassigned", nrow = height, ncol = width)
   
+  # Fill in actual values from df (adjusted for matrix indexing)
   for (i in seq_len(nrow(df))) {
-    mat[df$y[i], df$x[i]] <- df[[fill_var]][i]
+    x_idx <- df$x[i] - x_min + 1
+    y_idx <- df$y[i] - y_min + 1
+    mat[y_idx, x_idx] <- as.character(df[[fill_var]][i])
   }
   
+  # Ensure "Unassigned" color exists
   if (!"Unassigned" %in% names(colors)) {
     colors["Unassigned"] <- "grey80"
   }
   
+  # Map colors
   col_img <- matrix(colors[mat], nrow = height, ncol = width)
   
   rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
