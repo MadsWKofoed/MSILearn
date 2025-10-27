@@ -619,8 +619,8 @@ output$class_plot <- renderPlotly({
     sort(setdiff(present_classes, "Unassigned"))
   )
   
-  # Use plotly's ACTUAL modern default light blue
-  plotly_light_blue <- "#636EFA"
+  # Try lighter blue variants - plotly might be using opacity
+  plotly_light_blue <- "rgba(99, 110, 250, 0.5)"  # 50% opacity version
   
   # Build complete color mapping with Unassigned as plotly light blue
   all_colors <- c("Unassigned" = plotly_light_blue)
