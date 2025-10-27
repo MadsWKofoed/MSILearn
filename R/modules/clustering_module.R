@@ -592,6 +592,7 @@ make_class_plot_with_legend <- function(df, fill_var, colors) {
   base64enc::dataURI(file = tmp, mime = "image/png")
 }
 
+
 # --- Class plot (interactive with raster) ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
@@ -650,7 +651,7 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces with matching colors - NO OPACITY!
+  # Add legend traces with matching colors
   for (i in seq_along(present_classes)) {
     cls <- present_classes[i]
     col <- all_colors[[cls]]
@@ -662,8 +663,8 @@ output$class_plot <- renderPlotly({
         type = "scatter",
         mode = "markers",
         marker = list(
-          size = 1,      # Tiny marker
-          color = col    # NO opacity parameter!
+          size = 10,     # Back to normal size
+          color = col
         ),
         name = cls,
         showlegend = TRUE,
