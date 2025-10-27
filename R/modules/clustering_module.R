@@ -641,17 +641,26 @@ output$class_plot <- renderPlotly({
   
   # Add legend traces for each class (Unassigned always first!)
   for (cls in present_classes) {
+    # Get the color - ensure it's valid
+    col <- cols_used[[cls]]
+    if (is.null(col) || is.na(col)) {
+      col <- "grey80"  # Fallback
+    }
+    
     p <- p %>%
       add_trace(
-        x = c(0), 
-        y = c(0),
+        x = c(NA),  # Use NA instead of 0 to truly hide the marker
+        y = c(NA),
         type = "scatter",
         mode = "markers",
-        marker = list(size = 10, color = cols_used[[cls]]),
+        marker = list(
+          size = 10, 
+          color = col,
+          line = list(width = 0)  # Remove marker border
+        ),
         name = cls,
         showlegend = TRUE,
-        hoverinfo = "skip",
-        visible = "legendonly"
+        hoverinfo = "none"  # Changed from "skip" to "none"
       )
   }
   
