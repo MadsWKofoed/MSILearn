@@ -605,12 +605,11 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get colors and FORCE Unassigned to grey80
+  # Get colors - DON'T force Unassigned, let plotly choose
   cols_used <- class_colors()
-  cols_used["Unassigned"] <- "grey80"
   
-  # Use cluster raster function (transparent background)
-  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
+  # Remove Unassigned from cols_used to let plotly assign it
+  cols_used <- cols_used[names(cols_used) != "Unassigned"]
   
   # Get unique classes present in data for legend
   # ALWAYS put Unassigned first, then sort the rest
@@ -619,6 +618,20 @@ output$class_plot <- renderPlotly({
     if ("Unassigned" %in% present_classes) "Unassigned",
     sort(setdiff(present_classes, "Unassigned"))
   )
+  
+  # Plotly's default first color (the light blue you see)
+  plotly_default_blue <- "#1f77b4"
+  
+  # Build complete color mapping with Unassigned as plotly blue
+  all_colors <- c("Unassigned" = plotly_default_blue)
+  for (cls in present_classes) {
+    if (cls != "Unassigned") {
+      all_colors[cls] <- cols_used[[cls]]
+    }
+  }
+  
+  # Use cluster raster function with complete color mapping
+  img_uri <- make_cluster_raster_png(df, "Class", all_colors)
   
   # Start with base plot
   p <- plot_ly() %>%
@@ -637,15 +650,10 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces - use ACTUAL data points (opacity 0)
+  # Add legend traces with matching colors
   for (i in seq_along(present_classes)) {
     cls <- present_classes[i]
-    col <- cols_used[[cls]]
-    
-    # Strict fallback
-    if (is.null(col) || is.na(col) || col == "") {
-      col <- "grey80"
-    }
+    col <- all_colors[[cls]]
     
     # Find one pixel of this class to use as anchor
     example_idx <- which(df$Class == cls)[1]
@@ -659,7 +667,7 @@ output$class_plot <- renderPlotly({
         marker = list(
           size = 10, 
           color = col,
-          opacity = 0  # Make it invisible!
+          opacity = 0
         ),
         name = cls,
         showlegend = TRUE,
