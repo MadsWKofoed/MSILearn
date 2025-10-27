@@ -617,22 +617,8 @@ output$class_plot <- renderPlotly({
   # Get unique classes present in data for legend
   present_classes <- sort(unique(df$Class))
   
-  # Build legend trace for each class
-  legend_traces <- lapply(present_classes, function(cls) {
-    plot_ly(
-      x = 0, y = 0, 
-      type = "scatter", 
-      mode = "markers",
-      marker = list(size = 10, color = cols_used[[cls]]),
-      name = cls,
-      showlegend = TRUE,
-      hoverinfo = "skip"
-    )
-  })
-  
-  # Combine with image
+  # Start with base plot
   p <- plot_ly() %>%
-    add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers", showlegend = FALSE) %>%
     layout(
       images = list(list(
         source = img_uri,
@@ -648,9 +634,20 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces
-  for (trace in legend_traces) {
-    p <- add_trace(p, data = trace$x$data[[1]], inherit = FALSE)
+  # Add legend traces for each class
+  for (cls in present_classes) {
+    p <- p %>%
+      add_trace(
+        x = c(0), 
+        y = c(0),
+        type = "scatter",
+        mode = "markers",
+        marker = list(size = 10, color = cols_used[[cls]]),
+        name = cls,
+        showlegend = TRUE,
+        hoverinfo = "skip",
+        visible = "legendonly"  # Makes marker invisible but keeps legend
+      )
   }
   
   p
