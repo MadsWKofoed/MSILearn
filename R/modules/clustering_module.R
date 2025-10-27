@@ -636,28 +636,20 @@ output$class_legend <- renderUI({
   }
   df$Class <- as.character(df$Class)
   
-  # Get the EXACT same colors from reactive
+  # Get unique classes present in data
+  present_classes <- sort(unique(df$Class))
+  
+  # Get the EXACT colors used in the plot
   cols_used <- class_colors()
-  present_classes <- unique(df$Class)
   
-  # Build legend order: assigned classes first (in order they appear), then Unassigned ONLY if present
-  assigned_classes <- setdiff(present_classes, "Unassigned")
-  
-  # Only add Unassigned to legend if there are actually unassigned pixels
-  has_unassigned <- "Unassigned" %in% present_classes
-  class_order <- if (has_unassigned) {
-    c(assigned_classes, "Unassigned")
-  } else {
-    assigned_classes
-  }
-  
-  # Build HTML legend
-  legend_items <- lapply(class_order, function(cls) {
-    # Get color with fallback
-    color <- if (!is.null(cols_used[[cls]])) {
-      cols_used[[cls]]
-    } else {
-      "grey80"  # Fallback for safety
+  # Build legend items with EXACT color lookup
+  legend_items <- lapply(present_classes, function(cls) {
+    # Use [[ ]] for exact name-based lookup
+    color <- cols_used[[cls]]
+    
+    # Fallback only if truly missing
+    if (is.null(color) || is.na(color)) {
+      color <- "grey80"
     }
     
     tags$div(
