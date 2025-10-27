@@ -650,24 +650,20 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces with matching colors
+  # Add legend traces with matching colors - NO OPACITY!
   for (i in seq_along(present_classes)) {
     cls <- present_classes[i]
     col <- all_colors[[cls]]
     
-    # Find one pixel of this class to use as anchor
-    example_idx <- which(df$Class == cls)[1]
-    
     p <- p %>%
       add_trace(
-        x = df$x[example_idx], 
-        y = df$y[example_idx],
+        x = c(-1000),  # Way off screen
+        y = c(-1000),
         type = "scatter",
         mode = "markers",
         marker = list(
-          size = 10, 
-          color = col,
-          opacity = 0
+          size = 1,      # Tiny marker
+          color = col    # NO opacity parameter!
         ),
         name = cls,
         showlegend = TRUE,
