@@ -619,11 +619,11 @@ output$class_plot <- renderPlotly({
     sort(setdiff(present_classes, "Unassigned"))
   )
   
-  # Plotly's default first color (the light blue you see)
-  plotly_default_blue <- "#1f77b4"
+  # Use plotly's ACTUAL modern default light blue
+  plotly_light_blue <- "#636EFA"
   
-  # Build complete color mapping with Unassigned as plotly blue
-  all_colors <- c("Unassigned" = plotly_default_blue)
+  # Build complete color mapping with Unassigned as plotly light blue
+  all_colors <- c("Unassigned" = plotly_light_blue)
   for (cls in present_classes) {
     if (cls != "Unassigned") {
       all_colors[cls] <- cols_used[[cls]]
