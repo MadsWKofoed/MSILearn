@@ -597,15 +597,45 @@ output$class_plot <- renderPlotly({
   cols_used["Unassigned"] <- "grey80"
   class_colors(cols_used)
   
-  # Create raster image
-  img_uri <- make_class_raster_png(df, "Class", cols_used)
+  # Use the CLUSTER raster function (transparent background) with Class column
+  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
   
-  y_max <- max(df$y)
+  # Build plot - same as cluster_plot
+  p <- plot_ly(source = "class") %>%
+    add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
+    layout(
+      images = list(
+        list(
+          source = img_uri,
+          xref = "x", yref = "y",
+          x = 0, y = max(df$y) + 1,
+          sizex = max(df$x) + 1, sizey = max(df$y) + 1,
+          xanchor = "left", yanchor = "top",
+          sizing = "stretch",
+          layer = "below"
+        )
+      ),
+      xaxis = list(
+        range = c(-0.5, max(df$x) + 1.5),
+        showgrid = FALSE,
+        zeroline = FALSE,
+        scaleanchor = "y",
+        scaleratio = 1
+      ),
+      yaxis = list(
+        range = c(-0.5, max(df$y) + 1.5),
+        showgrid = FALSE,
+        zeroline = FALSE
+      ),
+      plot_bgcolor = "white",
+      showlegend = FALSE
+    ) %>%
+    config(
+      displaylogo = FALSE,
+      modeBarButtonsToAdd = list("drawopenpath", "drawclosedpath", "drawrect", "eraseshape")
+    )
   
-  # Start with empty plot
-  p <- plot_ly()
-  
-  # Add legend entries for all present classes
+  # Add legend entries
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
@@ -620,43 +650,8 @@ output$class_plot <- renderPlotly({
       )
   }
   
-  # Add the raster image
   p <- p %>%
-    layout(
-      images = list(
-        list(
-          source = img_uri,
-          xref = "x", yref = "y",
-          x = 0, y = y_max + 1,
-          sizex = max(df$x) + 1, sizey = y_max + 1,
-          xanchor = "left", yanchor = "top",
-          sizing = "stretch",
-          layer = "below"
-        )
-      ),
-      xaxis = list(
-        range = c(-0.5, max(df$x) + 1.5),
-        showgrid = FALSE,
-        zeroline = FALSE,
-        scaleanchor = "y",
-        scaleratio = 1
-      ),
-      yaxis = list(
-        range = c(-0.5, y_max + 1.5),
-        showgrid = FALSE,
-        zeroline = FALSE
-      ),
-      plot_bgcolor = "white",
-      paper_bgcolor = "white",
-      showlegend = TRUE,
-      legend = list(
-        x = 1.02,
-        y = 1,
-        xanchor = "left",
-        yanchor = "top"
-      )
-    ) %>%
-    config(displaylogo = FALSE, modeBarButtonsToAdd = list("drawrect", "drawopenpath"))
+    layout(showlegend = TRUE)
   
   p
 })
