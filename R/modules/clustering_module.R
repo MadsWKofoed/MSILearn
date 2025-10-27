@@ -535,6 +535,32 @@ output$cluster_plot <- renderPlotly({
   
   p
 })
+
+
+# Add a new helper function specifically for CLASS plot (solid background)
+make_class_raster_png <- function(df, fill_var, colors) {
+  df$x <- df$x - min(df$x) + 1
+  df$y <- df$y - min(df$y) + 1
+  width <- max(df$x)
+  height <- max(df$y)
+  
+  # Create matrix filled with "Unassigned" (not NA)
+  mat <- matrix("Unassigned", nrow = height, ncol = width)
+  mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
+  
+  col_img <- matrix(colors[mat], nrow = height, ncol = width)
+  
+  rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
+  rgb_array <- array(NA_real_, dim = c(height, width, 4))
+  rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
+  rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
+  rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
+  rgb_array[,,4] <- 1  # All pixels fully opaque
+  
+  tmp <- tempfile(fileext = ".png")
+  png::writePNG(rgb_array, target = tmp)
+  base64enc::dataURI(file = tmp, mime = "image/png")
+}    
     
 # --- Class plot ---
 output$class_plot <- renderPlotly({
@@ -559,12 +585,11 @@ output$class_plot <- renderPlotly({
   for (cls in present_classes) {
     if (!cls %in% names(cols_used)) {
       if (cls == "Unassigned") {
-        cols_used["Unassigned"] <- "grey80"
+        cols_used[cls] <- "grey80"
       } else {
-        # Assign next palette color
-        i <- next_color_i()
-        cols_used[cls] <- my_palette[i]
-        next_color_i(if (i >= length(my_palette)) 1 else i + 1)
+        idx <- next_color_i()
+        cols_used[cls] <- my_palette[idx]
+        next_color_i(idx %% length(my_palette) + 1)
       }
     }
   }
@@ -575,8 +600,8 @@ output$class_plot <- renderPlotly({
   # Update the reactive value
   class_colors(cols_used)
   
-  # Create image using current colors
-  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
+  # Create image using CLASS version (solid background)
+  img_uri <- make_class_raster_png(df, "Class", cols_used)
   
   # Build plot
   p <- plot_ly()
@@ -589,43 +614,48 @@ output$class_plot <- renderPlotly({
   for (class_name in class_order) {
     p <- p %>%
       add_trace(
-        x = c(0, 0),
-        y = c(0, 0),
-        type = "scatter",
-        mode = "markers",
-        marker = list(
-          size = 10,
-          color = cols_used[class_name],
-          symbol = "square"
-        ),
+        x = NULL, y = NULL,
+        type = "scatter", mode = "markers",
+        marker = list(size = 10, color = cols_used[class_name]),
         name = class_name,
-        showlegend = TRUE,
-        hoverinfo = "skip",
-        visible = "legendonly"
+        showlegend = TRUE
       )
   }
   
+  y_max <- max(df$y)
+  
   p <- p %>%
     layout(
-      images = list(list(
-        source = img_uri,
-        xref = "x", yref = "y",
-        x = 0, y = max(df$y),
-        sizex = max(df$x), sizey = max(df$y),
-        sizing = "stretch", layer = "below"
-      )),
-      title = "User Annotation Result",
-      xaxis = list(range = c(0, max(df$x)), title = "x"),
-      yaxis = list(range = c(0, max(df$y)), title = "y",
-                  scaleanchor = "x", scaleratio = 1),
+      images = list(
+        list(
+          source = img_uri,
+          xref = "x", yref = "y",
+          x = 0, y = y_max + 1,
+          sizex = max(df$x) + 1, sizey = y_max + 1,
+          xanchor = "left", yanchor = "top",
+          sizing = "stretch",
+          layer = "below"
+        )
+      ),
+      xaxis = list(
+        range = c(-0.5, max(df$x) + 1.5),
+        showgrid = FALSE,
+        zeroline = FALSE,
+        scaleanchor = "y",
+        scaleratio = 1
+      ),
+      yaxis = list(
+        range = c(-0.5, y_max + 1.5),
+        showgrid = FALSE,
+        zeroline = FALSE
+      ),
+      plot_bgcolor = "white",
+      showlegend = TRUE,
       legend = list(
         x = 1.02,
         y = 1,
         xanchor = "left",
-        yanchor = "top",
-        bgcolor = "rgba(255, 255, 255, 0.9)",
-        bordercolor = "black",
-        borderwidth = 1
+        yanchor = "top"
       )
     ) %>%
     config(displaylogo = FALSE)
