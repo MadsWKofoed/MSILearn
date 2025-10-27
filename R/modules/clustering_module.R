@@ -597,17 +597,66 @@ output$class_plot <- renderPlotly({
   cols_used["Unassigned"] <- "grey80"
   class_colors(cols_used)
   
-  # Simple scatter plot
-  p <- plot_ly(df, x = ~x, y = ~y, color = ~Class, colors = cols_used,
-               type = "scatter", mode = "markers", 
-               marker = list(size = 5, symbol = "square")) %>%
+  # Create raster image
+  img_uri <- make_class_raster_png(df, "Class", cols_used)
+  
+  y_max <- max(df$y)
+  
+  # Start with empty plot
+  p <- plot_ly()
+  
+  # Add legend entries for all present classes
+  assigned_classes <- setdiff(present_classes, "Unassigned")
+  class_order <- c(assigned_classes, "Unassigned")
+  
+  for (class_name in class_order) {
+    p <- p %>%
+      add_trace(
+        x = NULL, y = NULL,
+        type = "scatter", mode = "markers",
+        marker = list(size = 10, color = cols_used[class_name]),
+        name = class_name,
+        showlegend = TRUE
+      )
+  }
+  
+  # Add the raster image
+  p <- p %>%
     layout(
-      xaxis = list(scaleanchor = "y", scaleratio = 1),
-      yaxis = list(autorange = "reversed"),
+      images = list(
+        list(
+          source = img_uri,
+          xref = "x", yref = "y",
+          x = 0, y = y_max + 1,
+          sizex = max(df$x) + 1, sizey = y_max + 1,
+          xanchor = "left", yanchor = "top",
+          sizing = "stretch",
+          layer = "below"
+        )
+      ),
+      xaxis = list(
+        range = c(-0.5, max(df$x) + 1.5),
+        showgrid = FALSE,
+        zeroline = FALSE,
+        scaleanchor = "y",
+        scaleratio = 1
+      ),
+      yaxis = list(
+        range = c(-0.5, y_max + 1.5),
+        showgrid = FALSE,
+        zeroline = FALSE
+      ),
       plot_bgcolor = "white",
-      paper_bgcolor = "white"
+      paper_bgcolor = "white",
+      showlegend = TRUE,
+      legend = list(
+        x = 1.02,
+        y = 1,
+        xanchor = "left",
+        yanchor = "top"
+      )
     ) %>%
-    config(displaylogo = FALSE)
+    config(displaylogo = FALSE, modeBarButtonsToAdd = list("drawrect", "drawopenpath"))
   
   p
 })
