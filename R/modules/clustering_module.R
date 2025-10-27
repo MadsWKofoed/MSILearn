@@ -592,9 +592,7 @@ make_class_plot_with_legend <- function(df, fill_var, colors) {
   base64enc::dataURI(file = tmp, mime = "image/png")
 }
 
-# ...existing code...
-
-# --- Class plot with integrated legend (interactive) ---
+# --- Class plot (interactive with raster) ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
@@ -613,33 +611,50 @@ output$class_plot <- renderPlotly({
     cols_used["Unassigned"] <- "grey80"
   }
   
-  # Convert to factor with levels matching color names
-  df$Class <- factor(df$Class, levels = names(cols_used))
+  # Use cluster raster function (transparent background)
+  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
   
-  # Create ggplot
-  p <- ggplot(df, aes(x = x, y = y, fill = Class)) +
-    geom_tile() +
-    scale_fill_manual(values = cols_used, drop = FALSE) +
-    scale_y_reverse() +  # Match cluster plot orientation
-    coord_equal() +
-    theme_minimal() +
-    theme(
-      panel.grid = element_blank(),
-      panel.background = element_rect(fill = "transparent", color = NA),
-      plot.background = element_rect(fill = "transparent", color = NA)
-    ) +
-    labs(x = "x", y = "y", fill = "Classes")
+  # Get unique classes present in data for legend
+  present_classes <- sort(unique(df$Class))
   
-  # Convert to plotly (keeps interactivity)
-  ggplotly(p) %>%
-    layout(
-      plot_bgcolor = "rgba(0,0,0,0)",
-      paper_bgcolor = "rgba(0,0,0,0)"
+  # Build legend trace for each class
+  legend_traces <- lapply(present_classes, function(cls) {
+    plot_ly(
+      x = 0, y = 0, 
+      type = "scatter", 
+      mode = "markers",
+      marker = list(size = 10, color = cols_used[[cls]]),
+      name = cls,
+      showlegend = TRUE,
+      hoverinfo = "skip"
     )
+  })
+  
+  # Combine with image
+  p <- plot_ly() %>%
+    add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers", showlegend = FALSE) %>%
+    layout(
+      images = list(list(
+        source = img_uri,
+        xref = "x", yref = "y",
+        x = 0, y = max(df$y),
+        sizex = max(df$x), sizey = max(df$y),
+        sizing = "stretch", layer = "below"
+      )),
+      title = "Class Assignment",
+      xaxis = list(range = c(0, max(df$x)), title = "x"),
+      yaxis = list(range = c(0, max(df$y)), title = "y",
+                  scaleanchor = "x", scaleratio = 1),
+      showlegend = TRUE
+    )
+  
+  # Add legend traces
+  for (trace in legend_traces) {
+    p <- add_trace(p, data = trace$x$data[[1]], inherit = FALSE)
+  }
+  
+  p
 })
-
-
-
 
 
     
