@@ -615,7 +615,12 @@ output$class_plot <- renderPlotly({
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
   
   # Get unique classes present in data for legend
-  present_classes <- sort(unique(df$Class))
+  # ALWAYS put Unassigned first, then sort the rest
+  present_classes <- unique(df$Class)
+  present_classes <- c(
+    if ("Unassigned" %in% present_classes) "Unassigned",
+    sort(setdiff(present_classes, "Unassigned"))
+  )
   
   # Start with base plot
   p <- plot_ly() %>%
@@ -634,7 +639,7 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces for each class
+  # Add legend traces for each class (Unassigned always first!)
   for (cls in present_classes) {
     p <- p %>%
       add_trace(
@@ -646,7 +651,7 @@ output$class_plot <- renderPlotly({
         name = cls,
         showlegend = TRUE,
         hoverinfo = "skip",
-        visible = "legendonly"  # Makes marker invisible but keeps legend
+        visible = "legendonly"
       )
   }
   
