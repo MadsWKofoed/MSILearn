@@ -424,18 +424,20 @@ observeEvent(input$assign_class, {
   df$Class[inside] <- lab
   annotated_data(df)
   
-  # Update colors PROPERLY - assign ONCE and KEEP
-  cols <- class_colors()
-  
-  if (!(lab %in% names(cols))) {
-    i <- next_color_i()
-    cols[lab] <- my_palette[i]
-    next_color_i(if (i >= length(my_palette)) 1 else i + 1)
+  # Update colors - NEVER add Unassigned to palette
+  if (lab != "Unassigned") {
+    cols <- class_colors()
+    
+    if (!(lab %in% names(cols))) {
+      i <- next_color_i()
+      cols[lab] <- my_palette[i]
+      next_color_i(if (i >= length(my_palette)) 1 else i + 1)
+    }
+    
+    # Ensure Unassigned stays grey
+    cols["Unassigned"] <- "grey80"
+    class_colors(cols)
   }
-  
-  # Ensure Unassigned stays grey
-  cols["Unassigned"] <- "grey80"
-  class_colors(cols)
   
   # Clear shapes
   try({
@@ -573,19 +575,32 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # USE EXISTING COLORS - don't rebuild!
+  # Get current color mapping
   cols_used <- class_colors()
   
-  # Make sure Unassigned is always there
-  if (!("Unassigned" %in% names(cols_used))) {
-    cols_used["Unassigned"] <- "grey80"
-    class_colors(cols_used)
+  # Get all unique classes
+  present_classes <- unique(df$Class)
+  
+  # Assign colors to new classes
+  for (cls in present_classes) {
+    if (!cls %in% names(cols_used)) {
+      if (cls == "Unassigned") {
+        cols_used[cls] <- "grey80"
+      } else {
+        idx <- next_color_i()
+        cols_used[cls] <- my_palette[idx]
+        next_color_i(idx %% length(my_palette) + 1)
+      }
+    }
   }
   
-  # Use the class raster function with Class column
-  img_uri <- make_class_raster_png(df, "Class", cols_used)
+  cols_used["Unassigned"] <- "grey80"
+  class_colors(cols_used)
   
-  # Build plot
+  # Use the CLUSTER raster function (transparent background) with Class column
+  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
+  
+  # Build plot - same as cluster_plot
   p <- plot_ly(source = "class") %>%
     layout(
       images = list(
@@ -622,7 +637,7 @@ output$class_plot <- renderPlotly({
   p
 })
 
-# --- Class legend ---
+# --- Class legend (separate UI element) ---
 output$class_legend <- renderUI({
   df <- annotated_data() %||% clustered_data()
   req(df)
@@ -634,27 +649,17 @@ output$class_legend <- renderUI({
   }
   df$Class <- as.character(df$Class)
   
-  # Get the EXACT same colors from reactive
+  # Get the EXACT same colors used in the plot
   cols_used <- class_colors()
-  req(cols_used)
-  
-  # Ensure Unassigned is in the color map
-  if (!("Unassigned" %in% names(cols_used))) {
-    cols_used["Unassigned"] <- "grey80"
-  }
-  
   present_classes <- unique(df$Class)
+  
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
-  # Build HTML legend
+  # Build HTML legend using the exact colors from cols_used
   legend_items <- lapply(class_order, function(cls) {
-    # Get color - with fallback
-    color <- if (!is.null(cols_used[[cls]])) {
-      cols_used[[cls]]
-    } else {
-      "grey80"
-    }
+    # Use the exact color from the reactive value
+    color <- cols_used[[cls]]
     
     tags$div(
       style = "margin-bottom: 6px; display: flex; align-items: center;",
@@ -671,6 +676,7 @@ output$class_legend <- renderUI({
     tags$div(style = "margin-top: 8px;", legend_items)
   )
 })
+
 
 
     
