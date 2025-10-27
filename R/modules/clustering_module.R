@@ -575,7 +575,7 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get current color mapping - START with Unassigned grey
+  # Get current color mapping
   cols_used <- class_colors()
   
   # Get all unique classes in the data
@@ -594,20 +594,22 @@ output$class_plot <- renderPlotly({
     }
   }
   
-  # ALWAYS force Unassigned to grey AFTER all assignments
+  # ALWAYS force Unassigned to grey
   cols_used["Unassigned"] <- "grey80"
   
   # Update the reactive value
   class_colors(cols_used)
   
-  # Create image using CLASS version (solid background)
+  # Create image using CLASS version (solid background with all pixels)
   img_uri <- make_class_raster_png(df, "Class", cols_used)
+  
+  y_max <- max(df$y)
   
   # Build plot
   p <- plot_ly()
   
-  # Add legend entries - ONLY show classes that actually exist in data
-  # Unassigned LAST
+  # Add legend entries for ALL classes present in data
+  # Put assigned classes first, then Unassigned last
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
@@ -621,8 +623,6 @@ output$class_plot <- renderPlotly({
         showlegend = TRUE
       )
   }
-  
-  y_max <- max(df$y)
   
   p <- p %>%
     layout(
@@ -650,6 +650,7 @@ output$class_plot <- renderPlotly({
         zeroline = FALSE
       ),
       plot_bgcolor = "white",
+      paper_bgcolor = "white",
       showlegend = TRUE,
       legend = list(
         x = 1.02,
