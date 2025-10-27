@@ -562,7 +562,39 @@ make_class_raster_png <- function(df, fill_var, colors) {
   base64enc::dataURI(file = tmp, mime = "image/png")
 }    
     
-# --- Class plot ---
+# --- Updated raster helper that INCLUDES legend ---
+make_class_plot_with_legend <- function(df, fill_var, colors) {
+  # Ensure Class column exists
+  if (!fill_var %in% names(df)) {
+    df[[fill_var]] <- "Unassigned"
+  }
+  df[[fill_var]] <- factor(df[[fill_var]], levels = names(colors))
+  
+  # Create ggplot
+  p <- ggplot(df, aes(x = x, y = y, fill = .data[[fill_var]])) +
+    geom_tile() +
+    scale_fill_manual(values = colors, drop = FALSE) +
+    coord_equal() +
+    theme_void() +
+    theme(
+      legend.position = "right",
+      legend.title = element_text(face = "bold"),
+      legend.text = element_text(size = 10),
+      legend.key.size = unit(0.8, "cm")
+    ) +
+    labs(fill = "Classes")
+  
+  # Save to temp file
+  tmp <- tempfile(fileext = ".png")
+  ggsave(tmp, p, width = 10, height = 8, dpi = 150, bg = "transparent")
+  
+  # Return as data URI
+  base64enc::dataURI(file = tmp, mime = "image/png")
+}
+
+# ...existing code...
+
+# --- Class plot with integrated legend ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
@@ -575,98 +607,39 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # USE EXISTING COLORS - don't reassign!
+  # Get colors
   cols_used <- class_colors()
-  
-  # Only ensure Unassigned is there
   if (!("Unassigned" %in% names(cols_used))) {
     cols_used["Unassigned"] <- "grey80"
-    class_colors(cols_used)
   }
   
-  # Use the transparent raster function with Class column
-  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
+  # Create plot with legend as PNG
+  img_uri <- make_class_plot_with_legend(df, "Class", cols_used)
   
-  # Build plot
-  p <- plot_ly(source = "class") %>%
+  # Display as image in plotly
+  plot_ly() %>%
     layout(
       images = list(
         list(
           source = img_uri,
-          xref = "x", yref = "y",
-          x = 0, y = max(df$y) + 1,
-          sizex = max(df$x) + 1, sizey = max(df$y) + 1,
+          xref = "paper", yref = "paper",
+          x = 0, y = 1,
+          sizex = 1, sizey = 1,
           xanchor = "left", yanchor = "top",
-          sizing = "stretch",
+          sizing = "contain",
           layer = "below"
         )
       ),
-      xaxis = list(
-        range = c(-0.5, max(df$x) + 1.5),
-        showgrid = FALSE,
-        zeroline = FALSE,
-        scaleanchor = "y",
-        scaleratio = 1
-      ),
-      yaxis = list(
-        range = c(-0.5, max(df$y) + 1.5),
-        showgrid = FALSE,
-        zeroline = FALSE
-      ),
+      xaxis = list(visible = FALSE),
+      yaxis = list(visible = FALSE),
       plot_bgcolor = "white",
-      showlegend = FALSE
+      paper_bgcolor = "white",
+      margin = list(l = 0, r = 0, t = 0, b = 0)
     ) %>%
-    config(
-      displaylogo = FALSE,
-      modeBarButtonsToAdd = list("drawopenpath", "drawclosedpath", "drawrect", "eraseshape")
-    )
-  
-  p
+    config(displayModeBar = FALSE)
 })
 
-# --- Class legend (separate UI element) ---
-output$class_legend <- renderUI({
-  df <- annotated_data() %||% clustered_data()
-  req(df)
-  
-  if (!"Class" %in% names(df)) {
-    df$Class <- "Unassigned"
-  } else {
-    df$Class[is.na(df$Class)] <- "Unassigned"
-  }
-  df$Class <- as.character(df$Class)
-  
-  # Get unique classes present in data
-  present_classes <- sort(unique(df$Class))
-  
-  # Get the EXACT colors used in the plot
-  cols_used <- class_colors()
-  
-  # Build legend items with EXACT color lookup
-  legend_items <- lapply(present_classes, function(cls) {
-    # Use [[ ]] for exact name-based lookup
-    color <- cols_used[[cls]]
-    
-    # Fallback only if truly missing
-    if (is.null(color) || is.na(color)) {
-      color <- "grey80"
-    }
-    
-    tags$div(
-      style = "margin-bottom: 6px; display: flex; align-items: center;",
-      tags$div(
-        style = sprintf("width: 12px; height: 12px; background-color: %s; margin-right: 6px; border: 1px solid #999;", color)
-      ),
-      tags$span(style = "font-size: 13px;", cls)
-    )
-  })
-  
-  tags$div(
-    style = "padding: 10px; background: white; border: 1px solid #ddd; border-radius: 4px;",
-    tags$strong("Classes:"),
-    tags$div(style = "margin-top: 8px;", legend_items)
-  )
-})
+
 
 
 
@@ -676,8 +649,7 @@ output$class_legend <- renderUI({
       req(clustered_data())
       fluidRow(
         column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-        column(5, plotlyOutput(ns("class_plot"), height = "600px")),
-        column(1, uiOutput(ns("class_legend")))
+        column(6, plotlyOutput(ns("class_plot"), height = "600px"))
       )
     })
     
