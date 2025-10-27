@@ -607,11 +607,7 @@ output$class_plot <- renderPlotly({
   
   # Get colors and FORCE Unassigned to grey80
   cols_used <- class_colors()
-  cols_used["Unassigned"] <- "grey80"  # Force it explicitly
-  
-  # DEBUG: Print colors to console
-  print("Colors being used:")
-  print(cols_used)
+  cols_used["Unassigned"] <- "grey80"
   
   # Use cluster raster function (transparent background)
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
@@ -641,31 +637,33 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces - use the SAME cols_used
+  # Add legend traces - use ACTUAL data points (opacity 0)
   for (i in seq_along(present_classes)) {
     cls <- present_classes[i]
-    col <- cols_used[[cls]]  # Use [[ ]] for exact lookup
+    col <- cols_used[[cls]]
     
     # Strict fallback
     if (is.null(col) || is.na(col) || col == "") {
       col <- "grey80"
     }
     
+    # Find one pixel of this class to use as anchor
+    example_idx <- which(df$Class == cls)[1]
+    
     p <- p %>%
       add_trace(
-        x = c(0), 
-        y = c(0),
+        x = df$x[example_idx], 
+        y = df$y[example_idx],
         type = "scatter",
         mode = "markers",
         marker = list(
           size = 10, 
           color = col,
-          line = list(width = 0)
+          opacity = 0  # Make it invisible!
         ),
         name = cls,
         showlegend = TRUE,
-        hoverinfo = "skip",
-        visible = "legendonly"
+        hoverinfo = "skip"
       )
   }
   
