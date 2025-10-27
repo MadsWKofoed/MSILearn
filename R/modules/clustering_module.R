@@ -602,7 +602,6 @@ output$class_plot <- renderPlotly({
   
   # Build plot - same as cluster_plot
   p <- plot_ly(source = "class") %>%
-    add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
     layout(
       images = list(
         list(
@@ -635,25 +634,44 @@ output$class_plot <- renderPlotly({
       modeBarButtonsToAdd = list("drawopenpath", "drawclosedpath", "drawrect", "eraseshape")
     )
   
-  # Add legend entries
+  p
+})
+
+# --- Class legend (separate UI element) ---
+output$class_legend <- renderUI({
+  df <- annotated_data() %||% clustered_data()
+  req(df)
+  
+  if (!"Class" %in% names(df)) {
+    df$Class <- "Unassigned"
+  } else {
+    df$Class[is.na(df$Class)] <- "Unassigned"
+  }
+  df$Class <- as.character(df$Class)
+  
+  cols_used <- class_colors()
+  present_classes <- unique(df$Class)
+  
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
-  for (class_name in class_order) {
-    p <- p %>%
-      add_trace(
-        x = NULL, y = NULL,
-        type = "scatter", mode = "markers",
-        marker = list(size = 10, color = cols_used[class_name]),
-        name = class_name,
-        showlegend = TRUE
-      )
-  }
+  # Build HTML legend
+  legend_items <- lapply(class_order, function(cls) {
+    color <- cols_used[cls]
+    tags$div(
+      style = "margin-bottom: 8px; display: flex; align-items: center;",
+      tags$div(
+        style = sprintf("width: 20px; height: 20px; background-color: %s; margin-right: 8px; border: 1px solid #ccc;", color)
+      ),
+      tags$span(cls)
+    )
+  })
   
-  p <- p %>%
-    layout(showlegend = TRUE)
-  
-  p
+  tags$div(
+    style = "padding: 10px; background: white; border: 1px solid #ddd; border-radius: 4px;",
+    tags$strong("Classes:"),
+    tags$div(style = "margin-top: 10px;", legend_items)
+  )
 })
 
 
@@ -664,7 +682,8 @@ output$class_plot <- renderPlotly({
       req(clustered_data())
       fluidRow(
         column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-        column(6, plotlyOutput(ns("class_plot"), height = "600px"))
+        column(5, plotlyOutput(ns("class_plot"), height = "600px")),
+        column(1, uiOutput(ns("class_legend")))
       )
     })
     
