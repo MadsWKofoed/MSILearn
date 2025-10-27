@@ -567,7 +567,7 @@ output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
   
-  # Initialize Class column if missing - ALL pixels start as "Unassigned"
+  # Initialize Class column if missing
   if (!"Class" %in% names(df)) {
     df$Class <- "Unassigned"
   } else {
@@ -578,10 +578,10 @@ output$class_plot <- renderPlotly({
   # Get current color mapping
   cols_used <- class_colors()
   
-  # Get all unique classes in the data
+  # Get all unique classes
   present_classes <- unique(df$Class)
   
-  # Ensure ALL present classes have colors
+  # Assign colors to new classes
   for (cls in present_classes) {
     if (!cls %in% names(cols_used)) {
       if (cls == "Unassigned") {
@@ -594,70 +594,18 @@ output$class_plot <- renderPlotly({
     }
   }
   
-  # ALWAYS force Unassigned to grey
   cols_used["Unassigned"] <- "grey80"
-  
-  # Update the reactive value
   class_colors(cols_used)
   
-  # Create image using CLASS version (solid background with all pixels)
-  img_uri <- make_class_raster_png(df, "Class", cols_used)
-  
-  y_max <- max(df$y)
-  
-  # Build plot
-  p <- plot_ly()
-  
-  # Add legend entries for ALL classes present in data
-  # Put assigned classes first, then Unassigned last
-  assigned_classes <- setdiff(present_classes, "Unassigned")
-  class_order <- c(assigned_classes, "Unassigned")
-  
-  for (class_name in class_order) {
-    p <- p %>%
-      add_trace(
-        x = NULL, y = NULL,
-        type = "scatter", mode = "markers",
-        marker = list(size = 10, color = cols_used[class_name]),
-        name = class_name,
-        showlegend = TRUE
-      )
-  }
-  
-  p <- p %>%
+  # Simple scatter plot
+  p <- plot_ly(df, x = ~x, y = ~y, color = ~Class, colors = cols_used,
+               type = "scatter", mode = "markers", 
+               marker = list(size = 5, symbol = "square")) %>%
     layout(
-      images = list(
-        list(
-          source = img_uri,
-          xref = "x", yref = "y",
-          x = 0, y = y_max + 1,
-          sizex = max(df$x) + 1, sizey = y_max + 1,
-          xanchor = "left", yanchor = "top",
-          sizing = "stretch",
-          layer = "below"
-        )
-      ),
-      xaxis = list(
-        range = c(-0.5, max(df$x) + 1.5),
-        showgrid = FALSE,
-        zeroline = FALSE,
-        scaleanchor = "y",
-        scaleratio = 1
-      ),
-      yaxis = list(
-        range = c(-0.5, y_max + 1.5),
-        showgrid = FALSE,
-        zeroline = FALSE
-      ),
+      xaxis = list(scaleanchor = "y", scaleratio = 1),
+      yaxis = list(autorange = "reversed"),
       plot_bgcolor = "white",
-      paper_bgcolor = "white",
-      showlegend = TRUE,
-      legend = list(
-        x = 1.02,
-        y = 1,
-        xanchor = "left",
-        yanchor = "top"
-      )
+      paper_bgcolor = "white"
     ) %>%
     config(displaylogo = FALSE)
   
