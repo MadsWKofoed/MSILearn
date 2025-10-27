@@ -242,7 +242,7 @@ clustering_module_server <- function(id, msi_con) {
     
     # --- State and colors ---
     my_palette <- c(
-      "red","blue","orange", "lightgreen","purple1","brown","pink","cyan","magenta","yellow",
+      "red","blue","orange", "lightgreen","mediumpurple","brown","pink","cyan","magenta","yellow",
       "darkred","darkblue","darkgreen","darkorange","darkviolet","gold","gray20","gray50",
       "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
       "khaki","steelblue","seagreen","tan"
