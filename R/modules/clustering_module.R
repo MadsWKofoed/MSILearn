@@ -633,9 +633,7 @@ output$class_plot <- renderPlotly({
       xaxis = list(range = c(0, max(df$x)), title = "x"),
       yaxis = list(range = c(0, max(df$y)), title = "y",
                   scaleanchor = "x", scaleratio = 1),
-      showlegend = TRUE,
-      # Force plotly to NOT use default colors
-      colorway = character(0)
+      showlegend = TRUE
     )
   
   # Add legend traces for each class
@@ -650,19 +648,18 @@ output$class_plot <- renderPlotly({
     
     p <- p %>%
       add_trace(
-        x = c(0), 
-        y = c(0),
+        x = c(-1000),  # Put marker off-screen
+        y = c(-1000),
         type = "scatter",
         mode = "markers",
         marker = list(
           size = 10, 
           color = col,
-          line = list(color = col, width = 2)  # Match border to fill
+          line = list(width = 0)  # Remove border completely
         ),
         name = cls,
         showlegend = TRUE,
-        hoverinfo = "skip",
-        visible = "legendonly"  # Hide the marker but show in legend
+        hoverinfo = "skip"
       )
   }
   
