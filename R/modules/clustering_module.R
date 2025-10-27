@@ -242,7 +242,7 @@ clustering_module_server <- function(id, msi_con) {
     
     # --- State and colors ---
     my_palette <- c(
-      "red","blue","green","orange","purple","brown","pink","cyan","magenta","yellow",
+      "red","blue","orange","green","purple","brown","pink","cyan","magenta","yellow",
       "darkred","darkblue","darkgreen","darkorange","darkviolet","gold","gray20","gray50",
       "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
       "khaki","steelblue","seagreen","tan"
@@ -257,8 +257,8 @@ clustering_module_server <- function(id, msi_con) {
       next_color_i(1)
     })
     
-# --- Raster helper for CLUSTER plot (transparent background) ---
-make_cluster_raster_png <- function(df, fill_var, colors) {
+# --- Raster helper for both cluster and class plots (transparent background) ---
+make_raster_png <- function(df, fill_var, colors) {
   df$x <- df$x - min(df$x) + 1
   df$y <- df$y - min(df$y) + 1
   width <- max(df$x)
@@ -505,7 +505,7 @@ output$cluster_plot <- renderPlotly({
     brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
     as.character(1:max(df$cluster))
   )
-  img_uri <- make_cluster_raster_png(df, "cluster", cols)  # <-- Use cluster version
+  img_uri <- make_raster_png(df, "cluster", cols)  # <-- Use cluster version
   
   p <- plot_ly(source = "cluster") %>%
     add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
@@ -536,61 +536,6 @@ output$cluster_plot <- renderPlotly({
   p
 })
 
-
-# Add a new helper function specifically for CLASS plot (solid background)
-make_class_raster_png <- function(df, fill_var, colors) {
-  df$x <- df$x - min(df$x) + 1
-  df$y <- df$y - min(df$y) + 1
-  width <- max(df$x)
-  height <- max(df$y)
-  
-  # Create matrix filled with "Unassigned" (not NA)
-  mat <- matrix("Unassigned", nrow = height, ncol = width)
-  mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
-  
-  col_img <- matrix(colors[mat], nrow = height, ncol = width)
-  
-  rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
-  rgb_array <- array(NA_real_, dim = c(height, width, 4))
-  rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
-  rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
-  rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
-  rgb_array[,,4] <- 1  # All pixels fully opaque
-  
-  tmp <- tempfile(fileext = ".png")
-  png::writePNG(rgb_array, target = tmp)
-  base64enc::dataURI(file = tmp, mime = "image/png")
-}    
-    
-# --- Updated raster helper that INCLUDES legend ---
-make_class_plot_with_legend <- function(df, fill_var, colors) {
-  # Ensure Class column exists
-  if (!fill_var %in% names(df)) {
-    df[[fill_var]] <- "Unassigned"
-  }
-  df[[fill_var]] <- factor(df[[fill_var]], levels = names(colors))
-  
-  # Create ggplot
-  p <- ggplot(df, aes(x = x, y = y, fill = .data[[fill_var]])) +
-    geom_tile() +
-    scale_fill_manual(values = colors, drop = FALSE) +
-    coord_equal() +
-    theme_void() +
-    theme(
-      legend.position = "right",
-      legend.title = element_text(face = "bold"),
-      legend.text = element_text(size = 10),
-      legend.key.size = unit(0.8, "cm")
-    ) +
-    labs(fill = "Classes")
-  
-  # Save to temp file
-  tmp <- tempfile(fileext = ".png")
-  ggsave(tmp, p, width = 10, height = 8, dpi = 150, bg = "transparent")
-  
-  # Return as data URI
-  base64enc::dataURI(file = tmp, mime = "image/png")
-}
 
 # --- Class plot (interactive with raster) ---
 output$class_plot <- renderPlotly({
@@ -631,7 +576,7 @@ output$class_plot <- renderPlotly({
   }
   
   # Use cluster raster function with complete color mapping
-  img_uri <- make_cluster_raster_png(df, "Class", all_colors)
+  img_uri <- make_raster_png(df, "Class", all_colors)
   
   # Start with base plot
   p <- plot_ly() %>%
@@ -650,7 +595,10 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces with matching colors - NO OPACITY!
+  # Add legend traces with matching colors
+  # NOTE: Markers positioned off-screen at (-1000, -1000) to create legend entries
+  # without cluttering the plot. This is necessary because the plot is a raster image
+  # with no actual data traces, but plotly requires traces to generate legends.
   for (i in seq_along(present_classes)) {
     cls <- present_classes[i]
     col <- all_colors[[cls]]
@@ -662,8 +610,8 @@ output$class_plot <- renderPlotly({
         type = "scatter",
         mode = "markers",
         marker = list(
-          size = 1,      # Tiny marker
-          color = col    # NO opacity parameter!
+          size = 10,   
+          color = col
         ),
         name = cls,
         showlegend = TRUE,
