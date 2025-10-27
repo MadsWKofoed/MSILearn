@@ -594,7 +594,7 @@ make_class_plot_with_legend <- function(df, fill_var, colors) {
 
 # ...existing code...
 
-# --- Class plot with integrated legend ---
+# --- Class plot with integrated legend (interactive) ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
   req(df)
@@ -613,30 +613,29 @@ output$class_plot <- renderPlotly({
     cols_used["Unassigned"] <- "grey80"
   }
   
-  # Create plot with legend as PNG
-  img_uri <- make_class_plot_with_legend(df, "Class", cols_used)
+  # Convert to factor with levels matching color names
+  df$Class <- factor(df$Class, levels = names(cols_used))
   
-  # Display as image in plotly
-  plot_ly() %>%
+  # Create ggplot
+  p <- ggplot(df, aes(x = x, y = y, fill = Class)) +
+    geom_tile() +
+    scale_fill_manual(values = cols_used, drop = FALSE) +
+    scale_y_reverse() +  # Match cluster plot orientation
+    coord_equal() +
+    theme_minimal() +
+    theme(
+      panel.grid = element_blank(),
+      panel.background = element_rect(fill = "transparent", color = NA),
+      plot.background = element_rect(fill = "transparent", color = NA)
+    ) +
+    labs(x = "x", y = "y", fill = "Classes")
+  
+  # Convert to plotly (keeps interactivity)
+  ggplotly(p) %>%
     layout(
-      images = list(
-        list(
-          source = img_uri,
-          xref = "paper", yref = "paper",
-          x = 0, y = 1,
-          sizex = 1, sizey = 1,
-          xanchor = "left", yanchor = "top",
-          sizing = "contain",
-          layer = "below"
-        )
-      ),
-      xaxis = list(visible = FALSE),
-      yaxis = list(visible = FALSE),
-      plot_bgcolor = "white",
-      paper_bgcolor = "white",
-      margin = list(l = 0, r = 0, t = 0, b = 0)
-    ) %>%
-    config(displayModeBar = FALSE)
+      plot_bgcolor = "rgba(0,0,0,0)",
+      paper_bgcolor = "rgba(0,0,0,0)"
+    )
 })
 
 
