@@ -649,28 +649,31 @@ output$class_legend <- renderUI({
   }
   df$Class <- as.character(df$Class)
   
+  # Get the EXACT same colors used in the plot
   cols_used <- class_colors()
   present_classes <- unique(df$Class)
   
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
-  # Build HTML legend
+  # Build HTML legend using the exact colors from cols_used
   legend_items <- lapply(class_order, function(cls) {
-    color <- cols_used[cls]
+    # Use the exact color from the reactive value
+    color <- cols_used[[cls]]
+    
     tags$div(
-      style = "margin-bottom: 8px; display: flex; align-items: center;",
+      style = "margin-bottom: 6px; display: flex; align-items: center;",
       tags$div(
-        style = sprintf("width: 20px; height: 20px; background-color: %s; margin-right: 8px; border: 1px solid #ccc;", color)
+        style = sprintf("width: 12px; height: 12px; background-color: %s; margin-right: 6px; border: 1px solid #999;", color)
       ),
-      tags$span(cls)
+      tags$span(style = "font-size: 13px;", cls)
     )
   })
   
   tags$div(
     style = "padding: 10px; background: white; border: 1px solid #ddd; border-radius: 4px;",
     tags$strong("Classes:"),
-    tags$div(style = "margin-top: 10px;", legend_items)
+    tags$div(style = "margin-top: 8px;", legend_items)
   )
 })
 
