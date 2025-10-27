@@ -575,32 +575,25 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get current color mapping
-  cols_used <- class_colors()
-  
   # Get all unique classes
   present_classes <- unique(df$Class)
   
-  # Assign colors to new classes
-  for (cls in present_classes) {
-    if (!cls %in% names(cols_used)) {
-      if (cls == "Unassigned") {
-        cols_used[cls] <- "grey80"
-      } else {
-        idx <- next_color_i()
-        cols_used[cls] <- my_palette[idx]
-        next_color_i(idx %% length(my_palette) + 1)
-      }
-    }
+  # Build color mapping from scratch each time
+  cols_used <- c("Unassigned" = "grey80")
+  
+  assigned_classes <- setdiff(present_classes, "Unassigned")
+  for (i in seq_along(assigned_classes)) {
+    cls <- assigned_classes[i]
+    cols_used[cls] <- my_palette[((i - 1) %% length(my_palette)) + 1]
   }
   
-  cols_used["Unassigned"] <- "grey80"
+  # Update reactive
   class_colors(cols_used)
   
-  # Use the CLUSTER raster function (transparent background) with Class column
+  # Use the CLUSTER raster function with Class column
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
   
-  # Build plot - same as cluster_plot
+  # Build plot
   p <- plot_ly(source = "class") %>%
     layout(
       images = list(
@@ -637,7 +630,7 @@ output$class_plot <- renderPlotly({
   p
 })
 
-# --- Class legend (separate UI element) ---
+# --- Class legend ---
 output$class_legend <- renderUI({
   df <- annotated_data() %||% clustered_data()
   req(df)
@@ -649,16 +642,16 @@ output$class_legend <- renderUI({
   }
   df$Class <- as.character(df$Class)
   
-  # Get the EXACT same colors used in the plot
+  # Get the EXACT same colors from reactive
   cols_used <- class_colors()
-  present_classes <- unique(df$Class)
+  req(cols_used)
   
+  present_classes <- unique(df$Class)
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
-  # Build HTML legend using the exact colors from cols_used
+  # Build HTML legend
   legend_items <- lapply(class_order, function(cls) {
-    # Use the exact color from the reactive value
     color <- cols_used[[cls]]
     
     tags$div(
@@ -676,7 +669,6 @@ output$class_legend <- renderUI({
     tags$div(style = "margin-top: 8px;", legend_items)
   )
 })
-
 
 
     
