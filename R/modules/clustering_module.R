@@ -605,9 +605,8 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get colors and FORCE Unassigned to grey80
+  # Get colors - DON'T modify here, just use what's stored
   cols_used <- class_colors()
-  cols_used["Unassigned"] <- "grey80"  # Force it here too
   
   # Use cluster raster function (transparent background)
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
@@ -620,17 +619,7 @@ output$class_plot <- renderPlotly({
     sort(setdiff(present_classes, "Unassigned"))
   )
   
-  # Create dummy data frame for legend traces
-  legend_df <- data.frame(
-    class = present_classes,
-    color = sapply(present_classes, function(cls) {
-      col <- cols_used[[cls]]
-      if (is.null(col) || is.na(col) || col == "") "grey80" else col
-    }),
-    stringsAsFactors = FALSE
-  )
-  
-  # Start with base plot - NO traces yet
+  # Start with base plot
   p <- plot_ly() %>%
     layout(
       images = list(list(
@@ -644,23 +633,36 @@ output$class_plot <- renderPlotly({
       xaxis = list(range = c(0, max(df$x)), title = "x"),
       yaxis = list(range = c(0, max(df$y)), title = "y",
                   scaleanchor = "x", scaleratio = 1),
-      showlegend = TRUE
+      showlegend = TRUE,
+      # Force plotly to NOT use default colors
+      colorway = character(0)
     )
   
-  # Add traces using the pre-computed colors
-  for (i in seq_len(nrow(legend_df))) {
+  # Add legend traces for each class
+  for (i in seq_along(present_classes)) {
+    cls <- present_classes[i]
+    col <- cols_used[[cls]]
+    
+    # Strict fallback
+    if (is.null(col) || is.na(col) || col == "") {
+      col <- "grey80"
+    }
+    
     p <- p %>%
-      add_markers(
-        x = -1000, 
-        y = -1000,
+      add_trace(
+        x = c(0), 
+        y = c(0),
+        type = "scatter",
+        mode = "markers",
         marker = list(
           size = 10, 
-          color = legend_df$color[i]
+          color = col,
+          line = list(color = col, width = 2)  # Match border to fill
         ),
-        name = legend_df$class[i],
+        name = cls,
         showlegend = TRUE,
         hoverinfo = "skip",
-        inherit = FALSE
+        visible = "legendonly"  # Hide the marker but show in legend
       )
   }
   
