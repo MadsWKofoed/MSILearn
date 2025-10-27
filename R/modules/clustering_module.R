@@ -575,32 +575,19 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get current color mapping
+  # USE EXISTING COLORS - don't reassign!
   cols_used <- class_colors()
   
-  # Get all unique classes
-  present_classes <- unique(df$Class)
-  
-  # Assign colors to new classes
-  for (cls in present_classes) {
-    if (!cls %in% names(cols_used)) {
-      if (cls == "Unassigned") {
-        cols_used[cls] <- "grey80"
-      } else {
-        idx <- next_color_i()
-        cols_used[cls] <- my_palette[idx]
-        next_color_i(idx %% length(my_palette) + 1)
-      }
-    }
+  # Only ensure Unassigned is there
+  if (!("Unassigned" %in% names(cols_used))) {
+    cols_used["Unassigned"] <- "grey80"
+    class_colors(cols_used)
   }
   
-  cols_used["Unassigned"] <- "grey80"
-  class_colors(cols_used)
-  
-  # Use the CLUSTER raster function (transparent background) with Class column
+  # Use the transparent raster function with Class column
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
   
-  # Build plot - same as cluster_plot
+  # Build plot
   p <- plot_ly(source = "class") %>%
     layout(
       images = list(
@@ -649,17 +636,29 @@ output$class_legend <- renderUI({
   }
   df$Class <- as.character(df$Class)
   
-  # Get the EXACT same colors used in the plot
+  # Get the EXACT same colors from reactive
   cols_used <- class_colors()
   present_classes <- unique(df$Class)
   
+  # Build legend order: assigned classes first (in order they appear), then Unassigned ONLY if present
   assigned_classes <- setdiff(present_classes, "Unassigned")
-  class_order <- c(assigned_classes, "Unassigned")
   
-  # Build HTML legend using the exact colors from cols_used
+  # Only add Unassigned to legend if there are actually unassigned pixels
+  has_unassigned <- "Unassigned" %in% present_classes
+  class_order <- if (has_unassigned) {
+    c(assigned_classes, "Unassigned")
+  } else {
+    assigned_classes
+  }
+  
+  # Build HTML legend
   legend_items <- lapply(class_order, function(cls) {
-    # Use the exact color from the reactive value
-    color <- cols_used[[cls]]
+    # Get color with fallback
+    color <- if (!is.null(cols_used[[cls]])) {
+      cols_used[[cls]]
+    } else {
+      "grey80"  # Fallback for safety
+    }
     
     tags$div(
       style = "margin-bottom: 6px; display: flex; align-items: center;",
