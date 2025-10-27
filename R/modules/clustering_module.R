@@ -605,8 +605,9 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get colors - DON'T modify here, just use what's stored
+  # Get colors and FORCE Unassigned to grey80
   cols_used <- class_colors()
+  cols_used["Unassigned"] <- "grey80"  # Force it here too
   
   # Use cluster raster function (transparent background)
   img_uri <- make_cluster_raster_png(df, "Class", cols_used)
@@ -619,7 +620,17 @@ output$class_plot <- renderPlotly({
     sort(setdiff(present_classes, "Unassigned"))
   )
   
-  # Start with base plot
+  # Create dummy data frame for legend traces
+  legend_df <- data.frame(
+    class = present_classes,
+    color = sapply(present_classes, function(cls) {
+      col <- cols_used[[cls]]
+      if (is.null(col) || is.na(col) || col == "") "grey80" else col
+    }),
+    stringsAsFactors = FALSE
+  )
+  
+  # Start with base plot - NO traces yet
   p <- plot_ly() %>%
     layout(
       images = list(list(
@@ -636,30 +647,20 @@ output$class_plot <- renderPlotly({
       showlegend = TRUE
     )
   
-  # Add legend traces for each class
-  for (i in seq_along(present_classes)) {
-    cls <- present_classes[i]
-    col <- cols_used[[cls]]
-    
-    # Strict fallback
-    if (is.null(col) || is.na(col) || col == "") {
-      col <- "grey80"
-    }
-    
+  # Add traces using the pre-computed colors
+  for (i in seq_len(nrow(legend_df))) {
     p <- p %>%
-      add_trace(
-        x = c(-1000),  # Put marker off-screen
-        y = c(-1000),
-        type = "scatter",
-        mode = "markers",
+      add_markers(
+        x = -1000, 
+        y = -1000,
         marker = list(
           size = 10, 
-          color = col,
-          line = list(width = 0)  # Remove border completely
+          color = legend_df$color[i]
         ),
-        name = cls,
+        name = legend_df$class[i],
         showlegend = TRUE,
-        hoverinfo = "skip"
+        hoverinfo = "skip",
+        inherit = FALSE
       )
   }
   
