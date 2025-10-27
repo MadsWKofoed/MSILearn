@@ -424,20 +424,18 @@ observeEvent(input$assign_class, {
   df$Class[inside] <- lab
   annotated_data(df)
   
-  # Update colors - NEVER add Unassigned to palette
-  if (lab != "Unassigned") {
-    cols <- class_colors()
-    
-    if (!(lab %in% names(cols))) {
-      i <- next_color_i()
-      cols[lab] <- my_palette[i]
-      next_color_i(if (i >= length(my_palette)) 1 else i + 1)
-    }
-    
-    # Ensure Unassigned stays grey
-    cols["Unassigned"] <- "grey80"
-    class_colors(cols)
+  # Update colors PROPERLY - assign ONCE and KEEP
+  cols <- class_colors()
+  
+  if (!(lab %in% names(cols))) {
+    i <- next_color_i()
+    cols[lab] <- my_palette[i]
+    next_color_i(if (i >= length(my_palette)) 1 else i + 1)
   }
+  
+  # Ensure Unassigned stays grey
+  cols["Unassigned"] <- "grey80"
+  class_colors(cols)
   
   # Clear shapes
   try({
@@ -575,23 +573,17 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get all unique classes
-  present_classes <- unique(df$Class)
+  # USE EXISTING COLORS - don't rebuild!
+  cols_used <- class_colors()
   
-  # Build color mapping from scratch each time
-  cols_used <- c("Unassigned" = "grey80")
-  
-  assigned_classes <- setdiff(present_classes, "Unassigned")
-  for (i in seq_along(assigned_classes)) {
-    cls <- assigned_classes[i]
-    cols_used[cls] <- my_palette[((i - 1) %% length(my_palette)) + 1]
+  # Make sure Unassigned is always there
+  if (!("Unassigned" %in% names(cols_used))) {
+    cols_used["Unassigned"] <- "grey80"
+    class_colors(cols_used)
   }
   
-  # Update reactive
-  class_colors(cols_used)
-  
-  # Use the CLUSTER raster function with Class column
-  img_uri <- make_cluster_raster_png(df, "Class", cols_used)
+  # Use the class raster function with Class column
+  img_uri <- make_class_raster_png(df, "Class", cols_used)
   
   # Build plot
   p <- plot_ly(source = "class") %>%
@@ -646,13 +638,23 @@ output$class_legend <- renderUI({
   cols_used <- class_colors()
   req(cols_used)
   
+  # Ensure Unassigned is in the color map
+  if (!("Unassigned" %in% names(cols_used))) {
+    cols_used["Unassigned"] <- "grey80"
+  }
+  
   present_classes <- unique(df$Class)
   assigned_classes <- setdiff(present_classes, "Unassigned")
   class_order <- c(assigned_classes, "Unassigned")
   
   # Build HTML legend
   legend_items <- lapply(class_order, function(cls) {
-    color <- cols_used[[cls]]
+    # Get color - with fallback
+    color <- if (!is.null(cols_used[[cls]])) {
+      cols_used[[cls]]
+    } else {
+      "grey80"
+    }
     
     tags$div(
       style = "margin-bottom: 6px; display: flex; align-items: center;",
