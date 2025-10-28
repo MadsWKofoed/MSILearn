@@ -505,7 +505,7 @@ output$cluster_plot <- renderPlotly({
     brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
     as.character(1:max(df$cluster))
   )
-  img_uri <- make_raster_png(df, "cluster", cols)  # <-- Use cluster version
+  img_uri <- make_raster_png(df, "cluster", cols)
   
   p <- plot_ly(source = "cluster") %>%
     add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
@@ -524,7 +524,14 @@ output$cluster_plot <- renderPlotly({
       xaxis = list(range = c(0, max(df$x)), title = "x"),
       yaxis = list(range = c(0, max(df$y)), title = "y",
                   scaleanchor = "x", scaleratio = 1),
-      showlegend = FALSE
+      showlegend = TRUE,
+      legend = list(
+        orientation = "h",
+        x = 0.5,
+        xanchor = "center",
+        y = -0.15,
+        yanchor = "top"
+      )
     ) %>%
     config(
       displaylogo = FALSE,
@@ -532,6 +539,21 @@ output$cluster_plot <- renderPlotly({
       modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
                                 "toggleSpikelines", "toImage")
     )
+  
+  # Add legend traces
+  for (i in seq_len(max(df$cluster))) {
+    p <- p %>%
+      add_trace(
+        x = c(-1000),
+        y = c(-1000),
+        type = "scatter",
+        mode = "markers",
+        marker = list(size = 10, color = cols[as.character(i)]),
+        name = paste("Cluster", i),
+        showlegend = TRUE,
+        hoverinfo = "skip"
+      )
+  }
   
   p
 })
@@ -592,7 +614,14 @@ output$class_plot <- renderPlotly({
       xaxis = list(range = c(0, max(df$x)), title = "x"),
       yaxis = list(range = c(0, max(df$y)), title = "y",
                   scaleanchor = "x", scaleratio = 1),
-      showlegend = TRUE
+      showlegend = TRUE,
+      legend = list(
+        orientation = "h",
+        x = 0.5,
+        xanchor = "center",
+        y = -0.15,
+        yanchor = "top"
+      )
     )
   
   # Add legend traces with matching colors
