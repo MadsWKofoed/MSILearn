@@ -1,5 +1,3 @@
-# R/modules/clustering_module.R
-
 clustering_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Clustering",
@@ -43,6 +41,9 @@ clustering_module_server <- function(id, msi_con) {
     mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                        db = "MSI_database", 
                        url = "mongodb://localhost")
+    mongo_cluster_meta <- mongo(collection = "clustering_metadata",
+                               db = "MSI_database",
+                               url = "mongodb://localhost")
     mongo_data <- mongo(collection = "msi_data", 
                        db = "msi_project", 
                        url = "mongodb://localhost")
@@ -667,35 +668,90 @@ output$class_plot <- renderPlotly({
       df <- annotated_data() %||% clustered_data()
       req(df)
       
-      if (!"Class" %in% names(df)) df$Class <- NA_character_
-      df$Class <- as.character(df$Class)
+      # Disable button during commit
+      shinyjs::disable("commit_db")
+      on.exit(shinyjs::enable("commit_db"))
       
-      assignment_id <- as.character(UUIDgenerate())
-      committed_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ")
-      
-      df$row_id <- seq_len(nrow(df))
-      df$assignment_id <- assignment_id
-      df$committed_at <- committed_at
-      df$method <- input$method
-      df$k <- as.integer(input$clusters)
-      df$orientation <- input$orientation
-      df$sample_name <- input$sample_select
-      df$snr_used <- as.numeric(input$snr_select)
-      df$tolerance_used <- as.numeric(input$tol_select)
-      df$reference_used <- input$ref_select
+      # Create progress
+      progress <- Progress$new(session, min = 0, max = 100)
+      progress$set(message = "Preparing data for commit...", value = 0)
+      on.exit(progress$close(), add = TRUE)
       
       tryCatch({
-        safe_df <- normalize_for_mongo(df)
-        msi_con$insert(safe_df)
+        # Ensure Class column exists
+        if (!"Class" %in% names(df)) df$Class <- "Unassigned"
+        df$Class <- as.character(df$Class)
+        df$Class[is.na(df$Class)] <- "Unassigned"
+        
+        progress$set(value = 20, message = "Generating metadata...")
+        
+        # Generate assignment ID
+        assignment_id <- as.character(UUIDgenerate())
+        
+        # Count class assignments
+        class_counts <- table(df$Class)
+        n_unassigned <- as.integer(class_counts["Unassigned"] %||% 0)
+        n_assigned <- sum(class_counts[names(class_counts) != "Unassigned"])
+        unique_classes <- sort(setdiff(unique(df$Class), "Unassigned"))
+        
+        progress$set(value = 40, message = "Saving clustering data to GridFS...")
+        
+        # Save data to GridFS
+        temp_path <- tempfile(pattern = "annotated_clustering_", fileext = ".rds")
+        saveRDS(df, temp_path)
+        
+        grid <- gridfs(db = "MSI_database", prefix = "fs", url = "mongodb://localhost")
+        gridfs_id <- grid$upload(temp_path, name = paste0(assignment_id, "_annotated_clustering.rds"))
+        
+        progress$set(value = 70, message = "Creating metadata record...")
+        
+        # Create metadata document for clustering collection
+        metadata_doc <- list(
+          assignment_id = assignment_id,
+          gridfs_id = as.character(gridfs_id),
+          sample_name = input$sample_select,
+          created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC"),
+          
+          # Processing parameters used
+          snr = as.numeric(input$snr_select),
+          tolerance = as.numeric(input$tol_select),
+          reference_name = input$ref_select,
+          
+          # Clustering parameters
+          clustering_method = input$method,
+          num_clusters = as.integer(input$clusters),
+          orientation = input$orientation,
+          
+          # Data dimensions
+          num_pixels = as.integer(nrow(df)),
+          num_features = as.integer(sum(grepl("^mz_", names(df)))),
+          
+          # Assignment statistics
+          num_assigned = as.integer(n_assigned),
+          num_unassigned = as.integer(n_unassigned),
+          unique_classes = if (length(unique_classes) > 0) paste(unique_classes, collapse = ", ") else "",
+          num_unique_classes = as.integer(length(unique_classes))
+        )
+        
+        progress$set(value = 90, message = "Inserting metadata...")
+        
+        # Insert into clustering metadata collection
+        mongo_cluster_meta$insert(metadata_doc)
+        
+        progress$set(value = 100, message = "Complete!")
         
         showNotification(
-          sprintf("Success: committed %d rows (assignment_id=%s).", nrow(df), assignment_id),
-          type = "message", duration = 6
+          sprintf("✅ Clustering committed successfully\nAssignment ID: %s\n%d pixels: %d assigned, %d unassigned",
+                  assignment_id, nrow(df), n_assigned, n_unassigned),
+          type = "message",
+          duration = 10
         )
+        
       }, error = function(e) {
         showNotification(
-          paste0("MongoDB commit failed: ", conditionMessage(e)),
-          type = "error", duration = 10
+          paste0("❌ MongoDB commit failed: ", conditionMessage(e)),
+          type = "error",
+          duration = NULL
         )
       })
     })
