@@ -701,14 +701,17 @@ output$class_plot <- renderPlotly({
         saveRDS(df, temp_path)
         
         grid <- gridfs(db = "MSI_database", prefix = "fs", url = "mongodb://localhost")
-        gridfs_id <- grid$upload(temp_path, name = paste0(assignment_id, "_annotated_clustering.rds"))
+        gridfs_result <- grid$upload(temp_path, name = paste0(assignment_id, "_annotated_clustering.rds"))
+        
+        # Extract just the ID as string (consistent with processing pipeline)
+        gridfs_id <- as.character(gridfs_result$id)
         
         progress$set(value = 70, message = "Creating metadata record...")
         
         # Create metadata document for clustering collection
         metadata_doc <- list(
           assignment_id = assignment_id,
-          gridfs_id = as.character(gridfs_id),
+          gridfs_id = gridfs_id,  # Now this will be a clean string
           sample_name = input$sample_select,
           created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC"),
           
