@@ -248,13 +248,13 @@ clustering_module_server <- function(id, msi_con) {
       "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
       "khaki","steelblue","seagreen","tan"
     )
-    class_colors <- reactiveVal(c("Unassigned" = "grey80"))
+    class_colors <- reactiveVal(c())
     next_color_i <- reactiveVal(1)
     
     # Reset colors when new clustering is run
     observeEvent(input$run_clustering, {
       annotated_data(NULL)
-      class_colors(c("Unassigned" = "grey80"))
+      class_colors(c())
       next_color_i(1)
     })
     
@@ -346,35 +346,6 @@ make_raster_png <- function(df, fill_var, colors) {
         }
         return()
       }
-      
-      # Method 3: Rectangle (direct coordinates)
-      if (any(grepl("shapes\\[\\d+\\]\\.(x0|x1|y0|y1)$", names(ev)))) {
-        rect_keys <- grep("shapes\\[\\d+\\]\\.(x0|x1|y0|y1)$", names(ev), value = TRUE)
-        
-        x0_key <- grep("x0$", rect_keys, value = TRUE)
-        x1_key <- grep("x1$", rect_keys, value = TRUE)
-        y0_key <- grep("y0$", rect_keys, value = TRUE)
-        y1_key <- grep("y1$", rect_keys, value = TRUE)
-        
-        if (length(x0_key) > 0 && length(x1_key) > 0 && 
-            length(y0_key) > 0 && length(y1_key) > 0) {
-          
-          x0 <- ev[[x0_key]]
-          x1 <- ev[[x1_key]]
-          y0 <- ev[[y0_key]]
-          y1 <- ev[[y1_key]]
-          
-          if (!is.null(x0) && !is.null(x1) && !is.null(y0) && !is.null(y1)) {
-            sel_shape(list(
-              type = "rect",
-              x0 = min(x0, x1), x1 = max(x0, x1),
-              y0 = min(y0, y1), y1 = max(y0, y1)
-            ))
-            
-            showNotification("✓ Rectangle captured", type = "message", duration = 2)
-          }
-        }
-      }
     })
     
 # --- Assign to selection ---
@@ -398,22 +369,15 @@ observeEvent(input$assign_class, {
   
   y_max <- max(df$y)
   
-  if (identical(shape$type, "polygon")) {
-    poly_x <- shape$x
-    poly_y <- y_max - shape$y
-    inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
-  } else if (identical(shape$type, "rect")) {
-    x0 <- shape$x0
-    x1 <- shape$x1
-    yy0 <- y_max - shape$y0
-    yy1 <- y_max - shape$y1
-    y0 <- min(yy0, yy1)
-    y1 <- max(yy0, yy1)
-    inside <- df$x >= x0 & df$x <= x1 & df$y >= y0 & df$y <= y1
-  } else {
-    showNotification("Unsupported shape type.", type = "error", duration = 4)
+  # Only polygon selection supported
+  if (!identical(shape$type, "polygon")) {
+    showNotification("Only polygon selection is supported.", type = "error", duration = 4)
     return()
   }
+  
+  poly_x <- shape$x
+  poly_y <- y_max - shape$y
+  inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
   
   n_sel <- sum(inside)
   if (n_sel == 0) {
@@ -435,8 +399,6 @@ observeEvent(input$assign_class, {
       next_color_i(if (i >= length(my_palette)) 1 else i + 1)
     }
     
-    # Ensure Unassigned stays grey
-    cols["Unassigned"] <- "grey80"
     class_colors(cols)
   }
   
@@ -481,9 +443,7 @@ observeEvent(input$assign_all, {
         cols[lab] <- my_palette[i]
         next_color_i(if (i >= length(my_palette)) 1 else i + 1)
       }
-      
-      # Ensure Unassigned stays grey
-      cols["Unassigned"] <- "grey80"
+    
       class_colors(cols)
     }
     
@@ -536,7 +496,7 @@ output$cluster_plot <- renderPlotly({
     ) %>%
     config(
       displaylogo = FALSE,
-      modeBarButtonsToAdd = list("drawclosedpath", "drawrect", "eraseshape"),
+      modeBarButtonsToAdd = list("drawclosedpath", "eraseshape"),
       modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
                                 "toggleSpikelines", "toImage")
     )
@@ -558,6 +518,7 @@ output$cluster_plot <- renderPlotly({
   
   p
 })
+
 
 
 # --- Class plot (interactive with raster) ---
