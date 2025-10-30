@@ -422,9 +422,24 @@ observeEvent(input$assign_class, {
     return()
   }
   
-  # NO flip needed - plotly coordinates match our data coordinates
+  # Get polygon coordinates
   poly_x <- shape$x
   poly_y <- shape$y
+  
+  # Apply inverse transformation based on orientation
+  orientation <- input$orientation %||% "Default"
+  base_df <- original_clustered()
+  req(base_df)
+  
+  if (orientation == "Flip X" || orientation == "Flip Both") {
+    # Reverse the x flip: x_flipped = max - x + min, so x = max + min - x_flipped
+    poly_x <- max(base_df$x) + min(base_df$x) - poly_x
+  }
+  if (orientation == "Flip Y" || orientation == "Flip Both") {
+    # Reverse the y flip
+    poly_y <- max(base_df$y) + min(base_df$y) - poly_y
+  }
+  
   inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
   
   n_sel <- sum(inside)
