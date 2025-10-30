@@ -16,7 +16,7 @@ clustering_module_ui <- function(id) {
                tags$hr(),
                
                selectInput(ns("orientation"), "Orientation adjustment:",
-                           choices = c("Default", "Swap axes", "Flip X", "Flip Y", "Flip Both")),
+                           choices = c("Default", "Flip X", "Flip Y", "Flip Both")),
                textInput(ns("class_label"), "Assign Class:", value = "Class1"),
                actionButton(ns("assign_class"), "Assign to Selection"),
                actionButton(ns("assign_all"), "Assign ALL unassigned"),
@@ -265,11 +265,7 @@ clustering_module_server <- function(id, msi_con) {
       # Apply transformation to base data
       df_adjusted <- base_df
       
-      if (input$orientation == "Swap axes") {
-        temp <- df_adjusted$x
-        df_adjusted$x <- df_adjusted$y
-        df_adjusted$y <- temp
-      } else if (input$orientation == "Flip X") {
+      if (input$orientation == "Flip X") {
         df_adjusted$x <- max(base_df$x) - df_adjusted$x + min(base_df$x)
       } else if (input$orientation == "Flip Y") {
         df_adjusted$y <- max(base_df$y) - df_adjusted$y + min(base_df$y)
