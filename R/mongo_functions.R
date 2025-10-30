@@ -338,6 +338,10 @@ load_clustering <- function(sample_name = NULL,
     message("Multiple clusterings found (", nrow(artifacts), ")")
     
     if (most_recent) {
+      # Convert created_at to POSIXct if it's a list
+      if (is.list(artifacts$created_at)) {
+        artifacts$created_at <- do.call(c, artifacts$created_at)
+      }
       # Sort by created_at descending and take first
       artifacts <- artifacts[order(artifacts$created_at, decreasing = TRUE), ]
       message("Loading most recent (", artifacts$created_at[1], ")")
