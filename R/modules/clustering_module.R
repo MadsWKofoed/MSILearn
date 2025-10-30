@@ -260,22 +260,32 @@ clustering_module_server <- function(id, msi_con) {
     
 # --- Raster helper for both cluster and class plots (transparent background) ---
 make_raster_png <- function(df, fill_var, colors) {
-  # Work with copies, don't modify original
-  x_vals <- df$x
-  y_vals <- df$y
+  # Get coordinate ranges
+  x_min <- min(df$x)
+  y_min <- min(df$y)
+  x_max <- max(df$x)
+  y_max <- max(df$y)
   
-  # Calculate offsets for matrix indexing
-  x_min <- min(x_vals)
-  y_min <- min(y_vals)
-  x_norm <- x_vals - x_min + 1
-  y_norm <- y_vals - y_min + 1
+  # Create a grid that matches the coordinate space
+  x_unique <- sort(unique(df$x))
+  y_unique <- sort(unique(df$y))
   
-  width <- max(x_norm)
-  height <- max(y_norm)
+  width <- length(x_unique)
+  height <- length(y_unique)
+  
+  # Create mapping from actual coordinates to matrix indices
+  x_map <- setNames(seq_along(x_unique), as.character(x_unique))
+  y_map <- setNames(seq_along(y_unique), as.character(y_unique))
   
   # Create EMPTY matrix (NA = transparent)
   mat <- matrix(NA_character_, nrow = height, ncol = width)
-  mat[cbind(y_norm, x_norm)] <- as.character(df[[fill_var]])
+  
+  # Fill matrix using the mapping
+  for (i in seq_len(nrow(df))) {
+    x_idx <- x_map[as.character(df$x[i])]
+    y_idx <- y_map[as.character(df$y[i])]
+    mat[y_idx, x_idx] <- as.character(df[[fill_var]][i])
+  }
   
   col_img <- matrix(colors[mat], nrow = height, ncol = width)
   
@@ -293,13 +303,15 @@ make_raster_png <- function(df, fill_var, colors) {
   tmp <- tempfile(fileext = ".png")
   png::writePNG(rgb_array, target = tmp)
   
-  # Return both the image URI and the coordinate info needed for alignment
+  # Return both the image URI and the coordinate info
   list(
     uri = base64enc::dataURI(file = tmp, mime = "image/png"),
     x_min = x_min,
     y_min = y_min,
-    x_max = max(x_vals),
-    y_max = max(y_vals)
+    x_max = x_max,
+    y_max = y_max,
+    width = width,
+    height = height
   )
 }
 
