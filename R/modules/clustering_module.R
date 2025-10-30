@@ -51,6 +51,7 @@ clustering_module_server <- function(id, msi_con) {
     processed_data <- reactiveVal(NULL)
     clustered_data <- reactiveVal(NULL)
     annotated_data <- reactiveVal(NULL)
+    original_clustered <- reactiveVal(NULL)
     
     # --- Load all unique samples ---
     observe({
@@ -217,6 +218,8 @@ clustering_module_server <- function(id, msi_con) {
         
         progress$set(value = 90, message = "Finalizing...")
         
+        # Store original before any transformations
+        original_clustered(clustered)
         clustered_data(clustered)
         annotated_data(NULL)
         
@@ -243,36 +246,46 @@ clustering_module_server <- function(id, msi_con) {
     
     # --- Apply orientation adjustment ---
     observe({
-      df <- clustered_data()
-      req(df, input$orientation)
+      req(input$orientation)
       
-      if (input$orientation == "Default") return()
+      # Get base data
+      base_df <- original_clustered()
+      req(base_df)
       
-      # Apply transformation
-      df_adjusted <- df
+      if (input$orientation == "Default") {
+        isolate({
+          clustered_data(base_df)
+          annotated_data(NULL)
+          class_colors(c())
+          next_color_i(1)
+        })
+        return()
+      }
+      
+      # Apply transformation to base data
+      df_adjusted <- base_df
       
       if (input$orientation == "Swap axes") {
-        # Swap x and y
         temp <- df_adjusted$x
         df_adjusted$x <- df_adjusted$y
         df_adjusted$y <- temp
       } else if (input$orientation == "Flip X") {
-        # Mirror across vertical axis
-        df_adjusted$x <- max(df$x) - df$x + min(df$x)
+        df_adjusted$x <- max(base_df$x) - df_adjusted$x + min(base_df$x)
       } else if (input$orientation == "Flip Y") {
-        # Mirror across horizontal axis
-        df_adjusted$y <- max(df$y) - df$y + min(df$y)
+        df_adjusted$y <- max(base_df$y) - df_adjusted$y + min(base_df$y)
       } else if (input$orientation == "Flip Both") {
-        # Mirror both axes
-        df_adjusted$x <- max(df$x) - df$x + min(df$x)
-        df_adjusted$y <- max(df$y) - df$y + min(df$y)
+        df_adjusted$x <- max(base_df$x) - df_adjusted$x + min(base_df$x)
+        df_adjusted$y <- max(base_df$y) - df_adjusted$y + min(base_df$y)
       }
       
-      clustered_data(df_adjusted)
-      annotated_data(NULL)  # Clear annotations when orientation changes
-      class_colors(c())
-      next_color_i(1)
-    }) %>% bindEvent(input$orientation, clustered_data())
+      # Use isolate to prevent triggering observer when updating
+      isolate({
+        clustered_data(df_adjusted)
+        annotated_data(NULL)
+        class_colors(c())
+        next_color_i(1)
+      })
+    }) %>% bindEvent(input$orientation)
 
 
     # --- State and colors ---
