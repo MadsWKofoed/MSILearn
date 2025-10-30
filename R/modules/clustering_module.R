@@ -757,10 +757,25 @@ output$class_plot <- renderPlotly({
       on.exit(progress$close(), add = TRUE)
       
       tryCatch({
-        # Ensure Class column exists
+        # Ensure Class column exists in current (possibly transformed) data
         if (!"Class" %in% names(df)) df$Class <- "Unassigned"
         df$Class <- as.character(df$Class)
         df$Class[is.na(df$Class)] <- "Unassigned"
+        
+        # CRITICAL: Get original coordinates and transfer class assignments
+        base_df <- original_clustered()
+        req(base_df)
+        
+        # The assignment was made on transformed coordinates (df$x, df$y)
+        # but we need to save with original coordinates (base_df$x, base_df$y)
+        # Since both dataframes have the same row order, we can directly transfer the Class column
+        df_to_save <- base_df
+        df_to_save$Class <- df$Class  # Transfer class assignments
+        
+        # Verify integrity
+        if (nrow(df_to_save) != nrow(df)) {
+          stop("Row count mismatch between original and transformed data")
+        }
         
         progress$set(value = 20, message = "Generating metadata...")
         
@@ -768,16 +783,16 @@ output$class_plot <- renderPlotly({
         assignment_id <- as.character(UUIDgenerate())
         
         # Count class assignments
-        class_counts <- table(df$Class)
+        class_counts <- table(df_to_save$Class)
         n_unassigned <- as.integer(class_counts["Unassigned"] %||% 0)
         n_assigned <- sum(class_counts[names(class_counts) != "Unassigned"])
-        unique_classes <- sort(setdiff(unique(df$Class), "Unassigned"))
+        unique_classes <- sort(setdiff(unique(df_to_save$Class), "Unassigned"))
         
         progress$set(value = 40, message = "Saving clustering data to GridFS...")
         
-        # Save data to GridFS
+        # Save data with ORIGINAL coordinates to GridFS
         temp_path <- tempfile(pattern = "annotated_clustering_", fileext = ".rds")
-        saveRDS(df, temp_path)
+        saveRDS(df_to_save, temp_path)
         
         grid <- gridfs(db = "MSI_database", prefix = "fs", url = "mongodb://localhost")
         gridfs_result <- grid$upload(temp_path, name = paste0(assignment_id, "_annotated_clustering.rds"))
@@ -790,7 +805,7 @@ output$class_plot <- renderPlotly({
         # Create metadata document for clustering collection
         metadata_doc <- list(
           assignment_id = assignment_id,
-          gridfs_id = gridfs_id,  # Now this will be a clean string
+          gridfs_id = gridfs_id,
           sample_name = input$sample_select,
           created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC"),
           
@@ -802,11 +817,11 @@ output$class_plot <- renderPlotly({
           # Clustering parameters
           clustering_method = input$method,
           num_clusters = as.integer(input$clusters),
-          orientation = input$orientation,
+          orientation_used = input$orientation,  # Record what orientation was used for annotation
           
           # Data dimensions
-          num_pixels = as.integer(nrow(df)),
-          num_features = as.integer(sum(grepl("^mz_", names(df)))),
+          num_pixels = as.integer(nrow(df_to_save)),
+          num_features = as.integer(sum(grepl("^mz_", names(df_to_save)))),
           
           # Assignment statistics
           num_assigned = as.integer(n_assigned),
@@ -823,8 +838,8 @@ output$class_plot <- renderPlotly({
         progress$set(value = 100, message = "Complete!")
         
         showNotification(
-          sprintf("✅ Clustering committed successfully\nAssignment ID: %s\n%d pixels: %d assigned, %d unassigned",
-                  assignment_id, nrow(df), n_assigned, n_unassigned),
+          sprintf("✅ Clustering committed successfully\nAssignment ID: %s\n%d pixels: %d assigned, %d unassigned\n(Saved with original coordinates)",
+                  assignment_id, nrow(df_to_save), n_assigned, n_unassigned),
           type = "message",
           duration = 10
         )
