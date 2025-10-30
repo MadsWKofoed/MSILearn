@@ -516,22 +516,26 @@ output$cluster_plot <- renderPlotly({
   )
   img_uri <- make_raster_png(df, "cluster", cols)
   
+  # Use actual data ranges (respects transformations)
+  x_range <- c(min(df$x), max(df$x))
+  y_range <- c(min(df$y), max(df$y))
+  
   p <- plot_ly(source = "cluster") %>%
     add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
     layout(
       images = list(list(
         source = img_uri,
         xref = "x", yref = "y",
-        x = 0, y = max(df$y),
-        sizex = max(df$x), sizey = max(df$y),
+        x = x_range[1], y = y_range[2],
+        sizex = diff(x_range), sizey = diff(y_range),
         sizing = "stretch", layer = "below"
       )),
       dragmode = "drawclosedpath",
       newshape = list(line = list(color = "black", width = 1),
                     fillcolor = "rgba(0,0,0,0.05)"),
       title = "MSI Clustering Result",
-      xaxis = list(range = c(0, max(df$x)), title = "x"),
-      yaxis = list(range = c(0, max(df$y)), title = "y",
+      xaxis = list(range = x_range, title = "x"),
+      yaxis = list(range = y_range, title = "y",
                   scaleanchor = "x", scaleratio = 1),
       showlegend = TRUE,
       legend = list(
@@ -553,8 +557,8 @@ output$cluster_plot <- renderPlotly({
   for (i in seq_len(max(df$cluster))) {
     p <- p %>%
       add_trace(
-        x = c(-1000),
-        y = c(-1000),
+        x = c(x_range[1] - 1000),
+        y = c(y_range[1] - 1000),
         type = "scatter",
         mode = "markers",
         marker = list(size = 10, color = cols[as.character(i)]),
@@ -566,8 +570,6 @@ output$cluster_plot <- renderPlotly({
   
   p
 })
-
-
 
 # --- Class plot (interactive with raster) ---
 output$class_plot <- renderPlotly({
@@ -582,24 +584,17 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get colors - DON'T force Unassigned, let plotly choose
+  # Get colors
   cols_used <- class_colors()
-  
-  # Remove Unassigned from cols_used to let plotly assign it
   cols_used <- cols_used[names(cols_used) != "Unassigned"]
   
-  # Get unique classes present in data for legend
-  # ALWAYS put Unassigned first, then sort the rest
   present_classes <- unique(df$Class)
   present_classes <- c(
     if ("Unassigned" %in% present_classes) "Unassigned",
     sort(setdiff(present_classes, "Unassigned"))
   )
   
-  # Use a lighter tint of plotly blue (hex format for col2rgb compatibility)
-  plotly_light_blue <- "#B8BFFC"  # Light pastel blue
-  
-  # Build complete color mapping with Unassigned as plotly light blue
+  plotly_light_blue <- "#B8BFFC"
   all_colors <- c("Unassigned" = plotly_light_blue)
   for (cls in present_classes) {
     if (cls != "Unassigned") {
@@ -607,22 +602,24 @@ output$class_plot <- renderPlotly({
     }
   }
   
-  # Use cluster raster function with complete color mapping
   img_uri <- make_raster_png(df, "Class", all_colors)
   
-  # Start with base plot
+  # Use actual data ranges (respects transformations)
+  x_range <- c(min(df$x), max(df$x))
+  y_range <- c(min(df$y), max(df$y))
+  
   p <- plot_ly() %>%
     layout(
       images = list(list(
         source = img_uri,
         xref = "x", yref = "y",
-        x = 0, y = max(df$y),
-        sizex = max(df$x), sizey = max(df$y),
+        x = x_range[1], y = y_range[2],
+        sizex = diff(x_range), sizey = diff(y_range),
         sizing = "stretch", layer = "below"
       )),
       title = "Class Assignment",
-      xaxis = list(range = c(0, max(df$x)), title = "x"),
-      yaxis = list(range = c(0, max(df$y)), title = "y",
+      xaxis = list(range = x_range, title = "x"),
+      yaxis = list(range = y_range, title = "y",
                   scaleanchor = "x", scaleratio = 1),
       showlegend = TRUE,
       legend = list(
@@ -649,8 +646,8 @@ output$class_plot <- renderPlotly({
     
     p <- p %>%
       add_trace(
-        x = c(-1000),  # Way off screen
-        y = c(-1000),
+        x = c(x_range[1] - 1000),
+        y = c(y_range[1] - 1000),
         type = "scatter",
         mode = "markers",
         marker = list(
