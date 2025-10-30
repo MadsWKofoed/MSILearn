@@ -498,7 +498,7 @@ output$cluster_plot <- renderPlotly({
       displaylogo = FALSE,
       modeBarButtonsToAdd = list("drawclosedpath", "eraseshape"),
       modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
-                                "toggleSpikelines", "toImage")
+                                "toggleSpikelines", "toImage", "select2d", "lasso2d")
     )
   
   # Add legend traces
@@ -584,6 +584,11 @@ output$class_plot <- renderPlotly({
         y = -0.15,
         yanchor = "top"
       )
+    ) %>%
+    config(
+      displaylogo = FALSE,
+      modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
+                                "toggleSpikelines", "toImage", "select2d", "lasso2d")
     )
   
   # Add legend traces with matching colors
