@@ -241,6 +241,40 @@ clustering_module_server <- function(id, msi_con) {
       })
     })
     
+    # --- Apply orientation adjustment ---
+    observe({
+      df <- clustered_data()
+      req(df, input$orientation)
+      
+      if (input$orientation == "Default") return()
+      
+      # Apply transformation
+      df_adjusted <- df
+      
+      if (input$orientation == "Swap axes") {
+        # Swap x and y
+        temp <- df_adjusted$x
+        df_adjusted$x <- df_adjusted$y
+        df_adjusted$y <- temp
+      } else if (input$orientation == "Flip X") {
+        # Mirror across vertical axis
+        df_adjusted$x <- max(df$x) - df$x + min(df$x)
+      } else if (input$orientation == "Flip Y") {
+        # Mirror across horizontal axis
+        df_adjusted$y <- max(df$y) - df$y + min(df$y)
+      } else if (input$orientation == "Flip Both") {
+        # Mirror both axes
+        df_adjusted$x <- max(df$x) - df$x + min(df$x)
+        df_adjusted$y <- max(df$y) - df$y + min(df$y)
+      }
+      
+      clustered_data(df_adjusted)
+      annotated_data(NULL)  # Clear annotations when orientation changes
+      class_colors(c())
+      next_color_i(1)
+    }) %>% bindEvent(input$orientation, clustered_data())
+
+
     # --- State and colors ---
     my_palette <- c(
       "red","blue","orange", "lightgreen","mediumpurple","brown","pink","cyan","magenta","yellow",
