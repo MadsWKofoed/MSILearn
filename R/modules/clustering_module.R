@@ -260,32 +260,14 @@ clustering_module_server <- function(id, msi_con) {
     
 # --- Raster helper for both cluster and class plots (transparent background) ---
 make_raster_png <- function(df, fill_var, colors) {
-  # Get coordinate ranges
-  x_min <- min(df$x)
-  y_min <- min(df$y)
-  x_max <- max(df$x)
-  y_max <- max(df$y)
-  
-  # Create a grid that matches the coordinate space
-  x_unique <- sort(unique(df$x))
-  y_unique <- sort(unique(df$y))
-  
-  width <- length(x_unique)
-  height <- length(y_unique)
-  
-  # Create mapping from actual coordinates to matrix indices
-  x_map <- setNames(seq_along(x_unique), as.character(x_unique))
-  y_map <- setNames(seq_along(y_unique), as.character(y_unique))
+  df$x <- df$x - min(df$x) + 1
+  df$y <- df$y - min(df$y) + 1
+  width <- max(df$x)
+  height <- max(df$y)
   
   # Create EMPTY matrix (NA = transparent)
   mat <- matrix(NA_character_, nrow = height, ncol = width)
-  
-  # Fill matrix using the mapping
-  for (i in seq_len(nrow(df))) {
-    x_idx <- x_map[as.character(df$x[i])]
-    y_idx <- y_map[as.character(df$y[i])]
-    mat[y_idx, x_idx] <- as.character(df[[fill_var]][i])
-  }
+  mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
   
   col_img <- matrix(colors[mat], nrow = height, ncol = width)
   
@@ -302,17 +284,7 @@ make_raster_png <- function(df, fill_var, colors) {
   
   tmp <- tempfile(fileext = ".png")
   png::writePNG(rgb_array, target = tmp)
-  
-  # Return both the image URI and the coordinate info
-  list(
-    uri = base64enc::dataURI(file = tmp, mime = "image/png"),
-    x_min = x_min,
-    y_min = y_min,
-    x_max = x_max,
-    y_max = y_max,
-    width = width,
-    height = height
-  )
+  base64enc::dataURI(file = tmp, mime = "image/png")
 }
 
 
@@ -494,27 +466,24 @@ output$cluster_plot <- renderPlotly({
     brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
     as.character(1:max(df$cluster))
   )
-  
-  raster_result <- make_raster_png(df, "cluster", cols)
+  img_uri <- make_raster_png(df, "cluster", cols)
   
   p <- plot_ly(source = "cluster") %>%
     add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
     layout(
       images = list(list(
-        source = raster_result$uri,
+        source = img_uri,
         xref = "x", yref = "y",
-        x = raster_result$x_min,
-        y = raster_result$y_max,
-        sizex = raster_result$x_max - raster_result$x_min,
-        sizey = raster_result$y_max - raster_result$y_min,
+        x = 0, y = max(df$y),
+        sizex = max(df$x), sizey = max(df$y),
         sizing = "stretch", layer = "below"
       )),
       dragmode = "drawclosedpath",
       newshape = list(line = list(color = "black", width = 1),
                     fillcolor = "rgba(0,0,0,0.05)"),
       title = "MSI Clustering Result",
-      xaxis = list(range = c(raster_result$x_min, raster_result$x_max), title = "x"),
-      yaxis = list(range = c(raster_result$y_min, raster_result$y_max), title = "y",
+      xaxis = list(range = c(0, max(df$x)), title = "x"),
+      yaxis = list(range = c(0, max(df$y)), title = "y",
                   scaleanchor = "x", scaleratio = 1),
       showlegend = TRUE,
       legend = list(
@@ -550,6 +519,8 @@ output$cluster_plot <- renderPlotly({
   p
 })
 
+
+
 # --- Class plot (interactive with raster) ---
 output$class_plot <- renderPlotly({
   df <- annotated_data() %||% clustered_data()
@@ -563,21 +534,24 @@ output$class_plot <- renderPlotly({
   }
   df$Class <- as.character(df$Class)
   
-  # Get colors
+  # Get colors - DON'T force Unassigned, let plotly choose
   cols_used <- class_colors()
+  
+  # Remove Unassigned from cols_used to let plotly assign it
   cols_used <- cols_used[names(cols_used) != "Unassigned"]
   
   # Get unique classes present in data for legend
+  # ALWAYS put Unassigned first, then sort the rest
   present_classes <- unique(df$Class)
   present_classes <- c(
     if ("Unassigned" %in% present_classes) "Unassigned",
     sort(setdiff(present_classes, "Unassigned"))
   )
   
-  # Use a lighter tint of plotly blue
-  plotly_light_blue <- "#B8BFFC"
+  # Use a lighter tint of plotly blue (hex format for col2rgb compatibility)
+  plotly_light_blue <- "#B8BFFC"  # Light pastel blue
   
-  # Build complete color mapping
+  # Build complete color mapping with Unassigned as plotly light blue
   all_colors <- c("Unassigned" = plotly_light_blue)
   for (cls in present_classes) {
     if (cls != "Unassigned") {
@@ -585,23 +559,22 @@ output$class_plot <- renderPlotly({
     }
   }
   
-  raster_result <- make_raster_png(df, "Class", all_colors)
+  # Use cluster raster function with complete color mapping
+  img_uri <- make_raster_png(df, "Class", all_colors)
   
   # Start with base plot
   p <- plot_ly() %>%
     layout(
       images = list(list(
-        source = raster_result$uri,
+        source = img_uri,
         xref = "x", yref = "y",
-        x = raster_result$x_min,
-        y = raster_result$y_max,
-        sizex = raster_result$x_max - raster_result$x_min,
-        sizey = raster_result$y_max - raster_result$y_min,
+        x = 0, y = max(df$y),
+        sizex = max(df$x), sizey = max(df$y),
         sizing = "stretch", layer = "below"
       )),
       title = "Class Assignment",
-      xaxis = list(range = c(raster_result$x_min, raster_result$x_max), title = "x"),
-      yaxis = list(range = c(raster_result$y_min, raster_result$y_max), title = "y",
+      xaxis = list(range = c(0, max(df$x)), title = "x"),
+      yaxis = list(range = c(0, max(df$y)), title = "y",
                   scaleanchor = "x", scaleratio = 1),
       showlegend = TRUE,
       legend = list(
@@ -628,11 +601,14 @@ output$class_plot <- renderPlotly({
     
     p <- p %>%
       add_trace(
-        x = c(-1000),
+        x = c(-1000),  # Way off screen
         y = c(-1000),
         type = "scatter",
         mode = "markers",
-        marker = list(size = 10, color = col),
+        marker = list(
+          size = 10,   
+          color = col
+        ),
         name = cls,
         showlegend = TRUE,
         hoverinfo = "skip"
