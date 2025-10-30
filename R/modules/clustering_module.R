@@ -531,16 +531,22 @@ output$cluster_plot <- renderPlotly({
   x_range <- c(x_min, x_max)
   y_range <- c(y_min, y_max)
   
-  # Image anchor (top-left corner in data coordinates)
+  # Image positioning and size
   img_x <- x_min
   img_y <- y_max
+  img_sizex <- x_max - x_min
+  img_sizey <- y_max - y_min
   
-  # Reverse ranges for flipped axes (but keep image anchor the same)
+  # Adjust for flipped axes
   if (orientation == "Flip X" || orientation == "Flip Both") {
     x_range <- rev(x_range)
+    img_x <- x_max  # Start from right
+    img_sizex <- -(x_max - x_min)  # Negative size flips image
   }
   if (orientation == "Flip Y" || orientation == "Flip Both") {
     y_range <- rev(y_range)
+    img_y <- y_min  # Start from bottom
+    img_sizey <- y_max - y_min  # Positive (y is already flipped in make_raster_png)
   }
   
   p <- plot_ly(source = "cluster") %>%
@@ -550,8 +556,8 @@ output$cluster_plot <- renderPlotly({
         source = img_uri,
         xref = "x", yref = "y",
         x = img_x, y = img_y,
-        sizex = x_max - x_min, 
-        sizey = y_max - y_min,
+        sizex = img_sizex, 
+        sizey = img_sizey,
         sizing = "stretch", layer = "below"
       )),
       dragmode = "drawclosedpath",
@@ -643,16 +649,22 @@ output$class_plot <- renderPlotly({
   x_range <- c(x_min, x_max)
   y_range <- c(y_min, y_max)
   
-  # Image anchor (top-left corner in data coordinates)
+  # Image positioning and size
   img_x <- x_min
   img_y <- y_max
+  img_sizex <- x_max - x_min
+  img_sizey <- y_max - y_min
   
-  # Reverse ranges for flipped axes (but keep image anchor the same)
+  # Adjust for flipped axes
   if (orientation == "Flip X" || orientation == "Flip Both") {
     x_range <- rev(x_range)
+    img_x <- x_max  # Start from right
+    img_sizex <- -(x_max - x_min)  # Negative size flips image
   }
   if (orientation == "Flip Y" || orientation == "Flip Both") {
     y_range <- rev(y_range)
+    img_y <- y_min  # Start from bottom
+    img_sizey <- y_max - y_min  # Positive (y is already flipped in make_raster_png)
   }
   
   p <- plot_ly() %>%
@@ -661,8 +673,8 @@ output$class_plot <- renderPlotly({
         source = img_uri,
         xref = "x", yref = "y",
         x = img_x, y = img_y,
-        sizex = x_max - x_min, 
-        sizey = y_max - y_min,
+        sizex = img_sizex, 
+        sizey = img_sizey,
         sizing = "stretch", layer = "below"
       )),
       title = "Class Assignment",
