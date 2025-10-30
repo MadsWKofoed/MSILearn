@@ -220,3 +220,123 @@ find_compatible_run <- function(sample_name,
   # Return first run_id (assuming one raw per sample)
   results$run_id[1]
 }
+
+
+
+
+#======== CLUSTERING ARTIFACTS FUNCTIONS ========#
+
+# --- Query clustering artifacts ---
+query_clustering_artifacts <- function(sample_name = NULL,
+                                      assignment_id = NULL,
+                                      clustering_method = NULL,
+                                      snr = NULL,
+                                      tolerance = NULL,
+                                      reference_name = NULL,
+                                      db_name = "MSI_database",
+                                      mongo_url = "mongodb://localhost") {
+  
+  mongo_cluster_meta <- mongo(collection = "clustering_metadata",
+                             db = db_name, url = mongo_url)
+  
+  # Build query
+  query_parts <- list()
+  if (!is.null(sample_name)) query_parts$sample_name <- sample_name
+  if (!is.null(assignment_id)) query_parts$assignment_id <- assignment_id
+  if (!is.null(clustering_method)) query_parts$clustering_method <- clustering_method
+  if (!is.null(snr)) query_parts$snr <- snr
+  if (!is.null(tolerance)) query_parts$tolerance <- tolerance
+  if (!is.null(reference_name)) query_parts$reference_name <- reference_name
+  
+  query_json <- if (length(query_parts) == 0) {
+    '{}'
+  } else {
+    jsonlite::toJSON(query_parts, auto_unbox = TRUE)
+  }
+  
+  results <- mongo_cluster_meta$find(query_json)
+  results
+}
+
+
+# --- Load clustering result by assignment_id ---
+load_clustering_by_id <- function(assignment_id,
+                                  db_name = "MSI_database",
+                                  mongo_url = "mongodb://localhost") {
+  
+  # Query metadata
+  artifacts <- query_clustering_artifacts(
+    assignment_id = assignment_id,
+    db_name = db_name,
+    mongo_url = mongo_url
+  )
+  
+  if (nrow(artifacts) == 0) {
+    stop("No clustering found with assignment_id: ", assignment_id)
+  }
+  
+  gridfs_id <- artifacts$gridfs_id[1]
+  
+  # Load from GridFS
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  
+  query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
+  file_info <- grid$find(query)
+  
+  if (nrow(file_info) == 0) {
+    stop("GridFS file not found: ", gridfs_id)
+  }
+  
+  filename <- file_info$name[1]
+  
+  # Download to temp directory
+  temp_dir <- tempdir()
+  grid$download(filename, temp_dir)
+  
+  # Read the downloaded file
+  downloaded_path <- file.path(temp_dir, filename)
+  df <- readRDS(downloaded_path)
+  
+  message("Loaded clustering (assignment_id: ", assignment_id, ")")
+  message("  Sample: ", artifacts$sample_name[1])
+  message("  Method: ", artifacts$clustering_method[1])
+  message("  Dimensions: ", nrow(df), " pixels × ", ncol(df), " columns")
+  message("  Coordinate ranges: x = ", min(df$x), "-", max(df$x), 
+          ", y = ", min(df$y), "-", max(df$y))
+  
+  df
+}
+
+
+# --- Load clustering result by query (first match) ---
+load_clustering <- function(sample_name = NULL,
+                           assignment_id = NULL,
+                           clustering_method = NULL,
+                           snr = NULL,
+                           tolerance = NULL,
+                           reference_name = NULL,
+                           db_name = "MSI_database",
+                           mongo_url = "mongodb://localhost") {
+  
+  artifacts <- query_clustering_artifacts(
+    sample_name = sample_name,
+    assignment_id = assignment_id,
+    clustering_method = clustering_method,
+    snr = snr,
+    tolerance = tolerance,
+    reference_name = reference_name,
+    db_name = db_name,
+    mongo_url = mongo_url
+  )
+  
+  if (nrow(artifacts) == 0) {
+    stop("No clustering artifacts found matching query")
+  }
+  
+  if (nrow(artifacts) > 1) {
+    message("Multiple clusterings found (", nrow(artifacts), "), loading first match")
+  }
+  
+  assignment_id <- artifacts$assignment_id[1]
+  load_clustering_by_id(assignment_id, db_name, mongo_url)
+}
