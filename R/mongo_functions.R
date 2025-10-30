@@ -315,6 +315,7 @@ load_clustering <- function(sample_name = NULL,
                            snr = NULL,
                            tolerance = NULL,
                            reference_name = NULL,
+                           most_recent = TRUE,
                            db_name = "MSI_database",
                            mongo_url = "mongodb://localhost") {
   
@@ -334,7 +335,15 @@ load_clustering <- function(sample_name = NULL,
   }
   
   if (nrow(artifacts) > 1) {
-    message("Multiple clusterings found (", nrow(artifacts), "), loading first match")
+    message("Multiple clusterings found (", nrow(artifacts), ")")
+    
+    if (most_recent) {
+      # Sort by created_at descending and take first
+      artifacts <- artifacts[order(artifacts$created_at, decreasing = TRUE), ]
+      message("Loading most recent (", artifacts$created_at[1], ")")
+    } else {
+      message("Loading first match")
+    }
   }
   
   assignment_id <- artifacts$assignment_id[1]
