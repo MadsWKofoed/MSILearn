@@ -369,16 +369,15 @@ observeEvent(input$assign_class, {
   }
   df$Class <- as.character(df$Class)
   
-  y_max <- max(df$y)
-  
   # Only polygon selection supported
   if (!identical(shape$type, "polygon")) {
     showNotification("Only polygon selection is supported.", type = "error", duration = 4)
     return()
   }
   
+  # NO flip needed - plotly coordinates match our data coordinates
   poly_x <- shape$x
-  poly_y <- y_max - shape$y
+  poly_y <- shape$y
   inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
   
   n_sel <- sum(inside)
