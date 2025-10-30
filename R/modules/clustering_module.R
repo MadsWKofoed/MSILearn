@@ -516,17 +516,26 @@ output$cluster_plot <- renderPlotly({
   )
   img_uri <- make_raster_png(df, "cluster", cols)
   
-  # Determine axis ranges based on orientation
+  # Determine axis ranges and image anchor based on orientation
   base_df <- original_clustered()
   req(base_df)
   
-  # Default ranges (increasing)
-  x_range <- c(min(df$x), max(df$x))
-  y_range <- c(min(df$y), max(df$y))
-  
-  # Reverse ranges for flipped axes
   orientation <- input$orientation %||% "Default"
   
+  # Calculate ranges
+  x_min <- min(df$x)
+  x_max <- max(df$x)
+  y_min <- min(df$y)
+  y_max <- max(df$y)
+  
+  x_range <- c(x_min, x_max)
+  y_range <- c(y_min, y_max)
+  
+  # Image anchor (top-left corner in data coordinates)
+  img_x <- x_min
+  img_y <- y_max
+  
+  # Reverse ranges for flipped axes (but keep image anchor the same)
   if (orientation == "Flip X" || orientation == "Flip Both") {
     x_range <- rev(x_range)
   }
@@ -540,9 +549,9 @@ output$cluster_plot <- renderPlotly({
       images = list(list(
         source = img_uri,
         xref = "x", yref = "y",
-        x = min(df$x), y = max(df$y),
-        sizex = max(df$x) - min(df$x), 
-        sizey = max(df$y) - min(df$y),
+        x = img_x, y = img_y,
+        sizex = x_max - x_min, 
+        sizey = y_max - y_min,
         sizing = "stretch", layer = "below"
       )),
       dragmode = "drawclosedpath",
@@ -572,8 +581,8 @@ output$cluster_plot <- renderPlotly({
   for (i in seq_len(max(df$cluster))) {
     p <- p %>%
       add_trace(
-        x = c(min(df$x) - 1000),
-        y = c(min(df$y) - 1000),
+        x = c(x_min - 1000),
+        y = c(y_min - 1000),
         type = "scatter",
         mode = "markers",
         marker = list(size = 10, color = cols[as.character(i)]),
@@ -619,17 +628,26 @@ output$class_plot <- renderPlotly({
   
   img_uri <- make_raster_png(df, "Class", all_colors)
   
-  # Determine axis ranges based on orientation
+  # Determine axis ranges and image anchor based on orientation
   base_df <- original_clustered()
   req(base_df)
   
-  # Default ranges (increasing)
-  x_range <- c(min(df$x), max(df$x))
-  y_range <- c(min(df$y), max(df$y))
-  
-  # Reverse ranges for flipped axes
   orientation <- input$orientation %||% "Default"
   
+  # Calculate ranges
+  x_min <- min(df$x)
+  x_max <- max(df$x)
+  y_min <- min(df$y)
+  y_max <- max(df$y)
+  
+  x_range <- c(x_min, x_max)
+  y_range <- c(y_min, y_max)
+  
+  # Image anchor (top-left corner in data coordinates)
+  img_x <- x_min
+  img_y <- y_max
+  
+  # Reverse ranges for flipped axes (but keep image anchor the same)
   if (orientation == "Flip X" || orientation == "Flip Both") {
     x_range <- rev(x_range)
   }
@@ -642,9 +660,9 @@ output$class_plot <- renderPlotly({
       images = list(list(
         source = img_uri,
         xref = "x", yref = "y",
-        x = min(df$x), y = max(df$y),
-        sizex = max(df$x) - min(df$x), 
-        sizey = max(df$y) - min(df$y),
+        x = img_x, y = img_y,
+        sizex = x_max - x_min, 
+        sizey = y_max - y_min,
         sizing = "stretch", layer = "below"
       )),
       title = "Class Assignment",
@@ -673,8 +691,8 @@ output$class_plot <- renderPlotly({
     
     p <- p %>%
       add_trace(
-        x = c(min(df$x) - 1000),
-        y = c(min(df$y) - 1000),
+        x = c(x_min - 1000),
+        y = c(y_min - 1000),
         type = "scatter",
         mode = "markers",
         marker = list(
