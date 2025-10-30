@@ -516,9 +516,23 @@ output$cluster_plot <- renderPlotly({
   )
   img_uri <- make_raster_png(df, "cluster", cols)
   
-  # Use actual data ranges (respects transformations)
+  # Determine axis ranges based on orientation
+  base_df <- original_clustered()
+  req(base_df)
+  
+  # Default ranges (increasing)
   x_range <- c(min(df$x), max(df$x))
   y_range <- c(min(df$y), max(df$y))
+  
+  # Reverse ranges for flipped axes
+  orientation <- input$orientation %||% "Default"
+  
+  if (orientation == "Flip X" || orientation == "Flip Both") {
+    x_range <- rev(x_range)
+  }
+  if (orientation == "Flip Y" || orientation == "Flip Both") {
+    y_range <- rev(y_range)
+  }
   
   p <- plot_ly(source = "cluster") %>%
     add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
@@ -526,8 +540,9 @@ output$cluster_plot <- renderPlotly({
       images = list(list(
         source = img_uri,
         xref = "x", yref = "y",
-        x = x_range[1], y = y_range[2],
-        sizex = diff(x_range), sizey = diff(y_range),
+        x = min(df$x), y = max(df$y),
+        sizex = max(df$x) - min(df$x), 
+        sizey = max(df$y) - min(df$y),
         sizing = "stretch", layer = "below"
       )),
       dragmode = "drawclosedpath",
@@ -557,8 +572,8 @@ output$cluster_plot <- renderPlotly({
   for (i in seq_len(max(df$cluster))) {
     p <- p %>%
       add_trace(
-        x = c(x_range[1] - 1000),
-        y = c(y_range[1] - 1000),
+        x = c(min(df$x) - 1000),
+        y = c(min(df$y) - 1000),
         type = "scatter",
         mode = "markers",
         marker = list(size = 10, color = cols[as.character(i)]),
@@ -604,17 +619,32 @@ output$class_plot <- renderPlotly({
   
   img_uri <- make_raster_png(df, "Class", all_colors)
   
-  # Use actual data ranges (respects transformations)
+  # Determine axis ranges based on orientation
+  base_df <- original_clustered()
+  req(base_df)
+  
+  # Default ranges (increasing)
   x_range <- c(min(df$x), max(df$x))
   y_range <- c(min(df$y), max(df$y))
+  
+  # Reverse ranges for flipped axes
+  orientation <- input$orientation %||% "Default"
+  
+  if (orientation == "Flip X" || orientation == "Flip Both") {
+    x_range <- rev(x_range)
+  }
+  if (orientation == "Flip Y" || orientation == "Flip Both") {
+    y_range <- rev(y_range)
+  }
   
   p <- plot_ly() %>%
     layout(
       images = list(list(
         source = img_uri,
         xref = "x", yref = "y",
-        x = x_range[1], y = y_range[2],
-        sizex = diff(x_range), sizey = diff(y_range),
+        x = min(df$x), y = max(df$y),
+        sizex = max(df$x) - min(df$x), 
+        sizey = max(df$y) - min(df$y),
         sizing = "stretch", layer = "below"
       )),
       title = "Class Assignment",
@@ -636,18 +666,15 @@ output$class_plot <- renderPlotly({
                                 "toggleSpikelines", "toImage", "select2d", "lasso2d")
     )
   
-  # Add legend traces with matching colors
-  # NOTE: Markers positioned off-screen at (-1000, -1000) to create legend entries
-  # without cluttering the plot. This is necessary because the plot is a raster image
-  # with no actual data traces, but plotly requires traces to generate legends.
+  # Add legend traces
   for (i in seq_along(present_classes)) {
     cls <- present_classes[i]
     col <- all_colors[[cls]]
     
     p <- p %>%
       add_trace(
-        x = c(x_range[1] - 1000),
-        y = c(y_range[1] - 1000),
+        x = c(min(df$x) - 1000),
+        y = c(min(df$y) - 1000),
         type = "scatter",
         mode = "markers",
         marker = list(
