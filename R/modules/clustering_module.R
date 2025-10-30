@@ -267,7 +267,9 @@ make_raster_png <- function(df, fill_var, colors) {
   
   # Create EMPTY matrix (NA = transparent)
   mat <- matrix(NA_character_, nrow = height, ncol = width)
-  mat[cbind(df$y, df$x)] <- as.character(df[[fill_var]])
+  
+  # Flip y-coordinates: (height - y + 1) converts bottom-up to top-down
+  mat[cbind(height - df$y + 1, df$x)] <- as.character(df[[fill_var]])
   
   col_img <- matrix(colors[mat], nrow = height, ncol = width)
   
