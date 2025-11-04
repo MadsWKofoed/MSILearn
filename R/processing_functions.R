@@ -24,7 +24,7 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
                         mass.range = NULL, resolution = 10, units = c("ppm"),
                         guess.max = 1000L, as = "auto", parse.only = FALSE,
                         verbose = FALSE, chunkopts = list(),
-                        BPPARAM = bpparam())  
+                        BPPARAM = SerialParam())  # Changed to SerialParam
   
   save_stage_to_mongo(msi_data, run_id, "raw", sample_name = imzml_name)
   
@@ -67,9 +67,10 @@ process_binning_and_matrix <- function(run_id, msi_data, control_SNR_ref,
   
   msi_data_binned <- bin(msi_data, ref = mz(control_MSI_ref),
                          tolerance = tolerance, units = "mz", 
-                         BPPARAM = bpparam()) %>%
+                         BPPARAM = SerialParam()) %>%  # Changed to SerialParam
     process()
   
+  # ...existing code...
   msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
   mz_names <- paste0("mz_", mz(msi_data_binned))
   coords <- coord(msi_data_binned)
