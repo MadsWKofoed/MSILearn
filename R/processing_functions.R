@@ -2,7 +2,13 @@
 
 process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id) {
   base <- tools::file_path_sans_ext(basename(imzml_name))
-  temp_dir <- tempfile(); dir.create(temp_dir)
+  
+  # Use tempdir() instead of tempfile() - persists for R session
+  temp_dir <- file.path(tempdir(), "msi_processing")
+  if (!dir.exists(temp_dir)) {
+    dir.create(temp_dir, recursive = TRUE)
+  }
+  
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
   
