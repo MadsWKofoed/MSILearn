@@ -15,7 +15,7 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
   file.copy(imzml_path, temp_imzml, overwrite = TRUE)
   file.copy(ibd_path, temp_ibd, overwrite = TRUE)
   
-  msi_data <- readImzML(temp_imzml, memory = FALSE, check = FALSE,
+  msi_data <- readImzML(temp_imzml, memory = TRUE, check = FALSE,
                         mass.range = NULL, resolution = 10, units = c("ppm"),
                         guess.max = 1000L, as = "auto", parse.only = FALSE,
                         verbose = FALSE, chunkopts = list(),
