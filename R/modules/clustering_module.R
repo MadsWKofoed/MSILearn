@@ -34,7 +34,7 @@ clustering_module_ui <- function(id) {
 }
 
 
-clustering_module_server <- function(id) {
+clustering_module_server <- function(id, msi_con) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     
@@ -44,6 +44,9 @@ clustering_module_server <- function(id) {
     mongo_cluster_meta <- mongo(collection = "clustering_metadata",
                                db = "MSI_database",
                                url = "mongodb://localhost")
+    mongo_data <- mongo(collection = "msi_data", 
+                       db = "msi_project", 
+                       url = "mongodb://localhost")
     
     processed_data <- reactiveVal(NULL)
     clustered_data <- reactiveVal(NULL)
