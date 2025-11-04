@@ -12,6 +12,7 @@ clustering_module_ui <- function(id) {
                
                numericInput(ns("clusters"), "Number of clusters:", value = 3, min = 2, max = 30),
                selectInput(ns("method"), "Clustering method:", choices = c("K-means", "Hierarchical")),
+               checkboxInput(ns("log_scale"), "Use log-scale transformation", value = FALSE),
                actionButton(ns("run_clustering"), "Run Clustering"),
                tags$hr(),
                
@@ -211,9 +212,9 @@ clustering_module_server <- function(id, msi_con) {
                     message = paste0("Running ", input$method, " with k=", input$clusters, "..."))
         
         clustered <- if (input$method == "K-means") {
-          run_kmeans(df, input$clusters)
+          run_kmeans(df, input$clusters, log_scale = input$log_scale)
         } else {
-          run_hclust(df, input$clusters)
+          run_hclust(df, input$clusters, log_scale = input$log_scale)
         }
         
         progress$set(value = 90, message = "Finalizing...")
@@ -817,7 +818,8 @@ output$class_plot <- renderPlotly({
           # Clustering parameters
           clustering_method = input$method,
           num_clusters = as.integer(input$clusters),
-          orientation_used = input$orientation,  # Record what orientation was used for annotation
+          log_scale_used = as.logical(input$log_scale),
+          orientation_used = input$orientation,  
           
           # Data dimensions
           num_pixels = as.integer(nrow(df_to_save)),
