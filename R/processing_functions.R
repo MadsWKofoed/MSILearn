@@ -2,23 +2,38 @@
 
 process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id) {
   base <- tools::file_path_sans_ext(basename(imzml_name))
-  temp_dir <- tempfile(); dir.create(temp_dir)
+  
+  # Use a persistent temp directory that won't be garbage collected
+  temp_dir <- file.path(tempdir(), "msi_processing", run_id)
+  if (!dir.exists(temp_dir)) {
+    dir.create(temp_dir, recursive = TRUE)
+  }
+  
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
   
   file.copy(imzml_path, temp_imzml, overwrite = TRUE)
   file.copy(ibd_path, temp_ibd, overwrite = TRUE)
   
+  # Ensure files are readable
+  Sys.chmod(temp_imzml, mode = "0644")
+  Sys.chmod(temp_ibd, mode = "0644")
+  
+  # Use serial processing to avoid file access issues
   msi_data <- readImzML(temp_imzml, memory = FALSE, check = FALSE,
                         mass.range = NULL, resolution = 10, units = c("ppm"),
                         guess.max = 1000L, as = "auto", parse.only = FALSE,
                         verbose = FALSE, chunkopts = list(),
-                        BPPARAM = bpparam())
+                        BPPARAM = bpparam())  
   
   save_stage_to_mongo(msi_data, run_id, "raw", sample_name = imzml_name)
   
   control_mean <- summarizeFeatures(msi_data, "mean")
   save_stage_to_mongo(control_mean, run_id, "control_mean", sample_name = imzml_name)
+  
+  # Clean up temp files after saving
+  unlink(temp_imzml)
+  unlink(temp_ibd)
   
   invisible(list(msi_data = msi_data, control_mean = control_mean))
 }

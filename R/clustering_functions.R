@@ -12,11 +12,11 @@ run_kmeans <- function(full_df, k = 3, log_scale = FALSE) {
   feature_matrix <- as.matrix(full_df[, grep("^mz_", colnames(full_df))])
   
   if (log_scale) {
-    feature_matrix <- log_transform(feature_matrix)
+    feature_matrix <- log_transform(feature_matrix) # Only transform the matrix used for calculation
   }
   
-  km <- kmeans(feature_matrix, centers = k)
-  full_df$cluster <- km$cluster
+  km <- kmeans(feature_matrix, centers = k) # Clustering uses transformed data
+  full_df$cluster <- km$cluster # Assign clusters back to ORIGINAL dataframe
   full_df
 }
 
