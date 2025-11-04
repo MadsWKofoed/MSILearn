@@ -14,6 +14,18 @@ msi_con <- mongo(
   url = "mongodb://localhost"
 )
 
+# Custom CSS for font
+custom_css <- tags$head(
+  tags$link(
+    rel = "stylesheet",
+    href = "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap"
+  ),
+  tags$style(HTML("
+    * {
+      font-family: 'Roboto', sans-serif !important;
+    }
+  "))
+)
 
 # Source function files
 source("R/clustering_functions.R")
@@ -28,6 +40,7 @@ source("R/modules/processing_module.R")
 # Global UI
 ui <- navbarPage(
   title = "MSI Clustering & Prediction",
+  custom_css,
   useShinyjs(),  # Add this line
   tabPanel("Welcome",
            h3("Welcome to the MSI Clustering App"),
