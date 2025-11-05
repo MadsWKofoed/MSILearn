@@ -29,7 +29,7 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
   # Read with Cardinal - it will automatically find the .ibd file
   msi_data <- readImzML(
     temp_imzml, 
-    memory = TRUE, 
+    memory = FALSE, 
     check = FALSE,
     mass.range = NULL, 
     resolution = 10, 
