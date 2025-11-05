@@ -1,19 +1,48 @@
 # R/processing_functions.R
 
 process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id) {
+  # Get base name without extension
   base <- tools::file_path_sans_ext(basename(imzml_name))
-  temp_dir <- tempfile(); dir.create(temp_dir)
+  
+  # Create persistent temp directory for this session
+  temp_dir <- file.path(tempdir(), "msi_processing")
+  if (!dir.exists(temp_dir)) {
+    dir.create(temp_dir, recursive = TRUE)
+  }
+  
+  # CRITICAL: Both files must have the same base name
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
+  
+  # Copy files with correct names
   file.copy(imzml_path, temp_imzml, overwrite = TRUE)
   file.copy(ibd_path, temp_ibd, overwrite = TRUE)
   
-  message("Reading MSI data...")
-  msi_data <- readImzML(temp_imzml, memory = FALSE, check = FALSE,
-                        mass.range = NULL, resolution = 10, units = c("ppm"),
-                        guess.max = 1000L, as = "auto", parse.only=FALSE,
-                        verbose = getCardinalVerbose(), chunkopts = list(),
-                        BPPARAM = bpparam())
+  # Verify both files exist
+  if (!file.exists(temp_imzml)) {
+    stop("Failed to copy imzML file to: ", temp_imzml)
+  }
+  if (!file.exists(temp_ibd)) {
+    stop("Failed to copy ibd file to: ", temp_ibd)
+  }
+  
+  message("Reading MSI data from: ", temp_imzml)
+  
+  # Read with Cardinal - it will automatically find the .ibd file
+  msi_data <- readImzML(
+    temp_imzml, 
+    memory = FALSE, 
+    check = FALSE,
+    mass.range = NULL, 
+    resolution = 10, 
+    units = "ppm",
+    guess.max = 1000L, 
+    as = "auto", 
+    parse.only = FALSE,
+    verbose = getCardinalVerbose(), 
+    chunkopts = list(),
+    BPPARAM = MulticoreParam(workers = getCardinalNumWorkers())
+  )
   
   save_stage_to_mongo(msi_data, run_id, "raw", 
                       sample_name = imzml_name)
@@ -21,7 +50,6 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
   message("Summarizing features (mean spectrum)...")
   control_mean <- summarizeFeatures(msi_data, "mean")
   
-  # Save control_mean for reuse
   save_stage_to_mongo(control_mean, run_id, "control_mean",
                       sample_name = imzml_name)
   
@@ -60,8 +88,13 @@ process_binning_and_matrix <- function(run_id, msi_data, control_SNR_ref,
     process()
   
   message("Binning MSI data...")
-  msi_data_binned <- bin(msi_data, ref = mz(control_MSI_ref),
-                         tolerance = tolerance, units = "mz", BPPARAM = bpparam()) %>%
+  msi_data_binned <- bin(
+    msi_data, 
+    ref = mz(control_MSI_ref),
+    tolerance = tolerance, 
+    units = "mz", 
+    BPPARAM = MulticoreParam(workers = getCardinalNumWorkers())
+  ) %>%
     process()
   
   message("Building feature matrix dataframe...")
