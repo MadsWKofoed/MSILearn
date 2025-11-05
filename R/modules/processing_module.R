@@ -329,13 +329,32 @@ processing_module_server <- function(id) {
           )
           
           if (nrow(final_artifact) > 0) {
+            # Safely extract values with defaults
+            num_features <- if (!is.null(final_artifact$num_features[1])) {
+              as.integer(final_artifact$num_features[1])
+            } else {
+              NA
+            }
+            
+            num_pixels <- if (!is.null(final_artifact$num_pixels[1])) {
+              as.integer(final_artifact$num_pixels[1])
+            } else {
+              NA
+            }
+            
+            created_at <- if (!is.null(final_artifact$created_at[1])) {
+              as.character(final_artifact$created_at[1])
+            } else {
+              "Unknown"
+            }
+            
             tagList(
               div(class = "alert alert-success",
                   h4("✅ Processing Complete"),
                   p(sprintf("Sample: %s", sample_name)),
-                  p(sprintf("Features: %d", final_artifact$num_features[1])),
-                  p(sprintf("Pixels: %d", final_artifact$num_pixels[1])),
-                  p(sprintf("Created: %s", final_artifact$created_at[1]))
+                  if (!is.na(num_features)) p(sprintf("Features: %d", num_features)),
+                  if (!is.na(num_pixels)) p(sprintf("Pixels: %d", num_pixels)),
+                  p(sprintf("Created: %s", created_at))
               )
             )
           }
