@@ -1,63 +1,19 @@
 # R/processing_functions.R
 
 process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id) {
-  # Get base name without extension from the ORIGINAL filename (not temp path)
   base <- tools::file_path_sans_ext(basename(imzml_name))
-  
-  # Create persistent temp directory for this session
-  temp_dir <- file.path(tempdir(), "msi_processing")
-  if (!dir.exists(temp_dir)) {
-    dir.create(temp_dir, recursive = TRUE)
-  }
-  
-  # CRITICAL: Both files must have the same base name AND be in same directory
+  temp_dir <- tempfile(); dir.create(temp_dir)
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
+  file.copy(imzml_path, temp_imzml, overwrite = TRUE)
+  file.copy(ibd_path, temp_ibd, overwrite = TRUE)
   
-  message("Copying files to: ", temp_dir)
-  message("  imzML: ", basename(temp_imzml))
-  message("  ibd: ", basename(temp_ibd))
-  
-  # Copy files with MATCHING names
-  copy_success_imzml <- file.copy(imzml_path, temp_imzml, overwrite = TRUE)
-  copy_success_ibd <- file.copy(ibd_path, temp_ibd, overwrite = TRUE)
-  
-  if (!copy_success_imzml) {
-    stop("Failed to copy imzML file from: ", imzml_path, " to: ", temp_imzml)
-  }
-  if (!copy_success_ibd) {
-    stop("Failed to copy ibd file from: ", ibd_path, " to: ", temp_ibd)
-  }
-  
-  # Verify both files exist with correct names
-  if (!file.exists(temp_imzml)) {
-    stop("imzML file does not exist at: ", temp_imzml)
-  }
-  if (!file.exists(temp_ibd)) {
-    stop("ibd file does not exist at: ", temp_ibd)
-  }
-  
-  message("✓ Files copied successfully")
-  message("  Reading MSI data from: ", temp_imzml)
-  
-  # Read with Cardinal - it will automatically find the .ibd file
-  msi_data <- readImzML(
-    temp_imzml,
-    attach.only = FALSE,
-    memory = FALSE, 
-    check = FALSE,
-    mass.range = NULL, 
-    resolution = 10, 
-    units = "ppm",
-    guess.max = 1000L, 
-    as = "auto", 
-    parse.only = FALSE,
-    verbose = getCardinalVerbose(), 
-    chunkopts = list(),
-    BPPARAM = MulticoreParam(workers = getCardinalNumWorkers())
-  )
-  
-  message("✓ MSI data loaded successfully")
+  message("Reading MSI data...")
+  msi_data <- readImzML(temp_imzml, memory = FALSE, check = FALSE,
+                        mass.range = NULL, resolution = 10, units = c("ppm"),
+                        guess.max = 1000L, as = "auto", parse.only=FALSE,
+                        verbose = getCardinalVerbose(), chunkopts = list(),
+                        BPPARAM = bpparam())
   
   save_stage_to_mongo(msi_data, run_id, "raw", 
                       sample_name = imzml_name)
@@ -65,6 +21,7 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
   message("Summarizing features (mean spectrum)...")
   control_mean <- summarizeFeatures(msi_data, "mean")
   
+  # Save control_mean for reuse
   save_stage_to_mongo(control_mean, run_id, "control_mean",
                       sample_name = imzml_name)
   
@@ -103,13 +60,8 @@ process_binning_and_matrix <- function(run_id, msi_data, control_SNR_ref,
     process()
   
   message("Binning MSI data...")
-  msi_data_binned <- bin(
-    msi_data, 
-    ref = mz(control_MSI_ref),
-    tolerance = tolerance, 
-    units = "mz", 
-    BPPARAM = MulticoreParam(workers = getCardinalNumWorkers())
-  ) %>%
+  msi_data_binned <- bin(msi_data, ref = mz(control_MSI_ref),
+                         tolerance = tolerance, units = "mz", BPPARAM = bpparam()) %>%
     process()
   
   message("Building feature matrix dataframe...")
