@@ -238,31 +238,27 @@ processing_module_server <- function(id) {
       if (input$data_source == "Upload new files") {
         req(input$msi_files)
         
-        imzml_file <- input$msi_files$datapath[grepl("\\.imzML$", input$msi_files$name)]
-        ibd_file <- input$msi_files$datapath[grepl("\\.ibd$", input$msi_files$name)]
-        imzml_name <- input$msi_files$name[grepl("\\.imzML$", input$msi_files$name)]
+        # Get uploaded files
+        files <- input$msi_files
+        imzml_idx <- grepl("\\.imzML$", files$name, ignore.case = TRUE)
+        ibd_idx <- grepl("\\.ibd$", files$name, ignore.case = TRUE)
         
-        if (length(imzml_file) == 0 || length(ibd_file) == 0) {
+        if (!any(imzml_idx) || !any(ibd_idx)) {
           showNotification("Please upload both imzML and ibd files.", 
                           type = "error", duration = NULL)
           return()
         }
         
+        # IMPORTANT: Use the original upload paths directly
+        imzml_file <- files$datapath[imzml_idx][1]
+        ibd_file <- files$datapath[ibd_idx][1]
+        imzml_name <- files$name[imzml_idx][1]
+        
         sample_name <- if (nchar(input$sample_name_upload) > 0) {
           input$sample_name_upload
         } else {
-          imzml_name
+          tools::file_path_sans_ext(imzml_name)
         }
-        
-      } else {
-        req(input$existing_sample)
-        
-        # For existing dataset, we don't need file paths
-        # The pipeline will load from database
-        imzml_file <- NULL
-        ibd_file <- NULL
-        imzml_name <- input$existing_sample
-        sample_name <- input$existing_sample
       }
       
       current_sample_name(sample_name)
