@@ -89,9 +89,30 @@ processing_module_server <- function(id) {
       req(input$msi_files)
       mz_ref <- selected_mz()
       
-      imzml_file <- input$msi_files$datapath[grepl("\\.imzML$", input$msi_files$name)]
-      ibd_file   <- input$msi_files$datapath[grepl("\\.ibd$", input$msi_files$name)]
-      imzml_name <- input$msi_files$name[grepl("\\.imzML$", input$msi_files$name)]
+      # Get uploaded file info
+      files <- input$msi_files
+      
+      # Find imzML and ibd files (case-insensitive)
+      imzml_idx <- grepl("\\.imzML$", files$name, ignore.case = TRUE)
+      ibd_idx <- grepl("\\.ibd$", files$name, ignore.case = TRUE)
+      
+      if (!any(imzml_idx) || !any(ibd_idx)) {
+        showNotification("Please upload both imzML and ibd files.", 
+                        type = "error", duration = NULL)
+        return()
+      }
+      
+      # Use the Shiny-provided temporary paths (these are the actual file locations)
+      imzml_file <- files$datapath[imzml_idx][1]
+      ibd_file <- files$datapath[ibd_idx][1]
+      
+      # But use the ORIGINAL filename for naming (not the temp path)
+      imzml_name <- files$name[imzml_idx][1]
+      
+      message("Processing upload:")
+      message("  Original imzML name: ", imzml_name)
+      message("  Temp imzML path: ", imzml_file)
+      message("  Temp ibd path: ", ibd_file)
       
       snr_val <- input$snr
       tol_val <- input$tolerance
@@ -100,9 +121,9 @@ processing_module_server <- function(id) {
       
       run_id <- tryCatch({
         process_msi_pipeline(
-          imzml_path = imzml_file,
-          ibd_path   = ibd_file,
-          imzml_name = imzml_name,
+          imzml_path = imzml_file,      # Shiny's temp path
+          ibd_path   = ibd_file,         # Shiny's temp path  
+          imzml_name = imzml_name,       # Original filename
           ref_mz_values = mz_ref$values,
           ref_source = mz_ref$source,
           ref_name = mz_ref$name,
@@ -112,7 +133,6 @@ processing_module_server <- function(id) {
       }, error = function(e) {
         msg <- conditionMessage(e)
         
-        # Check if it's the "already exists" error
         if (grepl("identical parameters already exists", msg)) {
           output$run_status <- renderText("⚠️ Data already processed with these exact parameters. No action needed.")
           showNotification(

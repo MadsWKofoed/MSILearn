@@ -1,7 +1,7 @@
 # R/processing_functions.R
 
 process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id) {
-  # Get base name without extension
+  # Get base name without extension from the ORIGINAL filename (not temp path)
   base <- tools::file_path_sans_ext(basename(imzml_name))
   
   # Create persistent temp directory for this session
@@ -10,27 +10,40 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
     dir.create(temp_dir, recursive = TRUE)
   }
   
-  # CRITICAL: Both files must have the same base name
+  # CRITICAL: Both files must have the same base name AND be in same directory
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
   
-  # Copy files with correct names
-  file.copy(imzml_path, temp_imzml, overwrite = TRUE)
-  file.copy(ibd_path, temp_ibd, overwrite = TRUE)
+  message("Copying files to: ", temp_dir)
+  message("  imzML: ", basename(temp_imzml))
+  message("  ibd: ", basename(temp_ibd))
   
-  # Verify both files exist
+  # Copy files with MATCHING names
+  copy_success_imzml <- file.copy(imzml_path, temp_imzml, overwrite = TRUE)
+  copy_success_ibd <- file.copy(ibd_path, temp_ibd, overwrite = TRUE)
+  
+  if (!copy_success_imzml) {
+    stop("Failed to copy imzML file from: ", imzml_path, " to: ", temp_imzml)
+  }
+  if (!copy_success_ibd) {
+    stop("Failed to copy ibd file from: ", ibd_path, " to: ", temp_ibd)
+  }
+  
+  # Verify both files exist with correct names
   if (!file.exists(temp_imzml)) {
-    stop("Failed to copy imzML file to: ", temp_imzml)
+    stop("imzML file does not exist at: ", temp_imzml)
   }
   if (!file.exists(temp_ibd)) {
-    stop("Failed to copy ibd file to: ", temp_ibd)
+    stop("ibd file does not exist at: ", temp_ibd)
   }
   
-  message("Reading MSI data from: ", temp_imzml)
+  message("✓ Files copied successfully")
+  message("  Reading MSI data from: ", temp_imzml)
   
   # Read with Cardinal - it will automatically find the .ibd file
   msi_data <- readImzML(
-    temp_imzml, 
+    temp_imzml,
+    attach.only = FALSE,
     memory = FALSE, 
     check = FALSE,
     mass.range = NULL, 
@@ -43,6 +56,8 @@ process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id)
     chunkopts = list(),
     BPPARAM = MulticoreParam(workers = getCardinalNumWorkers())
   )
+  
+  message("✓ MSI data loaded successfully")
   
   save_stage_to_mongo(msi_data, run_id, "raw", 
                       sample_name = imzml_name)
