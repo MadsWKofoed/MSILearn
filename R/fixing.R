@@ -2,6 +2,9 @@ library(mongolite)
 library(Cardinal)
 library(BiocParallel)
 
+bp <- parallel::detectCores() - 1
+setCardinalParallel(workers = bp)
+
 # ===== UTILITY FUNCTIONS =====
 sanitize_name <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
 
