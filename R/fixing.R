@@ -539,3 +539,99 @@ test_full_cycle <- function() {
   
   invisible(reloaded)
 }
+
+
+
+# ===== INSPECT METADATA =====
+inspect_metadata <- function(sample_name = NULL, 
+                            stage_type = NULL,
+                            run_id = NULL,
+                            db_name = "MSI_test_database",
+                            mongo_url = "mongodb://localhost",
+                            limit = NULL) {
+  
+  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
+  
+  # Build query
+  query_list <- list()
+  if (!is.null(sample_name)) query_list$sample_name <- sample_name
+  if (!is.null(stage_type)) query_list$stage_type <- stage_type
+  if (!is.null(run_id)) query_list$run_id <- run_id
+  
+  # Execute query
+  if (length(query_list) == 0) {
+    query <- "{}"
+  } else {
+    query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
+  }
+  
+  artifacts <- meta$find(query, limit = limit)
+  
+  if (nrow(artifacts) == 0) {
+    message("No artifacts found matching criteria")
+    return(invisible(NULL))
+  }
+  
+  message("\n===== METADATA INSPECTION =====")
+  message("Total artifacts found: ", nrow(artifacts))
+  message("\nSummary by stage_type:")
+  print(table(artifacts$stage_type))
+  
+  if (!is.null(artifacts$run_id)) {
+    message("\nUnique run_ids: ", length(unique(artifacts$run_id)))
+    print(unique(artifacts$run_id))
+  }
+  
+  message("\n===== DETAILED VIEW =====")
+  print(artifacts)
+  
+  invisible(artifacts)
+}
+
+# View all metadata
+view_all_metadata <- function(db_name = "MSI_test_database") {
+  inspect_metadata(db_name = db_name)
+}
+
+# View metadata for specific sample
+view_sample_metadata <- function(sample_name, db_name = "MSI_test_database") {
+  inspect_metadata(sample_name = sample_name, db_name = db_name)
+}
+
+# View metadata for specific run
+view_run_metadata <- function(run_id, db_name = "MSI_test_database") {
+  inspect_metadata(run_id = run_id, db_name = db_name)
+}
+
+# List all available runs
+list_runs <- function(sample_name = NULL, db_name = "MSI_test_database") {
+  meta <- mongo("processing_artifacts_metadata", db = db_name, url = "mongodb://localhost")
+  
+  if (!is.null(sample_name)) {
+    query <- jsonlite::toJSON(list(sample_name = sample_name), auto_unbox = TRUE)
+    artifacts <- meta$find(query, fields = '{"run_id": 1, "stage_type": 1, "created_at": 1, "_id": 0}')
+  } else {
+    artifacts <- meta$find(fields = '{"run_id": 1, "sample_name": 1, "stage_type": 1, "created_at": 1, "_id": 0}')
+  }
+  
+  if (nrow(artifacts) == 0) {
+    message("No runs found")
+    return(invisible(NULL))
+  }
+  
+  # Group by run_id
+  runs <- artifacts %>%
+    group_by(run_id) %>%
+    summarise(
+      num_stages = n(),
+      stages = paste(unique(stage_type), collapse = ", "),
+      first_created = min(created_at),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(first_created))
+  
+  message("\n===== AVAILABLE RUNS =====")
+  print(runs)
+  
+  invisible(runs)
+}
