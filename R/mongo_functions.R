@@ -16,40 +16,171 @@ normalize_for_mongo <- function(df) {
   df
 }
 
+# ADD THIS - from fixing.R
+sanitize_name <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
 
-# --- Save artifact + create metadata row ---
+# ===== RAW FILE STORAGE =====
+save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
+                                   db_name = "MSI_test_database",
+                                   mongo_url = "mongodb://localhost",
+                                   bucket = "fs") {
+  stopifnot(file.exists(imzml_path), file.exists(ibd_path))
+  
+  grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
+  meta <- mongo(collection = "processing_artifacts_metadata", 
+                db = db_name, url = mongo_url)
+  
+  base <- tools::file_path_sans_ext(basename(sample_name))
+  ts   <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  imz_name <- sanitize_name(sprintf("%s__%s.imzML", base, ts))
+  ibd_name <- sanitize_name(sprintf("%s__%s.ibd", base, ts))
+  
+  message("Uploading imzML to GridFS...")
+  imz_id <- unname(grid$upload(imzml_path, name = imz_name))
+  
+  message("Uploading ibd to GridFS...")
+  ibd_id <- unname(grid$upload(ibd_path, name = ibd_name))
+  
+  meta$insert(list(
+    sample_name         = sample_name,
+    stage_type          = "raw_files",
+    created_at          = Sys.time(),
+    imzml_gridfs_id     = as.character(imz_id),
+    imzml_gridfs_name   = imz_name,
+    ibd_gridfs_id       = as.character(ibd_id),
+    ibd_gridfs_name     = ibd_name
+  ))
+  
+  message("✓ Raw files saved to MongoDB")
+  invisible(list(imzml_id = as.character(imz_id), ibd_id = as.character(ibd_id)))
+}
+
+fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
+                                      db_name = "MSI_test_database",
+                                      mongo_url = "mongodb://localhost",
+                                      bucket = "fs") {
+  grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
+  meta <- mongo(collection = "processing_artifacts_metadata", 
+                db = db_name, url = mongo_url)
+  
+  query <- jsonlite::toJSON(
+    list(sample_name = sample_name, stage_type = "raw_files"),
+    auto_unbox = TRUE
+  )
+  
+  artifacts <- meta$find(query)
+  
+  if (nrow(artifacts) == 0) {
+    stop("No raw_files artifact for sample_name = ", sample_name)
+  }
+  
+  row <- artifacts[nrow(artifacts), , drop = FALSE]
+  
+  dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+  base <- tools::file_path_sans_ext(basename(sample_name))
+  out_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
+  out_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
+  
+  imzml_name <- as.character(row$imzml_gridfs_name[1])
+  message("Downloading imzML: ", imzml_name)
+  grid$download(imzml_name, out_imzml)
+  
+  ibd_name <- as.character(row$ibd_gridfs_name[1])
+  message("Downloading ibd: ", ibd_name)
+  grid$download(ibd_name, out_ibd)
+  
+  message("✓ Raw files downloaded to: ", dest_dir)
+  list(imzml = out_imzml, ibd = out_ibd)
+}
+
+load_raw_object_from_mongo <- function(sample_name, workdir,
+                                       db_name = "MSI_test_database",
+                                       mongo_url = "mongodb://localhost",
+                                       bucket = "fs",
+                                       BPPARAM = BiocParallel::bpparam()) {
+  paths <- fetch_raw_pair_from_mongo(sample_name, workdir, db_name, mongo_url, bucket)
+  
+  message("Reading imzML with Cardinal...")
+  obj <- readImzML(
+    paths$imzml, 
+    memory = FALSE, 
+    check = FALSE,
+    mass.range = NULL, 
+    resolution = 10, 
+    units = "ppm",
+    guess.max = 1000L, 
+    as = "auto", 
+    parse.only = FALSE,
+    verbose = getCardinalVerbose(), 
+    chunkopts = list(),
+    BPPARAM = BPPARAM
+  )
+  
+  message("✓ MSI object loaded")
+  obj
+}
+
+# ===== SAVE/LOAD STAGES =====
 save_stage_to_mongo <- function(msi_object, run_id, stage_type, 
                                 sample_name,
                                 params = list(),
-                                db_name = "MSI_database",
+                                db_name = "MSI_test_database",  # CHANGED default
                                 mongo_url = "mongodb://localhost") {
+  
+  # Check for duplicates (control_mean and snr_reference only)
+  if (stage_type %in% c("control_mean", "snr_reference")) {
+    mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                        db = db_name, url = mongo_url)
+    
+    query_list <- list(
+      sample_name = sample_name,
+      stage_type = stage_type
+    )
+    
+    if (stage_type == "snr_reference" && !is.null(params$snr)) {
+      query_list$snr <- params$snr
+    }
+    
+    existing <- mongo_meta$find(
+      query = jsonlite::toJSON(query_list, auto_unbox = TRUE)
+    )
+    
+    if (nrow(existing) > 0) {
+      message("⚠ ", stage_type, " already exists. Skipping save.")
+      return(invisible(existing$run_id[1]))
+    }
+  }
   
   # Save RDS to GridFS
   temp_path <- tempfile(pattern = paste0(stage_type, "_"), fileext = ".rds")
   saveRDS(msi_object, temp_path)
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  grid_id <- grid$upload(temp_path, name = paste0(run_id, "_", stage_type, ".rds"))
+  filename <- paste0(run_id, "_", stage_type, ".rds")
+  grid_result <- grid$upload(temp_path, name = filename)
+  unlink(temp_path)
   
-  # Create metadata row
+  grid_id <- as.character(grid_result$id)
+  
+  # Create metadata
   mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                       db = db_name, url = mongo_url)
   
   metadata_row <- list(
-    gridfs_id = as.character(grid_id$id),
+    gridfs_id = grid_id,
+    filename = filename,
     run_id = run_id,
     sample_name = sample_name,
     stage_type = stage_type,
     created_at = Sys.time()
   )
   
-  # Add all parameters as flat fields
   metadata_row <- c(metadata_row, params)
   
   mongo_meta$insert(metadata_row)
   
-  message("Saved '", stage_type, "' (GridFS ID: ", grid_id$id, ")")
-  invisible(grid_id$id)
+  message("✓ Saved '", stage_type, "' (GridFS ID: ", grid_id, ")")
+  invisible(grid_id)
 }
 
 load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
@@ -75,6 +206,9 @@ load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
   }
   
   # Use most recent
+  if (nrow(artifacts) > 1) {
+    message("Multiple artifacts found, using most recent")
+  }
   row <- artifacts[nrow(artifacts), , drop = FALSE]
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
@@ -82,11 +216,14 @@ load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
   
   message("Downloading ", fname, "...")
   temp_dir <- tempdir()
-  grid$download(fname, temp_dir)
+  local_path <- file.path(temp_dir, fname)
   
-  downloaded_path <- file.path(temp_dir, fname)
+  if (!file.exists(local_path)) {
+    grid$download(fname, local_path)
+  }
+  
   message("Loading RDS...")
-  obj <- readRDS(downloaded_path)
+  obj <- readRDS(local_path)
   
   message("✓ Loaded stage: ", stage_type)
   obj
