@@ -240,8 +240,30 @@ test_complete_workflow <- function() {
     materialize = TRUE
   )
   
-  message("\n===== STEP 4: Apply SNR peak picking =====")
+  message("\n===== STEP 4: Load reference m/z from database =====")
+  mongo_ref <- mongo(collection = "mz_references",
+                     db = "msi_project", 
+                     url = "mongodb://localhost")
+  
+  ref_doc <- mongo_ref$find(
+    query = '{"reference_name": "113"}',
+    fields = '{"_id": 0, "mz_values": 1}'
+  )
+  
+  if (nrow(ref_doc) == 0) {
+    stop("Reference '113' not found in database")
+  }
+  
+  ref_mz <- ref_doc$mz_values[[1]]
+  reference_name <- "113"
+  
+  message("Loaded reference '113' with ", length(ref_mz), " m/z values")
+  
+  message("\n===== STEP 5: Apply tolerance and create reference =====")
   snr_value <- 3
+  tolerance_value <- 0.5
+  
+  # Apply SNR to mean spectrum first
   control_SNR_ref <- control_mean %>%
     peakPick(SNR = snr_value)
   
@@ -255,12 +277,7 @@ test_complete_workflow <- function() {
     materialize = TRUE
   )
   
-  message("\n===== STEP 5: Apply tolerance and create reference =====")
-  tolerance_value <- 0.5
-  
-  # Get reference m/z values from SNR picked peaks
-  ref_mz <- mz(control_SNR_ref)
-  
+  # Align to the database reference
   control_MSI_ref <- control_SNR_ref %>%
     peakAlign(ref = ref_mz, tolerance = tolerance_value, units = "mz") %>%
     subsetFeatures() %>%
@@ -271,7 +288,11 @@ test_complete_workflow <- function() {
     run_id,
     "aligned_reference",
     sample_name = sample_name,
-    params = list(snr = snr_value, tolerance = tolerance_value),
+    params = list(
+      snr = snr_value, 
+      tolerance = tolerance_value,
+      reference_name = reference_name
+    ),
     db_name = db_name,
     materialize = FALSE
   )
@@ -290,7 +311,11 @@ test_complete_workflow <- function() {
     run_id,
     "binned_msi",
     sample_name = sample_name,
-    params = list(snr = snr_value, tolerance = tolerance_value),
+    params = list(
+      snr = snr_value, 
+      tolerance = tolerance_value,
+      reference_name = reference_name
+    ),
     db_name = db_name,
     materialize = FALSE
   )
@@ -310,6 +335,9 @@ test_complete_workflow <- function() {
   )
   colnames(full_df) <- c("runNames", "x", "y", mz_names)
   
+  message("Final dataframe dimensions: ", nrow(full_df), " pixels × ", 
+          sum(grepl("^mz_", names(full_df))), " m/z features")
+  
   save_stage_to_mongo(
     full_df,
     run_id,
@@ -318,6 +346,7 @@ test_complete_workflow <- function() {
     params = list(
       snr = snr_value, 
       tolerance = tolerance_value,
+      reference_name = reference_name,
       num_features = ncol(full_df) - 3,
       num_pixels = nrow(full_df)
     ),
@@ -348,11 +377,14 @@ test_complete_workflow <- function() {
   
   message("\n✅ COMPLETE WORKFLOW TEST SUCCESSFUL!")
   message("Run ID: ", run_id)
+  message("Reference used: ", reference_name)
+  message("Final features: ", sum(grepl("^mz_", names(full_df))))
   
   invisible(list(
     run_id = run_id,
     msi_data = msi_data,
-    final_df = full_df
+    final_df = full_df,
+    reference_used = reference_name
   ))
 }
 
