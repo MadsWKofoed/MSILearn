@@ -548,7 +548,7 @@ inspect_metadata <- function(sample_name = NULL,
                             run_id = NULL,
                             db_name = "MSI_test_database",
                             mongo_url = "mongodb://localhost",
-                            limit = NULL) {
+                            limit = 0) {  # Change from NULL to 0 (0 means no limit)
   
   meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
   
@@ -565,7 +565,12 @@ inspect_metadata <- function(sample_name = NULL,
     query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
   }
   
-  artifacts <- meta$find(query, limit = limit)
+  # Only pass limit if it's greater than 0
+  if (limit > 0) {
+    artifacts <- meta$find(query, limit = limit)
+  } else {
+    artifacts <- meta$find(query)
+  }
   
   if (nrow(artifacts) == 0) {
     message("No artifacts found matching criteria")
@@ -586,52 +591,4 @@ inspect_metadata <- function(sample_name = NULL,
   print(artifacts)
   
   invisible(artifacts)
-}
-
-# View all metadata
-view_all_metadata <- function(db_name = "MSI_test_database") {
-  inspect_metadata(db_name = db_name)
-}
-
-# View metadata for specific sample
-view_sample_metadata <- function(sample_name, db_name = "MSI_test_database") {
-  inspect_metadata(sample_name = sample_name, db_name = db_name)
-}
-
-# View metadata for specific run
-view_run_metadata <- function(run_id, db_name = "MSI_test_database") {
-  inspect_metadata(run_id = run_id, db_name = db_name)
-}
-
-# List all available runs
-list_runs <- function(sample_name = NULL, db_name = "MSI_test_database") {
-  meta <- mongo("processing_artifacts_metadata", db = db_name, url = "mongodb://localhost")
-  
-  if (!is.null(sample_name)) {
-    query <- jsonlite::toJSON(list(sample_name = sample_name), auto_unbox = TRUE)
-    artifacts <- meta$find(query, fields = '{"run_id": 1, "stage_type": 1, "created_at": 1, "_id": 0}')
-  } else {
-    artifacts <- meta$find(fields = '{"run_id": 1, "sample_name": 1, "stage_type": 1, "created_at": 1, "_id": 0}')
-  }
-  
-  if (nrow(artifacts) == 0) {
-    message("No runs found")
-    return(invisible(NULL))
-  }
-  
-  # Group by run_id
-  runs <- artifacts %>%
-    group_by(run_id) %>%
-    summarise(
-      num_stages = n(),
-      stages = paste(unique(stage_type), collapse = ", "),
-      first_created = min(created_at),
-      .groups = "drop"
-    ) %>%
-    arrange(desc(first_created))
-  
-  message("\n===== AVAILABLE RUNS =====")
-  print(runs)
-  
-  invisible(runs)
 }
