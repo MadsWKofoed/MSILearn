@@ -125,20 +125,26 @@ processing_module_server <- function(id) {
       updateSelectInput(session, "ref_csv_mongo", choices = refs)
     })
     
-    # Load existing raw files from database
-    observe({
+    # Load existing raw files from database - MAKE IT REACTIVE
+    available_samples <- reactive({
+      # Trigger re-run when data_source changes
+      input$data_source
+      
       artifacts <- mongo_meta$find(
         query = '{"stage_type": "raw_files"}',
         fields = '{"_id": 0, "sample_name": 1}'
       )
       
       if (nrow(artifacts) == 0) {
-        updateSelectInput(session, "existing_sample", 
-                         choices = "No samples in database")
+        "No samples in database"
       } else {
-        samples <- unique(artifacts$sample_name)
-        updateSelectInput(session, "existing_sample", choices = samples)
+        unique(artifacts$sample_name)
       }
+    })
+    
+    observe({
+      samples <- available_samples()
+      updateSelectInput(session, "existing_sample", choices = samples)
     })
     
     # Show info about existing sample

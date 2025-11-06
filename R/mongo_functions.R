@@ -52,6 +52,45 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
   invisible(grid_id$id)
 }
 
+load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
+                                  db_name = "MSI_test_database",
+                                  mongo_url = "mongodb://localhost") {
+  
+  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
+  
+  query_list <- list(
+    sample_name = sample_name,
+    stage_type = stage_type
+  )
+  
+  if (!is.null(run_id)) {
+    query_list$run_id <- run_id
+  }
+  
+  query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
+  artifacts <- meta$find(query)
+  
+  if (nrow(artifacts) == 0) {
+    stop("No artifact found for sample=", sample_name, ", stage=", stage_type)
+  }
+  
+  # Use most recent
+  row <- artifacts[nrow(artifacts), , drop = FALSE]
+  
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  fname <- as.character(row$filename[1])
+  
+  message("Downloading ", fname, "...")
+  temp_dir <- tempdir()
+  grid$download(fname, temp_dir)
+  
+  downloaded_path <- file.path(temp_dir, fname)
+  message("Loading RDS...")
+  obj <- readRDS(downloaded_path)
+  
+  message("✓ Loaded stage: ", stage_type)
+  obj
+}
 
 # --- Query artifacts (returns dataframe) ---
 query_artifacts <- function(sample_name = NULL, 
