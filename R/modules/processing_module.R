@@ -32,6 +32,15 @@ processing_module_ui <- function(id) {
                hr(),
                h4("Processing Parameters"),
                
+               numericInput(ns("resolution"), "Resolution (ppm):", 
+                           value = 10, min = 1, max = 100, step = 1),
+               
+               numericInput(ns("snr"), "Signal to Noise Ratio (SNR):", 
+                           value = 3, min = 1.5, max = 30, step = 0.1),
+               
+               numericInput(ns("tolerance"), "Binning tolerance:", 
+                           value = 0.5, min = 0.1, max = 3, step = 0.1),
+               
                # Reference selection
                radioButtons(
                  ns("ref_source"),
@@ -52,28 +61,29 @@ processing_module_ui <- function(id) {
                             choices = "Loading...")
                ),
                
-               numericInput(ns("snr"), "Signal to Noise Ratio (SNR):", 
-                           value = 3, min = 1.5, max = 30, step = 0.1),
-               
-               numericInput(ns("tolerance"), "Binning tolerance:", 
-                           value = 0.5, min = 0.1, max = 3, step = 0.1),
-               
                hr(),
-               actionButton(ns("check_params"), "Check if processing exists", 
+               actionButton(ns("check_params"), "Check processing status", 
                            class = "btn-info"),
                br(), br(),
+               uiOutput(ns("param_check_ui")),
+               br(),
                actionButton(ns("run_processing"), "Run Processing", 
                            class = "btn-primary"),
                br(), br(),
-               textOutput(ns("param_check_status")),
+               actionButton(ns("clear_cache"), "Clear local cache", 
+                           class = "btn-warning"),
                width = 3
              ),
              
              mainPanel(
-               h3("Processing Pipeline Overview"),
+               h3("Processing Pipeline Status"),
                uiOutput(ns("pipeline_status")),
                hr(),
+               h4("Processing Log"),
                verbatimTextOutput(ns("processing_log")),
+               hr(),
+               h4("Cache Status"),
+               verbatimTextOutput(ns("cache_status")),
                width = 9
              )
            )
@@ -88,11 +98,23 @@ processing_module_server <- function(id) {
     mongo_ref <- mongo(collection = "mz_references",
                        db = "msi_project", url = "mongodb://localhost")
     
+    mongo_meta <- mongo(collection = "processing_artifacts_metadata",
+                       db = "MSI_database", url = "mongodb://localhost")
+    
     # Reactive values for state
     processing_log <- reactiveVal("")
+    current_cache_dir <- reactiveVal(NULL)
     current_sample_name <- reactiveVal(NULL)
+    processing_status <- reactiveVal(NULL)
     
-    # Load reference options
+    # Helper: Add to log
+    add_log <- function(msg) {
+      timestamp <- format(Sys.time(), "[%H:%M:%S]")
+      new_log <- paste0(processing_log(), timestamp, " ", msg, "\n")
+      processing_log(new_log)
+    }
+    
+    # Load reference options from database
     ref_docs <- reactive({
       mongo_ref$find(fields = '{"_id": 0, "reference_name": 1}')
     })
@@ -103,9 +125,12 @@ processing_module_server <- function(id) {
       updateSelectInput(session, "ref_csv_mongo", choices = refs)
     })
     
-    # Load existing samples
+    # Load existing raw files from database
     observe({
-      artifacts <- query_artifacts(stage_type = "raw")
+      artifacts <- mongo_meta$find(
+        query = '{"stage_type": "raw_files"}',
+        fields = '{"_id": 0, "sample_name": 1}'
+      )
       
       if (nrow(artifacts) == 0) {
         updateSelectInput(session, "existing_sample", 
@@ -120,25 +145,45 @@ processing_module_server <- function(id) {
     output$existing_info <- renderText({
       req(input$data_source == "Use existing dataset", input$existing_sample)
       
-      artifacts <- query_artifacts(
-        sample_name = input$existing_sample,
-        stage_type = "binned_dataframe"
+      # Check raw files
+      raw_artifacts <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = input$existing_sample,
+          stage_type = "raw_files"
+        ), auto_unbox = TRUE)
       )
       
-      if (nrow(artifacts) == 0) {
-        return("No processed versions exist yet for this sample.")
+      # Check processed versions
+      processed_artifacts <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = input$existing_sample,
+          stage_type = "binned_dataframe"
+        ), auto_unbox = TRUE)
+      )
+      
+      info_parts <- c()
+      
+      if (nrow(raw_artifacts) > 0) {
+        created <- as.character(raw_artifacts$created_at[nrow(raw_artifacts)])
+        info_parts <- c(info_parts, 
+                       sprintf("✓ Raw files in database (uploaded: %s)", created))
       }
       
-      info <- sprintf(
-        "Found %d processed version(s):\n%s",
-        nrow(artifacts),
-        paste(
-          sprintf("- SNR: %.1f, Tol: %.2f, Ref: %s",
-                 artifacts$snr, artifacts$tolerance, artifacts$reference_name),
-          collapse = "\n"
+      if (nrow(processed_artifacts) > 0) {
+        info_parts <- c(info_parts,
+          sprintf("\n%d processed version(s) exist:", nrow(processed_artifacts)),
+          sapply(1:nrow(processed_artifacts), function(i) {
+            sprintf("  - SNR: %.1f, Tol: %.2f, Ref: %s",
+                   processed_artifacts$snr[i], 
+                   processed_artifacts$tolerance[i], 
+                   processed_artifacts$reference_name[i])
+          })
         )
-      )
-      info
+      } else {
+        info_parts <- c(info_parts, "\nNo processed versions exist yet")
+      }
+      
+      paste(info_parts, collapse = "\n")
     })
     
     # Get selected reference
@@ -162,207 +207,450 @@ processing_module_server <- function(id) {
         if (nrow(ref_doc) == 0) return(NULL)
         
         list(
-          mz = ref_doc$mz_values[[1]],
+          mz = unlist(ref_doc$mz_values[[1]]),
           name = input$ref_csv_mongo,
           source = "database"
         )
       }
     })
     
-    # Check if parameters already exist
-    observeEvent(input$check_params, {
-      mz_ref <- selected_mz()
-      
-      if (is.null(mz_ref)) {
-        output$param_check_status <- renderText(
-          "❌ Please select a reference list first"
-        )
-        return()
-      }
-      
-      # Determine sample name
+    # Determine current sample name
+    current_sample <- reactive({
       if (input$data_source == "Upload new files") {
         req(input$msi_files)
-        imzml_name <- input$msi_files$name[grepl("\\.imzML$", input$msi_files$name)]
+        imzml_name <- input$msi_files$name[grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)][1]
         
-        sample_name <- if (nchar(input$sample_name_upload) > 0) {
+        if (nchar(input$sample_name_upload) > 0) {
           input$sample_name_upload
         } else {
           imzml_name
         }
       } else {
         req(input$existing_sample)
-        sample_name <- input$existing_sample
+        input$existing_sample
+      }
+    })
+    
+    # Check processing status
+    observeEvent(input$check_params, {
+      mz_ref <- selected_mz()
+      sample_name <- current_sample()
+      
+      if (is.null(mz_ref) || is.null(sample_name)) {
+        processing_status(list(
+          status = "error",
+          message = "Please select data source and reference first"
+        ))
+        return()
       }
       
-      # Check if exact combination exists
-      existing <- query_artifacts(
-        sample_name = sample_name,
-        stage_type = "binned_dataframe",
-        snr = as.numeric(input$snr),
-        tolerance = as.numeric(input$tolerance),
-        reference_name = mz_ref$name
+      # Check for raw files
+      raw_exists <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = sample_name,
+          stage_type = "raw_files"
+        ), auto_unbox = TRUE)
       )
       
-      if (nrow(existing) > 0) {
-        output$param_check_status <- renderText(
-          sprintf(
-            "⚠️ Processing with these EXACT parameters already exists!\n\nSample: %s\nSNR: %.1f\nTolerance: %.2f\nReference: %s\n\nNo need to process again.",
-            sample_name, input$snr, input$tolerance, mz_ref$name
+      # Check for exact processing match
+      exact_match <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = sample_name,
+          stage_type = "binned_dataframe",
+          snr = as.numeric(input$snr),
+          tolerance = as.numeric(input$tolerance),
+          reference_name = mz_ref$name
+        ), auto_unbox = TRUE)
+      )
+      
+      # Check for partial matches (can reuse)
+      partial_matches <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = sample_name,
+          stage_type = c("control_mean", "snr_reference")
+        ), auto_unbox = TRUE)
+      )
+      
+      if (nrow(exact_match) > 0) {
+        processing_status(list(
+          status = "exists",
+          message = sprintf(
+            "⚠️ EXACT processing already exists!\n\nSample: %s\nResolution: %d ppm\nSNR: %.1f\nTolerance: %.2f\nReference: %s\n\nNo processing needed.",
+            sample_name, input$resolution, input$snr, input$tolerance, mz_ref$name
           )
-        )
+        ))
+      } else if (nrow(raw_exists) == 0 && input$data_source == "Use existing dataset") {
+        processing_status(list(
+          status = "error",
+          message = "❌ No raw files found in database for this sample"
+        ))
       } else {
-        output$param_check_status <- renderText(
-          sprintf(
-            "✅ These parameters are NEW for this sample.\n\nSample: %s\nSNR: %.1f\nTolerance: %.2f\nReference: %s\n\nReady to process!",
-            sample_name, input$snr, input$tolerance, mz_ref$name
+        reuse_stages <- c()
+        
+        if (nrow(raw_exists) > 0) {
+          reuse_stages <- c(reuse_stages, "✓ Raw files (will reuse from database)")
+        } else if (input$data_source == "Upload new files") {
+          reuse_stages <- c(reuse_stages, "• Raw files (will upload)")
+        }
+        
+        # Check for control_mean
+        mean_match <- partial_matches[partial_matches$stage_type == "control_mean", ]
+        if (nrow(mean_match) > 0) {
+          reuse_stages <- c(reuse_stages, "✓ Mean spectrum (will reuse)")
+        } else {
+          reuse_stages <- c(reuse_stages, "• Mean spectrum (will calculate)")
+        }
+        
+        # Check for SNR reference
+        snr_match <- partial_matches[
+          partial_matches$stage_type == "snr_reference" & 
+          !is.na(partial_matches$snr) &
+          abs(partial_matches$snr - input$snr) < 0.01,
+        ]
+        if (nrow(snr_match) > 0) {
+          reuse_stages <- c(reuse_stages, sprintf("✓ SNR reference (SNR=%.1f, will reuse)", input$snr))
+        } else {
+          reuse_stages <- c(reuse_stages, sprintf("• SNR reference (SNR=%.1f, will calculate)", input$snr))
+        }
+        
+        reuse_stages <- c(reuse_stages, 
+                         sprintf("• Binning (Tol=%.2f, will process)", input$tolerance),
+                         sprintf("• Final dataframe (Ref=%s, will create)", mz_ref$name))
+        
+        processing_status(list(
+          status = "ready",
+          message = sprintf(
+            "✅ Ready to process with these parameters:\n\nSample: %s\nResolution: %d ppm\nSNR: %.1f\nTolerance: %.2f\nReference: %s\n\nProcessing plan:\n%s",
+            sample_name, input$resolution, input$snr, input$tolerance, mz_ref$name,
+            paste(reuse_stages, collapse = "\n")
           )
-        )
+        ))
       }
+    })
+    
+    # Display parameter check result
+    output$param_check_ui <- renderUI({
+      status <- processing_status()
+      req(status)
+      
+      if (status$status == "exists") {
+        div(class = "alert alert-warning",
+            style = "white-space: pre-line;",
+            HTML(status$message))
+      } else if (status$status == "error") {
+        div(class = "alert alert-danger",
+            style = "white-space: pre-line;",
+            HTML(status$message))
+      } else if (status$status == "ready") {
+        div(class = "alert alert-success",
+            style = "white-space: pre-line;",
+            HTML(status$message))
+      }
+    })
+    
+    # Clear cache
+    observeEvent(input$clear_cache, {
+      cache_dir <- current_cache_dir()
+      
+      if (is.null(cache_dir) || !dir.exists(cache_dir)) {
+        showNotification("No active cache to clear", type = "message", duration = 3)
+        return()
+      }
+      
+      tryCatch({
+        size <- sum(file.size(list.files(cache_dir, full.names = TRUE, recursive = TRUE))) / 1024^2
+        unlink(cache_dir, recursive = TRUE)
+        current_cache_dir(NULL)
+        add_log(sprintf("Cleared cache: %.2f MB freed", size))
+        showNotification(sprintf("Cache cleared: %.2f MB freed", size), 
+                        type = "message", duration = 5)
+      }, error = function(e) {
+        showNotification(paste("Cache clear error:", e$message), 
+                        type = "error", duration = NULL)
+      })
     })
     
     # Run processing
     observeEvent(input$run_processing, {
       mz_ref <- selected_mz()
+      sample_name <- current_sample()
       
-      if (is.null(mz_ref)) {
-        showNotification("Please select a reference list first.", 
+      if (is.null(mz_ref) || is.null(sample_name)) {
+        showNotification("Please configure all parameters first", 
                         type = "error", duration = NULL)
+        return()
+      }
+      
+      # Check if exact match already exists
+      exact_match <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = sample_name,
+          stage_type = "binned_dataframe",
+          snr = as.numeric(input$snr),
+          tolerance = as.numeric(input$tolerance),
+          reference_name = mz_ref$name
+        ), auto_unbox = TRUE)
+      )
+      
+      if (nrow(exact_match) > 0) {
+        showNotification(
+          "This exact processing already exists. No action needed.",
+          type = "warning",
+          duration = 10
+        )
         return()
       }
       
       shinyjs::disable("run_processing")
       on.exit(shinyjs::enable("run_processing"))
       
-      # Prepare parameters based on data source
-      if (input$data_source == "Upload new files") {
-        req(input$msi_files)
-        
-        # Get uploaded files
-        files <- input$msi_files
-        imzml_idx <- grepl("\\.imzML$", files$name, ignore.case = TRUE)
-        ibd_idx <- grepl("\\.ibd$", files$name, ignore.case = TRUE)
-        
-        if (!any(imzml_idx) || !any(ibd_idx)) {
-          showNotification("Please upload both imzML and ibd files.", 
-                          type = "error", duration = NULL)
-          return()
-        }
-        
-        # IMPORTANT: Use the original upload paths directly
-        imzml_file <- files$datapath[imzml_idx][1]
-        ibd_file <- files$datapath[ibd_idx][1]
-        imzml_name <- files$name[imzml_idx][1]
-        
-        sample_name <- if (nchar(input$sample_name_upload) > 0) {
-          input$sample_name_upload
-        } else {
-          tools::file_path_sans_ext(imzml_name)
-        }
-      }
-      
-      current_sample_name(sample_name)
-      
       progress <- Progress$new(session, min = 0, max = 100)
-      progress$set(message = "Starting MSI Processing Pipeline", value = 0)
+      progress$set(message = "Starting processing pipeline...", value = 0)
       on.exit(progress$close(), add = TRUE)
       
-      # Create log output
-      log_text <- ""
-      add_log <- function(msg) {
-        log_text <<- paste0(log_text, format(Sys.time(), "[%H:%M:%S] "), msg, "\n")
-        processing_log(log_text)
-      }
+      processing_log("")  # Clear log
       
       tryCatch({
-        add_log(sprintf("Starting processing for: %s", sample_name))
-        add_log(sprintf("Parameters: SNR=%.1f, Tolerance=%.2f, Reference=%s",
-                       input$snr, input$tolerance, mz_ref$name))
+        add_log(sprintf("=== PROCESSING STARTED ==="))
+        add_log(sprintf("Sample: %s", sample_name))
+        add_log(sprintf("Parameters: Resolution=%d, SNR=%.1f, Tol=%.2f, Ref=%s",
+                       input$resolution, input$snr, input$tolerance, mz_ref$name))
         
-        progress$set(value = 5, message = "Checking existing stages...")
+        # Setup cache directory
+        cache_base <- file.path(tempdir(), "msi_processing_cache")
+        cache_dir <- file.path(cache_base, sanitize_name(sample_name))
+        current_cache_dir(cache_dir)
+        current_sample_name(sample_name)
         
-        # Check what stages already exist
-        existing_stages <- get_existing_stages(sample_name)
+        if (dir.exists(cache_dir)) {
+          add_log("Clearing existing cache...")
+          unlink(cache_dir, recursive = TRUE)
+        }
+        dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+        add_log(sprintf("Cache directory: %s", cache_dir))
         
-        if (!is.null(existing_stages)) {
-          stage_types <- sapply(existing_stages, function(s) s$stage_type)
-          add_log(sprintf("Found existing stages: %s", 
-                         paste(unique(stage_types), collapse = ", ")))
-        } else {
-          add_log("No existing stages found - full processing required")
+        progress$set(value = 10, message = "Loading/uploading raw data...")
+        
+        # STEP 1: Handle raw data
+        if (input$data_source == "Upload new files") {
+          req(input$msi_files)
+          files <- input$msi_files
+          imzml_idx <- grepl("\\.imzML$", files$name, ignore.case = TRUE)
+          ibd_idx <- grepl("\\.ibd$", files$name, ignore.case = TRUE)
+          
+          if (!any(imzml_idx) || !any(ibd_idx)) {
+            stop("Both imzML and ibd files required")
+          }
+          
+          add_log("Uploading raw files to MongoDB...")
+          save_raw_pair_to_mongo(
+            sample_name = sample_name,
+            imzml_path = files$datapath[imzml_idx][1],
+            ibd_path = files$datapath[ibd_idx][1],
+            db_name = "MSI_database"
+          )
+          add_log("✓ Raw files saved to database")
         }
         
-        progress$set(value = 10, message = "Running pipeline...")
+        progress$set(value = 30, message = "Loading MSI object...")
+        add_log("Downloading raw files from database...")
         
-        # Run the pipeline
-        run_id <- process_msi_pipeline(
-          imzml_path = imzml_file,
-          ibd_path = ibd_file,
-          imzml_name = sample_name,
-          ref_mz_values = mz_ref$mz,
-          ref_source = mz_ref$source,
-          ref_name = mz_ref$name,
-          snr = as.numeric(input$snr),
-          tolerance = as.numeric(input$tolerance)
+        msi_data <- load_raw_object_from_mongo(
+          sample_name = sample_name,
+          workdir = cache_dir,
+          db_name = "MSI_database",
+          materialize = FALSE
+        )
+        add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
+                       nrow(msi_data), ncol(msi_data)))
+        
+        progress$set(value = 50, message = "Processing mean spectrum...")
+        
+        # STEP 2: Mean spectrum (check for existing)
+        mean_artifacts <- mongo_meta$find(
+          query = jsonlite::toJSON(list(
+            sample_name = sample_name,
+            stage_type = "control_mean"
+          ), auto_unbox = TRUE)
         )
         
-        progress$set(value = 95, message = "Finalizing...")
-        add_log(sprintf("✅ Processing complete! Run ID: %s", run_id))
+        if (nrow(mean_artifacts) > 0) {
+          add_log("Loading existing mean spectrum...")
+          control_mean <- load_stage_from_mongo(
+            sample_name = sample_name,
+            stage_type = "control_mean",
+            db_name = "MSI_database"
+          )
+        } else {
+          add_log("Calculating mean spectrum...")
+          control_mean <- summarizeFeatures(msi_data, "mean")
+          
+          run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+          save_stage_to_mongo(
+            control_mean,
+            run_id,
+            "control_mean",
+            sample_name = sample_name,
+            db_name = "MSI_database",
+            materialize = TRUE
+          )
+        }
+        add_log("✓ Mean spectrum ready")
+        
+        progress$set(value = 65, message = "Applying SNR peak picking...")
+        
+        # STEP 3: SNR reference (check for existing with same SNR)
+        snr_artifacts <- mongo_meta$find(
+          query = jsonlite::toJSON(list(
+            sample_name = sample_name,
+            stage_type = "snr_reference",
+            snr = as.numeric(input$snr)
+          ), auto_unbox = TRUE)
+        )
+        
+        if (nrow(snr_artifacts) > 0) {
+          add_log(sprintf("Loading existing SNR reference (SNR=%.1f)...", input$snr))
+          control_SNR_ref <- load_stage_from_mongo(
+            sample_name = sample_name,
+            stage_type = "snr_reference",
+            db_name = "MSI_database"
+          )
+        } else {
+          add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
+          control_SNR_ref <- control_mean %>%
+            peakPick(SNR = input$snr)
+          
+          run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+          save_stage_to_mongo(
+            control_SNR_ref,
+            run_id,
+            "snr_reference",
+            sample_name = sample_name,
+            params = list(snr = as.numeric(input$snr)),
+            db_name = "MSI_database",
+            materialize = TRUE
+          )
+        }
+        add_log("✓ SNR reference ready")
+        
+        progress$set(value = 75, message = "Aligning and binning...")
+        
+        # STEP 4: Always run alignment and binning (new combination)
+        add_log(sprintf("Aligning to reference (Tol=%.2f)...", input$tolerance))
+        control_MSI_ref <- control_SNR_ref %>%
+          peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
+          subsetFeatures() %>%
+          process()
+        
+        run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+        save_stage_to_mongo(
+          control_MSI_ref,
+          run_id,
+          "aligned_reference",
+          sample_name = sample_name,
+          params = list(
+            snr = as.numeric(input$snr),
+            tolerance = as.numeric(input$tolerance),
+            reference_name = mz_ref$name
+          ),
+          db_name = "MSI_database",
+          materialize = FALSE
+        )
+        add_log("✓ Reference aligned")
+        
+        progress$set(value = 85, message = "Binning full dataset...")
+        
+        add_log("Binning MSI data...")
+        msi_data_binned <- bin(
+          msi_data,
+          ref = mz(control_MSI_ref),
+          tolerance = input$tolerance,
+          units = "mz",
+          BPPARAM = BiocParallel::bpparam()
+        ) %>% process()
+        
+        save_stage_to_mongo(
+          msi_data_binned,
+          run_id,
+          "binned_msi",
+          sample_name = sample_name,
+          params = list(
+            snr = as.numeric(input$snr),
+            tolerance = as.numeric(input$tolerance),
+            reference_name = mz_ref$name
+          ),
+          db_name = "MSI_database",
+          materialize = FALSE
+        )
+        add_log("✓ Data binned")
+        
+        progress$set(value = 95, message = "Creating feature matrix...")
+        
+        # STEP 5: Create final dataframe
+        add_log("Creating feature matrix...")
+        msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
+        mz_names <- paste0("mz_", mz(msi_data_binned))
+        coords <- coord(msi_data_binned)
+        run_name <- runNames(msi_data_binned)
+        pixel_names <- rep(run_name, nrow(msi_matrix))
+        
+        full_df <- data.frame(
+          runNames = pixel_names,
+          x = coords$x,
+          y = coords$y,
+          msi_matrix
+        )
+        colnames(full_df) <- c("runNames", "x", "y", mz_names)
+        
+        save_stage_to_mongo(
+          full_df,
+          run_id,
+          "binned_dataframe",
+          sample_name = sample_name,
+          params = list(
+            snr = as.numeric(input$snr),
+            tolerance = as.numeric(input$tolerance),
+            reference_name = mz_ref$name,
+            resolution = as.numeric(input$resolution),
+            num_features = ncol(full_df) - 3,
+            num_pixels = nrow(full_df)
+          ),
+          db_name = "MSI_database",
+          materialize = FALSE
+        )
+        
+        add_log(sprintf("✓ Final dataframe: %d pixels × %d features", 
+                       nrow(full_df), sum(grepl("^mz_", names(full_df)))))
         
         progress$set(value = 100, message = "Complete!")
         
+        add_log("=== PROCESSING COMPLETE ===")
+        add_log(sprintf("Run ID: %s", run_id))
+        
+        # Update status display
+        output$pipeline_status <- renderUI({
+          div(class = "alert alert-success",
+              h4("✅ Processing Complete"),
+              p(sprintf("Sample: %s", sample_name)),
+              p(sprintf("Run ID: %s", run_id)),
+              p(sprintf("Features: %d m/z bins", sum(grepl("^mz_", names(full_df))))),
+              p(sprintf("Pixels: %d", nrow(full_df))),
+              p(sprintf("Resolution: %d ppm", input$resolution)),
+              p(sprintf("SNR: %.1f", input$snr)),
+              p(sprintf("Tolerance: %.2f", input$tolerance)),
+              p(sprintf("Reference: %s", mz_ref$name))
+          )
+        })
+        
         showNotification(
-          sprintf("Processing complete!\nSample: %s\nRun ID: %s", 
-                 sample_name, run_id),
+          sprintf("✅ Processing complete!\nRun ID: %s\n%d features created",
+                 run_id, sum(grepl("^mz_", names(full_df)))),
           type = "message",
           duration = 10
         )
         
-        # Update pipeline status display
-        output$pipeline_status <- renderUI({
-          final_artifact <- query_artifacts(
-            sample_name = sample_name,
-            stage_type = "binned_dataframe",
-            snr = as.numeric(input$snr),
-            tolerance = as.numeric(input$tolerance),
-            reference_name = mz_ref$name
-          )
-          
-          if (nrow(final_artifact) > 0) {
-            # Safely extract values with defaults
-            num_features <- if (!is.null(final_artifact$num_features[1])) {
-              as.integer(final_artifact$num_features[1])
-            } else {
-              NA
-            }
-            
-            num_pixels <- if (!is.null(final_artifact$num_pixels[1])) {
-              as.integer(final_artifact$num_pixels[1])
-            } else {
-              NA
-            }
-            
-            created_at <- if (!is.null(final_artifact$created_at[1])) {
-              as.character(final_artifact$created_at[1])
-            } else {
-              "Unknown"
-            }
-            
-            tagList(
-              div(class = "alert alert-success",
-                  h4("✅ Processing Complete"),
-                  p(sprintf("Sample: %s", sample_name)),
-                  if (!is.na(num_features)) p(sprintf("Features: %d", num_features)),
-                  if (!is.na(num_pixels)) p(sprintf("Pixels: %d", num_pixels)),
-                  p(sprintf("Created: %s", created_at))
-              )
-            )
-          }
-        })
-        
       }, error = function(e) {
         add_log(sprintf("❌ ERROR: %s", e$message))
-        
         showNotification(
           paste("Processing error:", e$message),
           type = "error",
@@ -371,12 +659,35 @@ processing_module_server <- function(id) {
       })
     })
     
-    # Display processing log
+    # Display logs
     output$processing_log <- renderText({
       processing_log()
     })
+    
+    # Display cache status
+    output$cache_status <- renderText({
+      cache_dir <- current_cache_dir()
+      
+      if (is.null(cache_dir) || !dir.exists(cache_dir)) {
+        return("No active cache")
+      }
+      
+      files <- list.files(cache_dir, full.names = TRUE, recursive = TRUE)
+      if (length(files) == 0) {
+        return(sprintf("Cache directory: %s\n(empty)", cache_dir))
+      }
+      
+      total_size <- sum(file.size(files)) / 1024^2
+      
+      sprintf(
+        "Cache directory: %s\nFiles: %d\nTotal size: %.2f MB\n\nSample: %s",
+        cache_dir,
+        length(files),
+        total_size,
+        current_sample_name() %||% "None"
+      )
+    })
   })
 }
-
 
 
