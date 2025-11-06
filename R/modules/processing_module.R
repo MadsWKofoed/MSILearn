@@ -99,7 +99,7 @@ processing_module_server <- function(id) {
                        db = "msi_project", url = "mongodb://localhost")
     
     mongo_meta <- mongo(collection = "processing_artifacts_metadata",
-                       db = "MSI_database", url = "mongodb://localhost")
+                       db = "MSI_test_database", url = "mongodb://localhost")
     
     # Reactive values for state
     processing_log <- reactiveVal("")
@@ -447,7 +447,7 @@ processing_module_server <- function(id) {
             sample_name = sample_name,
             imzml_path = files$datapath[imzml_idx][1],
             ibd_path = files$datapath[ibd_idx][1],
-            db_name = "MSI_database"
+            db_name = "MSI_test_database"
           )
           add_log("✓ Raw files saved to database")
         }
@@ -458,7 +458,7 @@ processing_module_server <- function(id) {
         msi_data <- load_raw_object_from_mongo(
           sample_name = sample_name,
           workdir = cache_dir,
-          db_name = "MSI_database",
+          db_name = "MSI_test_database",
           materialize = FALSE
         )
         add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
@@ -479,7 +479,7 @@ processing_module_server <- function(id) {
           control_mean <- load_stage_from_mongo(
             sample_name = sample_name,
             stage_type = "control_mean",
-            db_name = "MSI_database"
+            db_name = "MSI_test_database"
           )
         } else {
           add_log("Calculating mean spectrum...")
@@ -491,7 +491,7 @@ processing_module_server <- function(id) {
             run_id,
             "control_mean",
             sample_name = sample_name,
-            db_name = "MSI_database",
+            db_name = "MSI_test_database",
             materialize = TRUE
           )
         }
@@ -513,7 +513,7 @@ processing_module_server <- function(id) {
           control_SNR_ref <- load_stage_from_mongo(
             sample_name = sample_name,
             stage_type = "snr_reference",
-            db_name = "MSI_database"
+            db_name = "MSI_test_database"
           )
         } else {
           add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
@@ -527,7 +527,7 @@ processing_module_server <- function(id) {
             "snr_reference",
             sample_name = sample_name,
             params = list(snr = as.numeric(input$snr)),
-            db_name = "MSI_database",
+            db_name = "MSI_test_database",
             materialize = TRUE
           )
         }
@@ -553,7 +553,7 @@ processing_module_server <- function(id) {
             tolerance = as.numeric(input$tolerance),
             reference_name = mz_ref$name
           ),
-          db_name = "MSI_database",
+          db_name = "MSI_test_database",
           materialize = FALSE
         )
         add_log("✓ Reference aligned")
@@ -579,7 +579,7 @@ processing_module_server <- function(id) {
             tolerance = as.numeric(input$tolerance),
             reference_name = mz_ref$name
           ),
-          db_name = "MSI_database",
+          db_name = "MSI_test_database",
           materialize = FALSE
         )
         add_log("✓ Data binned")
@@ -615,7 +615,7 @@ processing_module_server <- function(id) {
             num_features = ncol(full_df) - 3,
             num_pixels = nrow(full_df)
           ),
-          db_name = "MSI_database",
+          db_name = "MSI_test_database",
           materialize = FALSE
         )
         
