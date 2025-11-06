@@ -1,6 +1,7 @@
 library(mongolite)
 library(Cardinal)
 library(BiocParallel)
+library(dplyr)
 
 bp <- parallel::detectCores() - 1
 setCardinalParallel(workers = bp)
