@@ -491,8 +491,7 @@ processing_module_server <- function(id) {
             run_id,
             "control_mean",
             sample_name = sample_name,
-            db_name = "MSI_test_database",
-            materialize = TRUE
+            db_name = "MSI_test_database"
           )
         }
         add_log("✓ Mean spectrum ready")
@@ -527,8 +526,7 @@ processing_module_server <- function(id) {
             "snr_reference",
             sample_name = sample_name,
             params = list(snr = as.numeric(input$snr)),
-            db_name = "MSI_test_database",
-            materialize = TRUE
+            db_name = "MSI_test_database"
           )
         }
         add_log("✓ SNR reference ready")
