@@ -458,8 +458,7 @@ processing_module_server <- function(id) {
         msi_data <- load_raw_object_from_mongo(
           sample_name = sample_name,
           workdir = cache_dir,
-          db_name = "MSI_test_database",
-          materialize = FALSE
+          db_name = "MSI_test_database"
         )
         add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
                        nrow(msi_data), ncol(msi_data)))
@@ -551,8 +550,7 @@ processing_module_server <- function(id) {
             tolerance = as.numeric(input$tolerance),
             reference_name = mz_ref$name
           ),
-          db_name = "MSI_test_database",
-          materialize = FALSE
+          db_name = "MSI_test_database"
         )
         add_log("✓ Reference aligned")
         
@@ -577,8 +575,7 @@ processing_module_server <- function(id) {
             tolerance = as.numeric(input$tolerance),
             reference_name = mz_ref$name
           ),
-          db_name = "MSI_test_database",
-          materialize = FALSE
+          db_name = "MSI_test_database"
         )
         add_log("✓ Data binned")
         
@@ -613,8 +610,7 @@ processing_module_server <- function(id) {
             num_features = ncol(full_df) - 3,
             num_pixels = nrow(full_df)
           ),
-          db_name = "MSI_test_database",
-          materialize = FALSE
+          db_name = "MSI_test_database"
         )
         
         add_log(sprintf("✓ Final dataframe: %d pixels × %d features", 
