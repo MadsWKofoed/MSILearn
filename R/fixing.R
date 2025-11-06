@@ -393,3 +393,149 @@ test_complete_workflow <- function() {
 if (interactive()) {
   message("Run the test with: test_complete_workflow()")
 }
+
+
+
+
+
+# ===== TEST LOADING FROM SCRATCH =====
+test_load_from_database <- function(sample_name = "tumorinfiltrat.imzML",
+                                    run_id = NULL,
+                                    db_name = "MSI_test_database") {
+  
+  message("\n===== TESTING LOAD FROM DATABASE (FRESH R SESSION) =====")
+  
+  # Clear workspace to ensure nothing is in memory
+  rm(list = ls(envir = .GlobalEnv), envir = .GlobalEnv)
+  gc()
+  
+  message("\n1. Loading raw files from MongoDB...")
+  workdir <- file.path("data_cache_test_reload", tools::file_path_sans_ext(sample_name))
+  
+  # Remove existing cache directory if it exists
+  if (dir.exists(workdir)) {
+    message("Removing existing cache directory: ", workdir)
+    unlink(workdir, recursive = TRUE)
+  }
+  
+  msi_data <- load_raw_object_from_mongo(
+    sample_name = sample_name,
+    workdir = workdir,
+    db_name = db_name,
+    materialize = FALSE
+  )
+  
+  message("✓ Raw data loaded from MongoDB")
+  message("  Dimensions: ", nrow(msi_data), " pixels, ", ncol(msi_data), " m/z values")
+  
+  message("\n2. Loading control_mean stage...")
+  control_mean <- load_stage_from_mongo(
+    sample_name = sample_name,
+    stage_type = "control_mean",
+    run_id = run_id,
+    db_name = db_name
+  )
+  message("✓ control_mean loaded")
+  print(control_mean)
+  
+  message("\n3. Loading snr_reference stage...")
+  snr_ref <- load_stage_from_mongo(
+    sample_name = sample_name,
+    stage_type = "snr_reference",
+    run_id = run_id,
+    db_name = db_name
+  )
+  message("✓ snr_reference loaded")
+  print(snr_ref)
+  
+  message("\n4. Loading aligned_reference stage...")
+  aligned_ref <- load_stage_from_mongo(
+    sample_name = sample_name,
+    stage_type = "aligned_reference",
+    run_id = run_id,
+    db_name = db_name
+  )
+  message("✓ aligned_reference loaded")
+  message("  Number of aligned m/z: ", length(mz(aligned_ref)))
+  
+  message("\n5. Loading binned_msi stage...")
+  binned_msi <- load_stage_from_mongo(
+    sample_name = sample_name,
+    stage_type = "binned_msi",
+    run_id = run_id,
+    db_name = db_name
+  )
+  message("✓ binned_msi loaded")
+  message("  Dimensions: ", nrow(binned_msi), " pixels, ", ncol(binned_msi), " m/z bins")
+  
+  message("\n6. Loading binned_dataframe stage...")
+  final_df <- load_stage_from_mongo(
+    sample_name = sample_name,
+    stage_type = "binned_dataframe",
+    run_id = run_id,
+    db_name = db_name
+  )
+  message("✓ binned_dataframe loaded")
+  message("  Dimensions: ", nrow(final_df), " rows × ", ncol(final_df), " columns")
+  message("  Feature columns: ", sum(grepl("^mz_", names(final_df))))
+  
+  message("\n7. Verifying data integrity...")
+  message("  First 5 rows, first 8 columns:")
+  print(head(final_df[, 1:min(8, ncol(final_df))], 5))
+  
+  message("\n✅ ALL STAGES LOADED SUCCESSFULLY FROM DATABASE!")
+  message("Cache directory created at: ", workdir)
+  message("You can delete this directory to verify files came from MongoDB")
+  
+  invisible(list(
+    msi_data = msi_data,
+    control_mean = control_mean,
+    snr_ref = snr_ref,
+    aligned_ref = aligned_ref,
+    binned_msi = binned_msi,
+    final_df = final_df
+  ))
+}
+
+# ===== COMPLETE VERIFICATION TEST =====
+test_full_cycle <- function() {
+  
+  message("\n╔═══════════════════════════════════════════════════════╗")
+  message("║  COMPLETE DATABASE STORAGE AND RETRIEVAL TEST        ║")
+  message("╚═══════════════════════════════════════════════════════╝")
+  
+  # Step 1: Run complete workflow
+  message("\n[PHASE 1] Running complete workflow...")
+  result <- test_complete_workflow()
+  run_id <- result$run_id
+  
+  message("\n[PHASE 1 COMPLETE] Data saved to database with run_id: ", run_id)
+  message("Press Enter to continue to Phase 2 (reload test)...")
+  readline()
+  
+  # Step 2: Clear environment
+  message("\n[PHASE 2] Clearing R environment...")
+  rm(list = ls(envir = .GlobalEnv), envir = .GlobalEnv)
+  gc()
+  
+  message("Environment cleared. All objects removed from memory.")
+  message("Press Enter to reload from database...")
+  readline()
+  
+  # Step 3: Reload everything
+  message("\n[PHASE 2] Reloading all data from MongoDB...")
+  reloaded <- test_load_from_database(
+    sample_name = "tumorinfiltrat.imzML",
+    run_id = run_id,
+    db_name = "MSI_test_database"
+  )
+  
+  message("\n╔═══════════════════════════════════════════════════════╗")
+  message("║  ✅ VERIFICATION COMPLETE                             ║")
+  message("║                                                       ║")
+  message("║  All data successfully saved to and loaded from      ║")
+  message("║  MongoDB database.                                   ║")
+  message("╚═══════════════════════════════════════════════════════╝")
+  
+  invisible(reloaded)
+}
