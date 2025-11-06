@@ -246,18 +246,19 @@ test_complete_workflow <- function() {
                      url = "mongodb://localhost")
   
   ref_doc <- mongo_ref$find(
-    query = '{"reference_name": "113"}',
-    fields = '{"_id": 0, "mz_values": 1}'
+    query = '{"reference_name": "113_lipids_gangliosides"}'
   )
   
   if (nrow(ref_doc) == 0) {
-    stop("Reference '113' not found in database")
+    stop("Reference '113_lipids_gangliosides' not found in database")
   }
   
-  ref_mz <- ref_doc$mz_values[[1]]
-  reference_name <- "113"
+  # Extract mz_values correctly - it's a list containing a vector
+  ref_mz <- unlist(ref_doc$mz_values[[1]])
+  reference_name <- ref_doc$reference_name[1]
   
-  message("Loaded reference '113' with ", length(ref_mz), " m/z values")
+  message("Loaded reference '", reference_name, "' with ", length(ref_mz), " m/z values")
+  message("First 10 m/z values: ", paste(head(ref_mz, 10), collapse = ", "))
   
   message("\n===== STEP 5: Apply tolerance and create reference =====")
   snr_value <- 3
