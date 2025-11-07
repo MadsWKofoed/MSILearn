@@ -83,11 +83,9 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   final_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
   final_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
   
-  # Download imzML to temp location first
+  # Download imzML
   imzml_name <- as.character(row$imzml_gridfs_name[1])
   message("Downloading imzML: ", imzml_name)
-  
-  # Use dest_dir as temp location but with gridfs name
   temp_imzml <- file.path(dest_dir, imzml_name)
   grid$download(imzml_name, temp_imzml)
   
@@ -95,7 +93,6 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
     stop("imzML download failed - file not found at: ", temp_imzml)
   }
   
-  # Rename to expected name if different
   if (temp_imzml != final_imzml) {
     file.rename(temp_imzml, final_imzml)
   }
@@ -106,11 +103,11 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   
   message("✓ imzML: ", file.size(final_imzml), " bytes")
   
-  # Download ibd to temp location first
-  ibd_name <- as.character(row$ibd_gridfs_name[1])
+  # Download ibd - FIX HER!
+  message("Available columns: ", paste(names(row), collapse = ", "))
+  message("ibd_gridfs_name value: ", row$ibd_gridfs_name[1])
+  ibd_name <- as.character(row$ibd_gridfs_name[1])  # Tilføj [1] indexering
   message("Downloading ibd: ", ibd_name)
-  
-  # Use dest_dir as temp location but with gridfs name
   temp_ibd <- file.path(dest_dir, ibd_name)
   grid$download(ibd_name, temp_ibd)
   
@@ -118,7 +115,6 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
     stop("ibd download failed - file not found at: ", temp_ibd)
   }
   
-  # Rename to expected name if different
   if (temp_ibd != final_ibd) {
     file.rename(temp_ibd, final_ibd)
   }
@@ -128,15 +124,7 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   }
   
   message("✓ ibd: ", file.size(final_ibd), " bytes")
-  
   message("✓ Raw files ready at: ", dest_dir)
-  message("  imzML: ", basename(final_imzml))
-  message("  ibd: ", basename(final_ibd))
-  
-  # Final verification
-  if (!file.exists(final_imzml) || !file.exists(final_ibd)) {
-    stop("File verification failed after download and rename")
-  }
   
   list(imzml = final_imzml, ibd = final_ibd)
 }
