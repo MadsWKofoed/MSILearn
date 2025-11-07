@@ -76,20 +76,47 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   
   row <- artifacts[nrow(artifacts), , drop = FALSE]
   
+  # CRITICAL FIX: Create dest_dir BEFORE defining paths
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+  
   base <- tools::file_path_sans_ext(basename(sample_name))
   out_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
   out_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
   
+  # Download imzML
   imzml_name <- as.character(row$imzml_gridfs_name[1])
-  message("Downloading imzML: ", imzml_name)
-  grid$download(imzml_name, out_imzml)
+  message("Downloading imzML: ", imzml_name, " to ", out_imzml)
   
+  # CRITICAL FIX: Download to SPECIFIC path, not just directory
+  tryCatch({
+    grid$download(imzml_name, out_imzml)
+    if (!file.exists(out_imzml)) {
+      stop("imzML download failed - file not created at: ", out_imzml)
+    }
+    message("✓ imzML downloaded: ", file.size(out_imzml), " bytes")
+  }, error = function(e) {
+    stop("Failed to download imzML: ", e$message)
+  })
+  
+  # Download ibd
   ibd_name <- as.character(row$ibd_gridfs_name[1])
-  message("Downloading ibd: ", ibd_name)
-  grid$download(ibd_name, out_ibd)
+  message("Downloading ibd: ", ibd_name, " to ", out_ibd)
+  
+  # CRITICAL FIX: Download to SPECIFIC path, not just directory
+  tryCatch({
+    grid$download(ibd_name, out_ibd)
+    if (!file.exists(out_ibd)) {
+      stop("ibd download failed - file not created at: ", out_ibd)
+    }
+    message("✓ ibd downloaded: ", file.size(out_ibd), " bytes")
+  }, error = function(e) {
+    stop("Failed to download ibd: ", e$message)
+  })
   
   message("✓ Raw files downloaded to: ", dest_dir)
+  message("  imzML: ", basename(out_imzml))
+  message("  ibd: ", basename(out_ibd))
+  
   list(imzml = out_imzml, ibd = out_ibd)
 }
 
