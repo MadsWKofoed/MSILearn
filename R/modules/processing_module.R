@@ -486,10 +486,17 @@ processing_module_server <- function(id) {
             stage_type = "control_mean",
             db_name = "MSI_test_database"
           )
+          
+          # Get existing run_id or create new one
+          run_id <- mean_artifacts$run_id[nrow(mean_artifacts)]
+          if (is.null(run_id) || is.na(run_id) || run_id == "") {
+            run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+          }
         } else {
           add_log("Calculating mean spectrum...")
           control_mean <- summarizeFeatures(msi_data, "mean")
           
+          # Create new run_id
           run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
           save_stage_to_mongo(
             control_mean,
@@ -524,7 +531,6 @@ processing_module_server <- function(id) {
           control_SNR_ref <- control_mean %>%
             peakPick(SNR = input$snr)
           
-          run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
           save_stage_to_mongo(
             control_SNR_ref,
             run_id,
@@ -540,6 +546,9 @@ processing_module_server <- function(id) {
         
         # STEP 4: Always run alignment and binning (new combination)
         add_log(sprintf("Aligning to reference (Tol=%.2f)...", input$tolerance))
+        
+        # Create NEW run_id for this specific processing combination
+        processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
         control_MSI_ref <- control_SNR_ref %>%
           peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
           subsetFeatures() %>%
