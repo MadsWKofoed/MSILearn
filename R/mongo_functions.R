@@ -76,48 +76,69 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   
   row <- artifacts[nrow(artifacts), , drop = FALSE]
   
-  # CRITICAL FIX: Create dest_dir BEFORE defining paths
+  # Create destination directory
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
   
   base <- tools::file_path_sans_ext(basename(sample_name))
-  out_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
-  out_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
+  final_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
+  final_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
   
-  # Download imzML
+  # Download imzML to temp location first
   imzml_name <- as.character(row$imzml_gridfs_name[1])
-  message("Downloading imzML: ", imzml_name, " to ", out_imzml)
+  message("Downloading imzML: ", imzml_name)
   
-  # CRITICAL FIX: Download to SPECIFIC path, not just directory
-  tryCatch({
-    grid$download(imzml_name, out_imzml)
-    if (!file.exists(out_imzml)) {
-      stop("imzML download failed - file not created at: ", out_imzml)
-    }
-    message("✓ imzML downloaded: ", file.size(out_imzml), " bytes")
-  }, error = function(e) {
-    stop("Failed to download imzML: ", e$message)
-  })
+  # Use dest_dir as temp location but with gridfs name
+  temp_imzml <- file.path(dest_dir, imzml_name)
+  grid$download(imzml_name, temp_imzml)
   
-  # Download ibd
+  if (!file.exists(temp_imzml)) {
+    stop("imzML download failed - file not found at: ", temp_imzml)
+  }
+  
+  # Rename to expected name if different
+  if (temp_imzml != final_imzml) {
+    file.rename(temp_imzml, final_imzml)
+  }
+  
+  if (!file.exists(final_imzml)) {
+    stop("imzML file missing after rename: ", final_imzml)
+  }
+  
+  message("✓ imzML: ", file.size(final_imzml), " bytes")
+  
+  # Download ibd to temp location first
   ibd_name <- as.character(row$ibd_gridfs_name[1])
-  message("Downloading ibd: ", ibd_name, " to ", out_ibd)
+  message("Downloading ibd: ", ibd_name)
   
-  # CRITICAL FIX: Download to SPECIFIC path, not just directory
-  tryCatch({
-    grid$download(ibd_name, out_ibd)
-    if (!file.exists(out_ibd)) {
-      stop("ibd download failed - file not created at: ", out_ibd)
-    }
-    message("✓ ibd downloaded: ", file.size(out_ibd), " bytes")
-  }, error = function(e) {
-    stop("Failed to download ibd: ", e$message)
-  })
+  # Use dest_dir as temp location but with gridfs name
+  temp_ibd <- file.path(dest_dir, ibd_name)
+  grid$download(ibd_name, temp_ibd)
   
-  message("✓ Raw files downloaded to: ", dest_dir)
-  message("  imzML: ", basename(out_imzml))
-  message("  ibd: ", basename(out_ibd))
+  if (!file.exists(temp_ibd)) {
+    stop("ibd download failed - file not found at: ", temp_ibd)
+  }
   
-  list(imzml = out_imzml, ibd = out_ibd)
+  # Rename to expected name if different
+  if (temp_ibd != final_ibd) {
+    file.rename(temp_ibd, final_ibd)
+  }
+  
+  if (!file.exists(final_ibd)) {
+    stop("ibd file missing after rename: ", final_ibd)
+  }
+  
+  message("✓ ibd: ", file.size(final_ibd), " bytes")
+  
+  message("✓ Raw files ready at: ", dest_dir)
+  message("  imzML: ", basename(final_imzml))
+  message("  ibd: ", basename(final_ibd))
+  
+  # Final verification
+  if (!file.exists(final_imzml) || !file.exists(final_ibd)) {
+    stop("File verification failed after download and rename")
+  }
+  
+  list(imzml = final_imzml, ibd = final_ibd)
 }
 
 load_raw_object_from_mongo <- function(sample_name, workdir,
