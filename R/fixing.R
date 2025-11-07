@@ -754,3 +754,182 @@ print(head(full_df[, 1:min(8, ncol(full_df))], 5))
 cat("\n=== ✅ TEST COMPLETE ===\n")
 cat("Workdir was:", workdir, "\n")
 cat("You can inspect files with: list.files('", workdir, "', full.names = TRUE)\n", sep = "")
+
+
+
+
+
+
+
+
+
+
+
+
+# Test: Manual download + processing pipeline
+library(Cardinal)
+library(mongolite)
+library(BiocParallel)
+library(dplyr)
+bp <- parallel::detectCores() - 1
+setCardinalParallel(workers = bp)
+
+# Step 1: Manual download from GridFS
+cat("\n=== STEP 1: Manual GridFS download ===\n")
+
+grid <- gridfs(db = "MSI_test_database", prefix = "fs", url = "mongodb://localhost")
+
+# List all files
+files <- grid$find('{}')
+print(files[, c("name", "length")])  # Use 'name' not 'filename'
+
+# Find the imzML and ibd pair
+imzml_file <- files$name[grepl("\\.imzML$", files$name, ignore.case = TRUE)][1]
+ibd_file <- files$name[grepl("\\.ibd$", files$name, ignore.case = TRUE)][1]
+
+cat("imzML file:", imzml_file, "\n")
+cat("ibd file:", ibd_file, "\n")
+
+# Create clean test directory
+test_dir <- file.path(tempdir(), "manual_gridfs_test")
+if (dir.exists(test_dir)) unlink(test_dir, recursive = TRUE)
+dir.create(test_dir, showWarnings = FALSE)
+
+# Download imzML
+cat("\nDownloading imzML...\n")
+imzml_dest <- file.path(test_dir, "tumorinfiltrat.imzML")
+grid$download(imzml_file, imzml_dest)
+
+if (file.exists(imzml_dest)) {
+  cat("✓ imzML downloaded:", file.size(imzml_dest), "bytes\n")
+} else {
+  stop("✗ imzML download FAILED")
+}
+
+# Download ibd
+cat("\nDownloading ibd...\n")
+ibd_dest <- file.path(test_dir, "tumorinfiltrat.ibd")
+grid$download(ibd_file, ibd_dest)
+
+if (file.exists(ibd_dest)) {
+  cat("✓ ibd downloaded:", file.size(ibd_dest), "bytes\n")
+} else {
+  stop("✗ ibd download FAILED")
+}
+
+# Check both files exist
+cat("\nFiles in directory:\n")
+print(list.files(test_dir, full.names = TRUE))
+
+# Step 2: Fix imzML to point to correct ibd
+cat("\n=== STEP 2: Fix imzML ibd reference ===\n")
+
+imzml_lines <- readLines(imzml_dest, warn = FALSE)
+
+# Find line with ibd reference
+ibd_ref_line <- grep('externalDataPath=', imzml_lines, value = TRUE)
+cat("Original ibd reference:\n", ibd_ref_line[1], "\n")
+
+# Replace with correct filename
+ibd_pattern <- 'externalDataPath="[^"]+"'
+ibd_replacement <- sprintf('externalDataPath="%s"', basename(ibd_dest))
+
+imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
+
+# Write back
+writeLines(imzml_lines, imzml_dest)
+
+# Verify the fix
+ibd_ref_line_fixed <- grep('externalDataPath=', readLines(imzml_dest, warn = FALSE), value = TRUE)
+cat("Fixed ibd reference:\n", ibd_ref_line_fixed[1], "\n")
+
+# Step 3: Load with Cardinal
+cat("\n=== STEP 3: Load MSI object with Cardinal ===\n")
+
+msi_data <- readImzML(
+  imzml_dest,
+  memory = FALSE,
+  check = FALSE,
+  mass.range = NULL,
+  resolution = 10,
+  units = "ppm",
+  BPPARAM = BiocParallel::bpparam()
+)
+
+cat("✓ MSI object loaded successfully\n")
+cat("Dimensions:", nrow(msi_data), "pixels x", ncol(msi_data), "m/z values\n")
+
+# Step 4: Load SNR reference and continue processing
+cat("\n=== STEP 4: Load SNR reference ===\n")
+
+control_SNR_ref <- load_stage_from_mongo(
+  sample_name = "tumorinfiltrat.imzML",
+  stage_type = "snr_reference",
+  run_id = NULL,
+  db_name = "MSI_test_database"
+)
+
+cat("✓ SNR reference loaded:", length(mz(control_SNR_ref)), "peaks\n")
+
+# Step 5: Get reference m/z
+cat("\n=== STEP 5: Load reference m/z ===\n")
+
+mongo_ref <- mongo(collection = "mz_references",
+                   db = "msi_project",
+                   url = "mongodb://localhost")
+
+ref_doc <- mongo_ref$find(
+  query = '{"reference_name": "113_lipids_gangliosides"}'
+)
+
+ref_mz <- unlist(ref_doc$mz_values[[1]])
+cat("Reference loaded:", length(ref_mz), "m/z values\n")
+
+# Step 6: Align reference
+cat("\n=== STEP 6: Align reference ===\n")
+
+control_MSI_ref <- control_SNR_ref %>%
+  peakAlign(ref = ref_mz, tolerance = 0.5, units = "mz") %>%
+  subsetFeatures() %>%
+  process()
+
+cat("✓ Aligned to", length(mz(control_MSI_ref)), "m/z bins\n")
+
+# Step 7: Bin MSI data
+cat("\n=== STEP 7: Bin MSI data ===\n")
+
+msi_data_binned <- bin(
+  msi_data,
+  ref = mz(control_MSI_ref),
+  tolerance = 0.5,
+  units = "mz",
+  BPPARAM = BiocParallel::bpparam()
+) %>% process()
+
+cat("✓ Binning complete\n")
+cat("Dimensions:", nrow(msi_data_binned), "pixels x", ncol(msi_data_binned), "bins\n")
+
+# Step 8: Create feature matrix
+cat("\n=== STEP 8: Create feature matrix ===\n")
+
+msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
+mz_names <- paste0("mz_", mz(msi_data_binned))
+coords <- coord(msi_data_binned)
+run_name <- runNames(msi_data_binned)
+pixel_names <- rep(run_name, nrow(msi_matrix))
+
+full_df <- data.frame(
+  runNames = pixel_names,
+  x = coords$x,
+  y = coords$y,
+  msi_matrix
+)
+colnames(full_df) <- c("runNames", "x", "y", mz_names)
+
+cat("✓ Feature matrix created\n")
+cat("Dimensions:", nrow(full_df), "pixels x", sum(grepl("^mz_", names(full_df))), "features\n")
+cat("\nFirst 5 rows, first 8 columns:\n")
+print(head(full_df[, 1:min(8, ncol(full_df))], 5))
+
+cat("\n=== ✅ COMPLETE TEST SUCCESSFUL ===\n")
+cat("Test directory:", test_dir, "\n")
