@@ -103,10 +103,8 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   
   message("✓ imzML: ", file.size(final_imzml), " bytes")
   
-  # Download ibd - FIX HER!
-  message("Available columns: ", paste(names(row), collapse = ", "))
-  message("ibd_gridfs_name value: ", row$ibd_gridfs_name[1])
-  ibd_name <- as.character(row$ibd_gridfs_name[1])  # Tilføj [1] indexering
+  # Download ibd
+  ibd_name <- as.character(row$ibd_gridfs_name[1])
   message("Downloading ibd: ", ibd_name)
   temp_ibd <- file.path(dest_dir, ibd_name)
   grid$download(ibd_name, temp_ibd)
