@@ -641,130 +641,130 @@
 # cat("\nFinal check:\n")
 # list.files(test_dir, full.names = TRUE)
 
-
-
-
-
-
-# Test: Load raw data + SNR reference and continue processing
-library(Cardinal)
-library(mongolite)
-library(BiocParallel)
-
-# Configuration
-sample_name <- "tumorinfiltrat.imzML"
-db_name <- "MSI_test_database"
-snr_value <- 3.2
-
-# Step 1: Create clean workdir
-workdir <- file.path(tempdir(), "test_raw_load", tools::file_path_sans_ext(sample_name))
-if (dir.exists(workdir)) {
-  unlink(workdir, recursive = TRUE)
-}
-dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
-
-cat("\n=== STEP 1: Load raw files from MongoDB ===\n")
-cat("Workdir:", workdir, "\n\n")
-
-# Load raw MSI object
-msi_data <- load_raw_object_from_mongo(
-  sample_name = sample_name,
-  workdir = workdir,
-  db_name = db_name,
-  bucket = "fs",
-  BPPARAM = BiocParallel::bpparam()
-)
-
-cat("\n✓ Raw data loaded successfully\n")
-cat("Dimensions:", nrow(msi_data), "pixels x", ncol(msi_data), "m/z values\n")
-cat("Files in workdir:\n")
-print(list.files(workdir, full.names = TRUE))
-
-cat("\n=== STEP 2: Load existing SNR reference ===\n")
-
-# Load SNR reference from database
-control_SNR_ref <- load_stage_from_mongo(
-  sample_name = sample_name,
-  stage_type = "snr_reference",
-  run_id = NULL,  # Will use most recent
-  db_name = db_name
-)
-
-cat("\n✓ SNR reference loaded\n")
-cat("Number of peaks:", length(mz(control_SNR_ref)), "\n")
-
-cat("\n=== STEP 3: Test binning with loaded data ===\n")
-
-# Get reference m/z from database
-mongo_ref <- mongo(collection = "mz_references",
-                   db = "msi_project", 
-                   url = "mongodb://localhost")
-
-ref_doc <- mongo_ref$find(
-  query = '{"reference_name": "113_lipids_gangliosides"}'
-)
-
-ref_mz <- unlist(ref_doc$mz_values[[1]])
-cat("Reference loaded:", length(ref_mz), "m/z values\n")
-
-# Align reference
-cat("\nAligning reference (tolerance=0.5)...\n")
-control_MSI_ref <- control_SNR_ref %>%
-  peakAlign(ref = ref_mz, tolerance = 0.5, units = "mz") %>%
-  subsetFeatures() %>%
-  process()
-
-cat("✓ Aligned to", length(mz(control_MSI_ref)), "m/z bins\n")
-
-# Bin MSI data
-cat("\nBinning full MSI data...\n")
-msi_data_binned <- bin(
-  msi_data,
-  ref = mz(control_MSI_ref),
-  tolerance = 0.5,
-  units = "mz",
-  BPPARAM = BiocParallel::bpparam()
-) %>% process()
-
-cat("✓ Binning complete\n")
-cat("Dimensions:", nrow(msi_data_binned), "pixels x", ncol(msi_data_binned), "bins\n")
-
-cat("\n=== STEP 4: Create feature matrix ===\n")
-
-# Create dataframe
-msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
-mz_names <- paste0("mz_", mz(msi_data_binned))
-coords <- coord(msi_data_binned)
-run_name <- runNames(msi_data_binned)
-pixel_names <- rep(run_name, nrow(msi_matrix))
-
-full_df <- data.frame(
-  runNames = pixel_names,
-  x = coords$x,
-  y = coords$y,
-  msi_matrix
-)
-colnames(full_df) <- c("runNames", "x", "y", mz_names)
-
-cat("✓ Feature matrix created\n")
-cat("Dimensions:", nrow(full_df), "pixels x", sum(grepl("^mz_", names(full_df))), "features\n")
-cat("\nFirst 5 rows, first 8 columns:\n")
-print(head(full_df[, 1:min(8, ncol(full_df))], 5))
-
-cat("\n=== ✅ TEST COMPLETE ===\n")
-cat("Workdir was:", workdir, "\n")
-cat("You can inspect files with: list.files('", workdir, "', full.names = TRUE)\n", sep = "")
-
-
-
-
-
-
-
-
-
-
-
+# 
+# 
+# 
+# 
+# 
+# # Test: Load raw data + SNR reference and continue processing
+# library(Cardinal)
+# library(mongolite)
+# library(BiocParallel)
+# 
+# # Configuration
+# sample_name <- "tumorinfiltrat.imzML"
+# db_name <- "MSI_test_database"
+# snr_value <- 3.2
+# 
+# # Step 1: Create clean workdir
+# workdir <- file.path(tempdir(), "test_raw_load", tools::file_path_sans_ext(sample_name))
+# if (dir.exists(workdir)) {
+#   unlink(workdir, recursive = TRUE)
+# }
+# dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+# 
+# cat("\n=== STEP 1: Load raw files from MongoDB ===\n")
+# cat("Workdir:", workdir, "\n\n")
+# 
+# # Load raw MSI object
+# msi_data <- load_raw_object_from_mongo(
+#   sample_name = sample_name,
+#   workdir = workdir,
+#   db_name = db_name,
+#   bucket = "fs",
+#   BPPARAM = BiocParallel::bpparam()
+# )
+# 
+# cat("\n✓ Raw data loaded successfully\n")
+# cat("Dimensions:", nrow(msi_data), "pixels x", ncol(msi_data), "m/z values\n")
+# cat("Files in workdir:\n")
+# print(list.files(workdir, full.names = TRUE))
+# 
+# cat("\n=== STEP 2: Load existing SNR reference ===\n")
+# 
+# # Load SNR reference from database
+# control_SNR_ref <- load_stage_from_mongo(
+#   sample_name = sample_name,
+#   stage_type = "snr_reference",
+#   run_id = NULL,  # Will use most recent
+#   db_name = db_name
+# )
+# 
+# cat("\n✓ SNR reference loaded\n")
+# cat("Number of peaks:", length(mz(control_SNR_ref)), "\n")
+# 
+# cat("\n=== STEP 3: Test binning with loaded data ===\n")
+# 
+# # Get reference m/z from database
+# mongo_ref <- mongo(collection = "mz_references",
+#                    db = "msi_project", 
+#                    url = "mongodb://localhost")
+# 
+# ref_doc <- mongo_ref$find(
+#   query = '{"reference_name": "113_lipids_gangliosides"}'
+# )
+# 
+# ref_mz <- unlist(ref_doc$mz_values[[1]])
+# cat("Reference loaded:", length(ref_mz), "m/z values\n")
+# 
+# # Align reference
+# cat("\nAligning reference (tolerance=0.5)...\n")
+# control_MSI_ref <- control_SNR_ref %>%
+#   peakAlign(ref = ref_mz, tolerance = 0.5, units = "mz") %>%
+#   subsetFeatures() %>%
+#   process()
+# 
+# cat("✓ Aligned to", length(mz(control_MSI_ref)), "m/z bins\n")
+# 
+# # Bin MSI data
+# cat("\nBinning full MSI data...\n")
+# msi_data_binned <- bin(
+#   msi_data,
+#   ref = mz(control_MSI_ref),
+#   tolerance = 0.5,
+#   units = "mz",
+#   BPPARAM = BiocParallel::bpparam()
+# ) %>% process()
+# 
+# cat("✓ Binning complete\n")
+# cat("Dimensions:", nrow(msi_data_binned), "pixels x", ncol(msi_data_binned), "bins\n")
+# 
+# cat("\n=== STEP 4: Create feature matrix ===\n")
+# 
+# # Create dataframe
+# msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
+# mz_names <- paste0("mz_", mz(msi_data_binned))
+# coords <- coord(msi_data_binned)
+# run_name <- runNames(msi_data_binned)
+# pixel_names <- rep(run_name, nrow(msi_matrix))
+# 
+# full_df <- data.frame(
+#   runNames = pixel_names,
+#   x = coords$x,
+#   y = coords$y,
+#   msi_matrix
+# )
+# colnames(full_df) <- c("runNames", "x", "y", mz_names)
+# 
+# cat("✓ Feature matrix created\n")
+# cat("Dimensions:", nrow(full_df), "pixels x", sum(grepl("^mz_", names(full_df))), "features\n")
+# cat("\nFirst 5 rows, first 8 columns:\n")
+# print(head(full_df[, 1:min(8, ncol(full_df))], 5))
+# 
+# cat("\n=== ✅ TEST COMPLETE ===\n")
+# cat("Workdir was:", workdir, "\n")
+# cat("You can inspect files with: list.files('", workdir, "', full.names = TRUE)\n", sep = "")
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
 
 # Test: Manual download + processing pipeline
 library(Cardinal)
@@ -856,6 +856,7 @@ msi_data <- readImzML(
   BPPARAM = BiocParallel::bpparam()
 )
 
+
 cat("✓ MSI object loaded successfully\n")
 cat("Dimensions:", nrow(msi_data), "pixels x", ncol(msi_data), "m/z values\n")
 
@@ -933,3 +934,115 @@ print(head(full_df[, 1:min(8, ncol(full_df))], 5))
 
 cat("\n=== ✅ COMPLETE TEST SUCCESSFUL ===\n")
 cat("Test directory:", test_dir, "\n")
+
+
+
+
+
+
+
+
+# Test: Manual download + processing pipeline
+library(Cardinal)
+library(mongolite)
+library(BiocParallel)
+library(dplyr)
+bp <- parallel::detectCores() - 1
+setCardinalParallel(workers = bp)
+
+# Step 1: Manual download from GridFS
+cat("\n=== STEP 1: Manual GridFS download ===\n")
+
+grid <- gridfs(db = "MSI_test_database", prefix = "fs", url = "mongodb://localhost")
+
+# List all files
+files <- grid$find('{}')
+
+# Find the imzML and ibd pair
+imzml_file <- files$name[grepl("\\.imzML$", files$name, ignore.case = TRUE)][1]
+ibd_file <- files$name[grepl("\\.ibd$", files$name, ignore.case = TRUE)][1]
+
+
+# Create clean test directory
+test_dir <- file.path(tempdir(), "manual_gridfs_test")
+if (dir.exists(test_dir)) unlink(test_dir, recursive = TRUE)
+dir.create(test_dir, showWarnings = FALSE)
+
+# Download imzML
+imzml_dest <- file.path(test_dir, "tumorinfiltrat.imzML")
+grid$download(imzml_file, imzml_dest)
+
+if (file.exists(imzml_dest)) {
+  cat("✓ imzML downloaded:", file.size(imzml_dest), "bytes\n")
+} else {
+  stop("✗ imzML download FAILED")
+}
+
+# Download ibd
+ibd_dest <- file.path(test_dir, "tumorinfiltrat.ibd")
+grid$download(ibd_file, ibd_dest)
+
+if (file.exists(ibd_dest)) {
+  cat("✓ ibd downloaded:", file.size(ibd_dest), "bytes\n")
+} else {
+  stop("✗ ibd download FAILED")
+}
+
+# Check both files exist
+cat("\nFiles in directory:\n")
+print(list.files(test_dir, full.names = TRUE))
+
+
+
+msi_data <- readImzML(
+  imzml_dest,
+  memory = FALSE,
+  check = FALSE,
+  mass.range = NULL,
+  resolution = 10,
+  units = "ppm",
+  BPPARAM = BiocParallel::bpparam()
+)
+control_mean <- summarizeFeatures(msi_data, "mean")
+
+control_SNR_ref <- control_mean %>%
+  peakPick(SNR = 4)
+
+
+mongo_ref <- mongo(collection = "mz_references",
+                   db = "msi_project",
+                   url = "mongodb://localhost")
+
+ref_doc <- mongo_ref$find(
+  query = '{"reference_name": "113_lipids_gangliosides"}'
+)
+
+ref_mz <- unlist(ref_doc$mz_values[[1]])
+
+control_MSI_ref <- control_SNR_ref %>%
+  peakAlign(ref = ref_mz, tolerance = 0.5, units = "mz") %>%
+  subsetFeatures() %>%
+  process()
+
+msi_data_binned <- bin(
+  msi_data,
+  ref = mz(control_MSI_ref),
+  tolerance = 0.5,
+  units = "mz",
+  BPPARAM = BiocParallel::bpparam()
+) %>% process()
+
+
+msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
+mz_names <- paste0("mz_", mz(msi_data_binned))
+coords <- coord(msi_data_binned)
+run_name <- runNames(msi_data_binned)
+pixel_names <- rep(run_name, nrow(msi_matrix))
+
+full_df <- data.frame(
+  runNames = pixel_names,
+  x = coords$x,
+  y = coords$y,
+  msi_matrix
+)
+colnames(full_df) <- c("runNames", "x", "y", mz_names)
