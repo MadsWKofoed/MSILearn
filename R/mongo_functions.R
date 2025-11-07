@@ -93,16 +93,6 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
     stop("imzML download failed - file not found at: ", temp_imzml)
   }
   
-  if (temp_imzml != final_imzml) {
-    file.rename(temp_imzml, final_imzml)
-  }
-  
-  if (!file.exists(final_imzml)) {
-    stop("imzML file missing after rename: ", final_imzml)
-  }
-  
-  message("✓ imzML: ", file.size(final_imzml), " bytes")
-  
   # Download ibd
   ibd_name <- as.character(row$ibd_gridfs_name[1])
   message("Downloading ibd: ", ibd_name)
@@ -113,15 +103,31 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
     stop("ibd download failed - file not found at: ", temp_ibd)
   }
   
+  message("✓ ibd: ", file.size(temp_ibd), " bytes")
+  
+  # FIX: Update imzML to point to correct ibd filename
+  message("Updating imzML file to reference correct ibd...")
+  imzml_lines <- readLines(temp_imzml)
+  
+  # Find and replace ibd reference
+  ibd_pattern <- '<binaryDataArrayList count="2" externalDataPath="([^"]+)">'
+  ibd_replacement <- sprintf('<binaryDataArrayList count="2" externalDataPath="%s">', basename(final_ibd))
+  
+  imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
+  
+  # Write updated imzML to final location
+  writeLines(imzml_lines, final_imzml)
+  
+  # Rename ibd to final location
   if (temp_ibd != final_ibd) {
     file.rename(temp_ibd, final_ibd)
   }
   
-  if (!file.exists(final_ibd)) {
-    stop("ibd file missing after rename: ", final_ibd)
+  if (!file.exists(final_imzml) || !file.exists(final_ibd)) {
+    stop("Files missing after processing")
   }
   
-  message("✓ ibd: ", file.size(final_ibd), " bytes")
+  message("✓ Files ready with correct references")
   message("✓ Raw files ready at: ", dest_dir)
   
   list(imzml = final_imzml, ibd = final_ibd)
