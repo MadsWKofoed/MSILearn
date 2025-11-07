@@ -592,3 +592,51 @@ inspect_metadata <- function(sample_name = NULL,
   
   invisible(artifacts)
 }
+
+
+
+
+
+grid <- gridfs(db = "MSI_test_database", prefix = "fs", url = "mongodb://localhost")
+
+# List all files
+files <- grid$find('{}')
+print(files[, c("filename", "length")])
+
+# Find the imzML and ibd pair
+imzml_file <- files$filename[grepl("\\.imzML$", files$filename, ignore.case = TRUE)][1]
+ibd_file <- files$filename[grepl("\\.ibd$", files$filename, ignore.case = TRUE)][1]
+
+cat("imzML file:", imzml_file, "\n")
+cat("ibd file:", ibd_file, "\n")
+
+# Create clean test directory
+test_dir <- "/tmp/gridfs_test_clean"
+if (dir.exists(test_dir)) unlink(test_dir, recursive = TRUE)
+dir.create(test_dir, showWarnings = FALSE)
+
+# Download imzML FIRST
+cat("\nDownloading imzML...\n")
+imzml_dest <- file.path(test_dir, imzml_file)
+grid$download(imzml_file, imzml_dest)
+
+if (file.exists(imzml_dest)) {
+  cat("✓ imzML downloaded:", file.size(imzml_dest), "bytes\n")
+} else {
+  cat("✗ imzML download FAILED\n")
+}
+
+# Download ibd SECOND
+cat("\nDownloading ibd...\n")
+ibd_dest <- file.path(test_dir, ibd_file)
+grid$download(ibd_file, ibd_dest)
+
+if (file.exists(ibd_dest)) {
+  cat("✓ ibd downloaded:", file.size(ibd_dest), "bytes\n")
+} else {
+  cat("✗ ibd download FAILED\n")
+}
+
+# Check both files exist
+cat("\nFinal check:\n")
+list.files(test_dir, full.names = TRUE)
