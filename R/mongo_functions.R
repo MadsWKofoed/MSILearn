@@ -35,11 +35,35 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
   imz_name <- sanitize_name(sprintf("%s__%s.imzML", base, ts))
   ibd_name <- sanitize_name(sprintf("%s__%s.ibd", base, ts))
   
-  message("Uploading imzML to GridFS...")
-  imz_id <- unname(grid$upload(imzml_path, name = imz_name))
+  # FIX: Create corrected imzML before upload
+  message("Preparing imzML with correct ibd reference...")
+  imzml_lines <- readLines(imzml_path, warn = FALSE)
+  
+  # Ensure ibd reference points to the ibd_name we'll use
+  ibd_pattern <- 'externalDataPath="[^"]*"'
+  ibd_replacement <- sprintf('externalDataPath="%s"', ibd_name)
+  
+  # Replace or add the reference
+  imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
+  
+  # If no match found, we need to add it (shouldn't happen with valid imzML)
+  if (!any(grepl('externalDataPath=', imzml_lines))) {
+    warning("No externalDataPath found in imzML - file may be invalid")
+  }
+  
+  # Write corrected imzML to temp file
+  temp_imzml <- tempfile(fileext = ".imzML")
+  writeLines(imzml_lines, temp_imzml)
+  
+  # Upload corrected imzML
+  message("Uploading corrected imzML to GridFS...")
+  imz_id <- unname(grid$upload(temp_imzml, name = imz_name))
   
   message("Uploading ibd to GridFS...")
   ibd_id <- unname(grid$upload(ibd_path, name = ibd_name))
+  
+  # Clean up temp file
+  unlink(temp_imzml)
   
   meta$insert(list(
     sample_name         = sample_name,
@@ -51,7 +75,7 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
     ibd_gridfs_name     = ibd_name
   ))
   
-  message("✓ Raw files saved to MongoDB")
+  message("✓ Raw files saved to MongoDB with corrected references")
   invisible(list(imzml_id = as.character(imz_id), ibd_id = as.character(ibd_id)))
 }
 
