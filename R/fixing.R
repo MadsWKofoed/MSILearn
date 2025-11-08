@@ -933,3 +933,86 @@ print(head(full_df[, 1:min(8, ncol(full_df))], 5))
 
 cat("\n=== ✅ COMPLETE TEST SUCCESSFUL ===\n")
 cat("Test directory:", test_dir, "\n")
+
+
+
+
+
+load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
+                                  db_name = "MSI_test_database",
+                                  mongo_url = "mongodb://localhost",
+                                  workdir = NULL) {  # ADD workdir parameter
+  
+  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
+  
+  query_list <- list(
+    sample_name = sample_name,
+    stage_type = stage_type
+  )
+  
+  if (!is.null(run_id)) {
+    query_list$run_id <- run_id
+  }
+  
+  query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
+  artifacts <- meta$find(query)
+  
+  if (nrow(artifacts) == 0) {
+    stop("No artifact found for sample=", sample_name, ", stage=", stage_type)
+  }
+  
+  row <- artifacts[nrow(artifacts), , drop = FALSE]
+  
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  fname <- as.character(row$filename[1])
+  
+  message("Downloading ", fname, "...")
+  
+  # Use provided workdir or tempdir
+  download_dir <- if (!is.null(workdir)) {
+    dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+    workdir
+  } else {
+    tempdir()
+  }
+  
+  local_path <- file.path(download_dir, fname)
+  grid$download(fname, local_path)
+  
+  message("Loading RDS...")
+  obj <- readRDS(local_path)
+  
+  message("✓ Loaded stage: ", stage_type)
+  obj
+}
+
+
+
+
+
+# Test med samme workdir
+sample_name <- "tumorinfiltrat.imzML"
+db_name <- "MSI_test_database"
+
+# SAME workdir for alle stages
+workdir <- file.path(tempdir(), "test_same_workdir", tools::file_path_sans_ext(sample_name))
+if (dir.exists(workdir)) unlink(workdir, recursive = TRUE)
+dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+
+cat("Using workdir:", workdir, "\n\n")
+
+# Load raw files
+msi_data <- load_raw_object_from_mongo(
+  sample_name = sample_name,
+  workdir = workdir,  # SAME workdir
+  db_name = db_name
+)
+
+# Load SNR reference - PASS samme workdir
+control_SNR_ref <- load_stage_from_mongo(
+  sample_name = sample_name,
+  stage_type = "snr_reference",
+  db_name = db_name,
+  workdir = workdir  # SAME workdir - så .ibd filen findes
+)
+
