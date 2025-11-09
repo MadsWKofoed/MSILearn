@@ -287,77 +287,130 @@ save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type,
 
 
 load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
-                                      db_name = "MSI_test_database",
+                                      db_name   = "MSI_test_database",
                                       mongo_url = "mongodb://localhost",
-                                      memory = FALSE) {
-  
-  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
-  
+                                      memory    = FALSE,
+                                      workdir   = NULL,
+                                      verbose   = TRUE,
+                                      check_external_path = TRUE) {
+  if (verbose) message("[load] sample='", sample_name, "', stage='", stage_type, "'")
+
+  # --- Find metadata for det ønskede stage (imzML-format) ---
+  meta <- mongolite::mongo(collection = "processing_artifacts_metadata",
+                           db = db_name, url = mongo_url)
+
   query_list <- list(
     sample_name = sample_name,
-    stage_type = stage_type,
+    stage_type  = stage_type,
     file_format = "imzML"
   )
-  
-  if (!is.null(run_id)) {
-    query_list$run_id <- run_id
-  }
-  
-  query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
-  artifacts <- meta$find(query)
-  
+  if (!is.null(run_id)) query_list$run_id <- run_id
+
+  artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
+
   if (nrow(artifacts) == 0) {
-    stop("No imzML artifact found for sample=", sample_name, ", stage=", stage_type)
+    stop("No imzML artifact found for sample='", sample_name,
+         "', stage='", stage_type, "'.")
   }
-  
-  # Use most recent
+
+  # Vælg seneste, hvis flere
   if (nrow(artifacts) > 1) {
-    message("Multiple artifacts found, using most recent")
+    if (verbose) message("[load] Multiple artifacts found; selecting most recent")
+    # håndter list/character i created_at
+    if (is.list(artifacts$created_at)) {
+      artifacts$created_at <- do.call(c, artifacts$created_at)
+    }
+    ord <- order(artifacts$created_at, decreasing = TRUE, na.last = TRUE)
+    artifacts <- artifacts[ord, , drop = FALSE]
   }
-  row <- artifacts[nrow(artifacts), , drop = FALSE]
-  
-  # Create temp directory
-  tmp_dir <- tempfile("imzml_")
-  dir.create(tmp_dir)
-  
-  fs <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  
-  # Download imzML
+  row <- artifacts[1, , drop = FALSE]
+
+  # --- Forbered arbejdsmappe (behold den under hele kørsel) ---
+  if (is.null(workdir)) {
+    workdir <- file.path(tempdir(),
+                         paste0("imzml_", gsub("[^A-Za-z0-9._-]+", "_",
+                                               paste0(sample_name, "_", stage_type))))
+  }
+  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  if (verbose) message("[load] workdir: ", workdir)
+
+  # --- Download fra GridFS ---
+  fs <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
+
   imzml_name <- as.character(row$filename[1])
-  imzml_local <- file.path(tmp_dir, imzml_name)
-  message("Downloading ", imzml_name, "...")
+  ibd_name   <- as.character(row$ibd_filename[1])
+
+  imzml_local <- file.path(workdir, imzml_name)
+  if (verbose) message("[load] Downloading ", imzml_name)
   fs$download(name = imzml_name, path = imzml_local)
-  
-  # Download ibd
-  ibd_name <- as.character(row$ibd_filename[1])
-  if (!is.na(ibd_name) && nchar(ibd_name) > 0) {
-    ibd_local <- file.path(tmp_dir, ibd_name)
-    message("Downloading ", ibd_name, "...")
+  if (!file.exists(imzml_local)) stop("imzML download failed: ", imzml_local)
+
+  ibd_local <- NA_character_
+  if (!is.na(ibd_name) && nzchar(ibd_name)) {
+    ibd_local <- file.path(workdir, ibd_name)
+    if (verbose) message("[load] Downloading ", ibd_name)
     fs$download(name = ibd_name, path = ibd_local)
+    if (!file.exists(ibd_local)) stop("ibd download failed: ", ibd_local)
+  } else {
+    warning("[load] No ibd filename in metadata for this stage; proceeding without it.")
   }
-  
-  # Download TSV files if present
+
+  # --- (Valgfrit) Hent evt. TSV’er (feature/pixel metadata) ---
   if ("tsv_gridfs_ids" %in% names(row) && !is.null(row$tsv_gridfs_ids[[1]])) {
-    for (tsv_name in names(row$tsv_gridfs_ids[[1]])) {
-      tsv_local <- file.path(tmp_dir, tsv_name)
-      message("Downloading ", tsv_name, "...")
-      # Reconstruct full TSV name
-      base_name <- tools::file_path_sans_ext(imzml_name)
-      full_tsv_name <- paste0(base_name, "_", tsv_name)
-      fs$download(name = full_tsv_name, path = tsv_local)
+    tsv_map <- row$tsv_gridfs_ids[[1]]
+    base_no_ext <- tools::file_path_sans_ext(imzml_name) # sådan blev de uploadet
+    for (tsv_name in names(tsv_map)) {
+      stored_tsv <- paste0(base_no_ext, "_", tsv_name)
+      tsv_local  <- file.path(workdir, tsv_name)
+      if (verbose) message("[load] Downloading ", stored_tsv, " -> ", tsv_local)
+      # ignorér fejl hvis ikke fundet
+      try(fs$download(name = stored_tsv, path = tsv_local), silent = TRUE)
     }
   }
-  
-  # Read MSI object - CHANGED: Use readMSIData instead of readImzML
-  message("Loading MSI object...")
-  obj <- readMSIData(imzml_local, memory = memory)
-  
-  # Clean up temp directory after loading
-  unlink(tmp_dir, recursive = TRUE)
-  
-  message("✓ Loaded stage: ", stage_type)
-  obj
+
+  # --- Sørg for at .imzML peger på korrekt .ibd (externalDataPath) ---
+  if (isTRUE(check_external_path) && !is.na(ibd_local) && file.exists(ibd_local)) {
+    if (verbose) message("[load] Ensuring externalDataPath points to ", basename(ibd_local))
+    lines <- readLines(imzml_local, warn = FALSE)
+
+    # almindelig attribut (mest typisk)
+    lines2 <- gsub('externalDataPath="[^"]+"',
+                   sprintf('externalDataPath="%s"', basename(ibd_local)),
+                   lines, perl = TRUE)
+
+    # fallback for evt. alternative placeringer (binaryDataArrayList-linje)
+    lines2 <- gsub('(<binaryDataArrayList[^>]*externalDataPath=")[^"]+(")',
+                   sprintf('\\1%s\\2', basename(ibd_local)),
+                   lines2, perl = TRUE)
+
+    if (!identical(lines, lines2)) {
+      writeLines(lines2, imzml_local)
+    } else {
+      # Hvis der slet ikke fandtes et externalDataPath, så advar
+      if (!any(grepl("externalDataPath=", lines2, fixed = TRUE))) {
+        warning("[load] No externalDataPath attribute found in imzML; file may be non-standard.")
+      }
+    }
+  }
+
+  # --- Læs ind i R (fil-backed hvis memory = FALSE) ---
+  if (verbose) message("[load] Reading MSI with Cardinal (memory=", memory, ")")
+  obj <- Cardinal::readMSIData(imzml_local, memory = memory)
+
+  if (verbose) {
+    # let info print
+    try({
+      message(sprintf("[load] OK: pixels=%s, features=%s",
+                      nrow(obj), ncol(obj)))
+    }, silent = TRUE)
+  }
+
+  # VIGTIGT: INGEN unlink(workdir) — workdir/cachen skal eksistere,
+  # så længe objectet bruges i den videre pipeline (fil-backed).
+
+  return(obj)
 }
+
 
 
 
