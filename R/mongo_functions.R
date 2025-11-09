@@ -165,7 +165,7 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
   paths <- fetch_raw_pair_from_mongo(sample_name, workdir, db_name, mongo_url, bucket)
   
   message("Reading imzML with Cardinal...")
-  obj <- readImzML(
+  obj <- readMSIData(
     paths$imzml, 
     memory = FALSE, 
     check = FALSE,
