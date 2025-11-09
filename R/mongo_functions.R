@@ -184,6 +184,189 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
   obj
 }
 
+
+# ===== CARDINAL MSI OBJECT SAVE/LOAD (with .ibd handling) =====
+
+save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type, 
+                                    sample_name,
+                                    params = list(),
+                                    db_name = "MSI_test_database",
+                                    mongo_url = "mongodb://localhost") {
+  
+  # Check for duplicates (control_mean and snr_reference only)
+  if (stage_type %in% c("control_mean", "snr_reference")) {
+    mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                        db = db_name, url = mongo_url)
+    
+    query_list <- list(
+      sample_name = sample_name,
+      stage_type = stage_type
+    )
+    
+    if (stage_type == "snr_reference" && !is.null(params$snr)) {
+      query_list$snr <- params$snr
+    }
+    
+    existing <- mongo_meta$find(
+      query = jsonlite::toJSON(query_list, auto_unbox = TRUE)
+    )
+    
+    if (nrow(existing) > 0) {
+      message("⚠ ", stage_type, " already exists. Skipping save.")
+      return(invisible(existing$run_id[1]))
+    }
+  }
+  
+  # Create temp directory for Cardinal files
+  tmp_dir <- tempfile("imzml_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE))
+  
+  base_name <- paste0(run_id, "_", stage_type)
+  imzml_path <- file.path(tmp_dir, paste0(base_name, ".imzML"))
+  
+  # Write MSI object to imzML + ibd
+  message("Writing MSI stage to imzML format...")
+  writeMSIData(msi_obj, imzml_path, bundle = FALSE)
+  
+  # Upload both files to GridFS
+  fs <- gridfs(url = mongo_url, db = db_name, prefix = "fs")
+  
+  message("Uploading ", base_name, ".imzML to GridFS...")
+  imzml_result <- fs$upload(imzml_path, name = paste0(base_name, ".imzML"))
+  imzml_grid_id <- as.character(imzml_result$id)
+  
+  ibd_path <- file.path(tmp_dir, paste0(base_name, ".ibd"))
+  if (file.exists(ibd_path)) {
+    message("Uploading ", base_name, ".ibd to GridFS...")
+    ibd_result <- fs$upload(ibd_path, name = paste0(base_name, ".ibd"))
+    ibd_grid_id <- as.character(ibd_result$id)
+  } else {
+    warning("No .ibd file found for stage: ", stage_type)
+    ibd_grid_id <- NA_character_
+  }
+  
+  # Upload any .tsv files (feature/pixel metadata)
+  tsvs <- list.files(tmp_dir, pattern = "\\.tsv$", full.names = TRUE)
+  tsv_grid_ids <- list()
+  for (tsv_path in tsvs) {
+    tsv_name <- paste0(base_name, "_", basename(tsv_path))
+    message("Uploading ", tsv_name, " to GridFS...")
+    tsv_result <- fs$upload(tsv_path, name = tsv_name)
+    tsv_grid_ids[[basename(tsv_path)]] <- as.character(tsv_result$id)
+  }
+  
+  # Create metadata document
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
+                      db = db_name, url = mongo_url)
+  
+  metadata_row <- list(
+    gridfs_id = imzml_grid_id,
+    ibd_gridfs_id = ibd_grid_id,
+    filename = paste0(base_name, ".imzML"),
+    ibd_filename = paste0(base_name, ".ibd"),
+    run_id = run_id,
+    sample_name = sample_name,
+    stage_type = stage_type,
+    created_at = Sys.time(),
+    file_format = "imzML"
+  )
+  
+  # Add TSV GridFS IDs if present
+  if (length(tsv_grid_ids) > 0) {
+    metadata_row$tsv_gridfs_ids <- tsv_grid_ids
+  }
+  
+  metadata_row <- c(metadata_row, params)
+  
+  mongo_meta$insert(metadata_row)
+  
+  message("✓ Saved '", stage_type, "' (GridFS ID: ", imzml_grid_id, ")")
+  invisible(imzml_grid_id)
+}
+
+
+load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
+                                      db_name = "MSI_test_database",
+                                      mongo_url = "mongodb://localhost",
+                                      memory = FALSE) {
+  
+  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
+  
+  query_list <- list(
+    sample_name = sample_name,
+    stage_type = stage_type,
+    file_format = "imzML"
+  )
+  
+  if (!is.null(run_id)) {
+    query_list$run_id <- run_id
+  }
+  
+  query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
+  artifacts <- meta$find(query)
+  
+  if (nrow(artifacts) == 0) {
+    stop("No imzML artifact found for sample=", sample_name, ", stage=", stage_type)
+  }
+  
+  # Use most recent
+  if (nrow(artifacts) > 1) {
+    message("Multiple artifacts found, using most recent")
+  }
+  row <- artifacts[nrow(artifacts), , drop = FALSE]
+  
+  # Create temp directory
+  tmp_dir <- tempfile("imzml_")
+  dir.create(tmp_dir)
+  # Don't clean up immediately - Cardinal needs the files
+  
+  fs <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  
+  # Download imzML
+  imzml_name <- as.character(row$filename[1])
+  imzml_local <- file.path(tmp_dir, imzml_name)
+  message("Downloading ", imzml_name, "...")
+  fs$download(name = imzml_name, path = imzml_local)
+  
+  # Download ibd
+  ibd_name <- as.character(row$ibd_filename[1])
+  if (!is.na(ibd_name) && nchar(ibd_name) > 0) {
+    ibd_local <- file.path(tmp_dir, ibd_name)
+    message("Downloading ", ibd_name, "...")
+    fs$download(name = ibd_name, path = ibd_local)
+  }
+  
+  # Download TSV files if present
+  if ("tsv_gridfs_ids" %in% names(row) && !is.null(row$tsv_gridfs_ids[[1]])) {
+    for (tsv_name in names(row$tsv_gridfs_ids[[1]])) {
+      tsv_local <- file.path(tmp_dir, tsv_name)
+      message("Downloading ", tsv_name, "...")
+      # Reconstruct full TSV name
+      base_name <- tools::file_path_sans_ext(imzml_name)
+      full_tsv_name <- paste0(base_name, "_", tsv_name)
+      fs$download(name = full_tsv_name, path = tsv_local)
+    }
+  }
+  
+  # Read MSI object
+  message("Loading MSI object...")
+  obj <- readImzML(imzml_local, memory = memory)
+  
+  # Clean up temp directory after loading
+  unlink(tmp_dir, recursive = TRUE)
+  
+  message("✓ Loaded stage: ", stage_type)
+  obj
+}
+
+
+
+
+
+
+
+
 # ===== SAVE/LOAD STAGES =====
 save_stage_to_mongo <- function(msi_object, run_id, stage_type, 
                                 sample_name,

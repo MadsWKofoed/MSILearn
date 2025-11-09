@@ -377,6 +377,7 @@ processing_module_server <- function(id) {
     })
     
     # Run processing
+    # Run processing
     observeEvent(input$run_processing, {
       mz_ref <- selected_mz()
       sample_name <- current_sample()
@@ -420,7 +421,7 @@ processing_module_server <- function(id) {
         add_log(sprintf("=== PROCESSING STARTED ==="))
         add_log(sprintf("Sample: %s", sample_name))
         add_log(sprintf("Parameters: Resolution=%d, SNR=%.1f, Tol=%.2f, Ref=%s",
-                       input$resolution, input$snr, input$tolerance, mz_ref$name))
+                      input$resolution, input$snr, input$tolerance, mz_ref$name))
         
         # Setup cache directory
         cache_base <- file.path(tempdir(), "msi_processing_cache")
@@ -467,7 +468,7 @@ processing_module_server <- function(id) {
           db_name = "MSI_test_database"
         )
         add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
-                       nrow(msi_data), ncol(msi_data)))
+                      nrow(msi_data), ncol(msi_data)))
         
         progress$set(value = 50, message = "Processing mean spectrum...")
         
@@ -475,19 +476,19 @@ processing_module_server <- function(id) {
         mean_artifacts <- mongo_meta$find(
           query = jsonlite::toJSON(list(
             sample_name = sample_name,
-            stage_type = "control_mean"
+            stage_type = "control_mean",
+            file_format = "imzML"
           ), auto_unbox = TRUE)
         )
         
         if (nrow(mean_artifacts) > 0) {
           add_log("Loading existing mean spectrum...")
-          control_mean <- load_stage_from_mongo(
+          control_mean <- load_msi_stage_from_mongo(
             sample_name = sample_name,
             stage_type = "control_mean",
             db_name = "MSI_test_database"
           )
           
-          # Get existing run_id or create new one
           run_id <- mean_artifacts$run_id[nrow(mean_artifacts)]
           if (is.null(run_id) || is.na(run_id) || run_id == "") {
             run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
@@ -496,9 +497,8 @@ processing_module_server <- function(id) {
           add_log("Calculating mean spectrum...")
           control_mean <- summarizeFeatures(msi_data, "mean")
           
-          # Create new run_id
           run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-          save_stage_to_mongo(
+          save_msi_stage_to_mongo(
             control_mean,
             run_id,
             "control_mean",
@@ -510,18 +510,19 @@ processing_module_server <- function(id) {
         
         progress$set(value = 65, message = "Applying SNR peak picking...")
         
-        # STEP 3: SNR reference (check for existing with same SNR)
+        # STEP 3: SNR reference
         snr_artifacts <- mongo_meta$find(
           query = jsonlite::toJSON(list(
             sample_name = sample_name,
             stage_type = "snr_reference",
+            file_format = "imzML",
             snr = as.numeric(input$snr)
           ), auto_unbox = TRUE)
         )
         
         if (nrow(snr_artifacts) > 0) {
           add_log(sprintf("Loading existing SNR reference (SNR=%.1f)...", input$snr))
-          control_SNR_ref <- load_stage_from_mongo(
+          control_SNR_ref <- load_msi_stage_from_mongo(
             sample_name = sample_name,
             stage_type = "snr_reference",
             db_name = "MSI_test_database"
@@ -531,7 +532,7 @@ processing_module_server <- function(id) {
           control_SNR_ref <- control_mean %>%
             peakPick(SNR = input$snr)
           
-          save_stage_to_mongo(
+          save_msi_stage_to_mongo(
             control_SNR_ref,
             run_id,
             "snr_reference",
@@ -544,20 +545,18 @@ processing_module_server <- function(id) {
         
         progress$set(value = 75, message = "Aligning and binning...")
         
-        # STEP 4: Always run alignment and binning (new combination)
+        # STEP 4: Alignment
         add_log(sprintf("Aligning to reference (Tol=%.2f)...", input$tolerance))
         
-        # Create NEW run_id for this specific processing combination
         processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
         control_MSI_ref <- control_SNR_ref %>%
           peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
           subsetFeatures() %>%
           process()
         
-        run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-        save_stage_to_mongo(
+        save_msi_stage_to_mongo(
           control_MSI_ref,
-          run_id,
+          processing_run_id,
           "aligned_reference",
           sample_name = sample_name,
           params = list(
@@ -580,9 +579,9 @@ processing_module_server <- function(id) {
           BPPARAM = BiocParallel::bpparam()
         ) %>% process()
         
-        save_stage_to_mongo(
+        save_msi_stage_to_mongo(
           msi_data_binned,
-          run_id,
+          processing_run_id,
           "binned_msi",
           sample_name = sample_name,
           params = list(
@@ -596,7 +595,7 @@ processing_module_server <- function(id) {
         
         progress$set(value = 95, message = "Creating feature matrix...")
         
-        # STEP 5: Create final dataframe
+        # STEP 5: Create final dataframe (still saved as RDS)
         add_log("Creating feature matrix...")
         msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
         mz_names <- paste0("mz_", mz(msi_data_binned))
@@ -612,9 +611,10 @@ processing_module_server <- function(id) {
         )
         colnames(full_df) <- c("runNames", "x", "y", mz_names)
         
+        # Final dataframe still uses old RDS method
         save_stage_to_mongo(
           full_df,
-          run_id,
+          processing_run_id,
           "binned_dataframe",
           sample_name = sample_name,
           params = list(
@@ -629,19 +629,18 @@ processing_module_server <- function(id) {
         )
         
         add_log(sprintf("✓ Final dataframe: %d pixels × %d features", 
-                       nrow(full_df), sum(grepl("^mz_", names(full_df)))))
+                      nrow(full_df), sum(grepl("^mz_", names(full_df)))))
         
         progress$set(value = 100, message = "Complete!")
         
         add_log("=== PROCESSING COMPLETE ===")
-        add_log(sprintf("Run ID: %s", run_id))
+        add_log(sprintf("Run ID: %s", processing_run_id))
         
-        # Update status display
         output$pipeline_status <- renderUI({
           div(class = "alert alert-success",
               h4("✅ Processing Complete"),
               p(sprintf("Sample: %s", sample_name)),
-              p(sprintf("Run ID: %s", run_id)),
+              p(sprintf("Run ID: %s", processing_run_id)),
               p(sprintf("Features: %d m/z bins", sum(grepl("^mz_", names(full_df))))),
               p(sprintf("Pixels: %d", nrow(full_df))),
               p(sprintf("Resolution: %d ppm", input$resolution)),
@@ -653,7 +652,7 @@ processing_module_server <- function(id) {
         
         showNotification(
           sprintf("✅ Processing complete!\nRun ID: %s\n%d features created",
-                 run_id, sum(grepl("^mz_", names(full_df)))),
+                processing_run_id, sum(grepl("^mz_", names(full_df)))),
           type = "message",
           duration = 10
         )
