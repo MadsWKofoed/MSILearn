@@ -319,7 +319,6 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
   # Create temp directory
   tmp_dir <- tempfile("imzml_")
   dir.create(tmp_dir)
-  # Don't clean up immediately - Cardinal needs the files
   
   fs <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
@@ -349,9 +348,9 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
     }
   }
   
-  # Read MSI object
+  # Read MSI object - CHANGED: Use readMSIData instead of readImzML
   message("Loading MSI object...")
-  obj <- readImzML(imzml_local, memory = memory)
+  obj <- readMSIData(imzml_local, memory = memory)
   
   # Clean up temp directory after loading
   unlink(tmp_dir, recursive = TRUE)
