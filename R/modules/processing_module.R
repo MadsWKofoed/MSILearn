@@ -468,7 +468,7 @@ processing_module_server <- function(id) {
           db_name = "MSI_test_database"
         )
         add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
-                      nrow(msi_data), ncol(msi_data)))
+                      ncol(msi_data), nrow(msi_data)))
         
         progress$set(value = 50, message = "Processing mean spectrum...")
         
@@ -530,7 +530,8 @@ processing_module_server <- function(id) {
         } else {
           add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
           control_SNR_ref <- control_mean %>%
-            peakPick(SNR = input$snr)
+            peakPick(SNR = input$snr) %>%
+            process()
           
           save_msi_stage_to_mongo(
             control_SNR_ref,
