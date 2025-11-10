@@ -62,6 +62,7 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   meta <- mongo(collection = "processing_artifacts_metadata",
                 db = db_name, url = mongo_url)
 
+  # find seneste raw_files-record
   artifacts <- meta$find(jsonlite::toJSON(
     list(sample_name = sample_name, stage_type = "raw_files"), auto_unbox = TRUE))
 
@@ -70,23 +71,37 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
 
   row <- artifacts[nrow(artifacts), , drop = FALSE]
 
+  # sikre stier og endelige navne (samme basename)
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
   base <- tools::file_path_sans_ext(basename(sample_name))
   final_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
   final_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
 
-  # download til tempnavne (som i GridFS) og rename bagefter
-  imz_tmp <- file.path(dest_dir, row$imzml_gridfs_name[1])
-  ibd_tmp <- file.path(dest_dir, row$ibd_gridfs_name[1])
+  # hent _id'er som rene strenge
+  imz_id <- trimws(as.character(row$imzml_gridfs_id[[1]]))
+  ibd_id <- trimws(as.character(row$ibd_gridfs_id[[1]]))
+  if (!nzchar(imz_id) || !nzchar(ibd_id))
+    stop("Missing GridFS ids for raw_files (imzml/ibd).")
 
-  message("Downloading ", row$imzml_gridfs_name[1])
-  grid$download(row$imzml_gridfs_name[1], imz_tmp)
+  # download via _id → ingen navneproblemer
+  imz_query <- sprintf('{"_id":{"$oid":"%s"}}', imz_id)
+  ibd_query <- sprintf('{"_id":{"$oid":"%s"}}', ibd_id)
 
-  message("Downloading ", row$ibd_gridfs_name[1])
-  grid$download(row$ibd_gridfs_name[1], ibd_tmp)
+  imz_tmp <- file.path(dest_dir, paste0(imz_id, ".imzML"))
+  ibd_tmp <- file.path(dest_dir, paste0(ibd_id, ".ibd"))
 
-  file.rename(imz_tmp, final_imzml)
-  file.rename(ibd_tmp, final_ibd)
+  message("Downloading imzML by _id: ", imz_id)
+  grid$download(name = imz_query, path = imz_tmp)
+
+  message("Downloading ibd by _id: ", ibd_id)
+  grid$download(name = ibd_query, path = ibd_tmp)
+
+  # robust rename (falder tilbage til copy hvis rename fejler)
+  ok1 <- tryCatch(file.rename(imz_tmp, final_imzml), warning = function(w) FALSE, error = function(e) FALSE)
+  if (!ok1) file.copy(imz_tmp, final_imzml, overwrite = TRUE)
+  ok2 <- tryCatch(file.rename(ibd_tmp, final_ibd),   warning = function(w) FALSE, error = function(e) FALSE)
+  if (!ok2) file.copy(ibd_tmp, final_ibd, overwrite = TRUE)
+  unlink(c(imz_tmp, ibd_tmp), force = TRUE)
 
   if (!file.exists(final_imzml) || !file.exists(final_ibd))
     stop("Files missing after download/rename")
@@ -94,6 +109,7 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   message("✓ Raw files ready at: ", dest_dir)
   list(imzml = final_imzml, ibd = final_ibd)
 }
+
 
 
 load_raw_object_from_mongo <- function(sample_name, workdir,
