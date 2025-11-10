@@ -25,92 +25,137 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
                                    mongo_url = "mongodb://localhost",
                                    bucket = "fs") {
   stopifnot(file.exists(imzml_path), file.exists(ibd_path))
-
+  
   grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
-  meta <- mongo(collection = "processing_artifacts_metadata",
+  meta <- mongo(collection = "processing_artifacts_metadata", 
                 db = db_name, url = mongo_url)
-
+  
   base <- tools::file_path_sans_ext(basename(sample_name))
   ts   <- format(Sys.time(), "%Y%m%d_%H%M%S")
   imz_name <- sanitize_name(sprintf("%s__%s.imzML", base, ts))
-  ibd_name <- sanitize_name(sprintf("%s__%s.ibd",   base, ts))
-
-  message("Uploading raw imzML/ibd to GridFS...")
-  imz_id <- unname(grid$upload(imzml_path, name = imz_name))
-  ibd_id <- unname(grid$upload(ibd_path,   name = ibd_name))
-
+  ibd_name <- sanitize_name(sprintf("%s__%s.ibd", base, ts))
+  
+  # FIX: Create corrected imzML before upload
+  message("Preparing imzML with correct ibd reference...")
+  imzml_lines <- readLines(imzml_path, warn = FALSE)
+  
+  # Ensure ibd reference points to the ibd_name we'll use
+  ibd_pattern <- 'externalDataPath="[^"]*"'
+  ibd_replacement <- sprintf('externalDataPath="%s"', ibd_name)
+  
+  # Replace or add the reference
+  imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
+  
+  # If no match found, we need to add it (shouldn't happen with valid imzML)
+  if (!any(grepl('externalDataPath=', imzml_lines))) {
+    warning("No externalDataPath found in imzML - file may be invalid")
+  }
+  
+  # Write corrected imzML to temp file
+  temp_imzml <- tempfile(fileext = ".imzML")
+  writeLines(imzml_lines, temp_imzml)
+  
+  # Upload corrected imzML
+  message("Uploading corrected imzML to GridFS...")
+  imz_id <- unname(grid$upload(temp_imzml, name = imz_name))
+  
+  message("Uploading ibd to GridFS...")
+  ibd_id <- unname(grid$upload(ibd_path, name = ibd_name))
+  
+  # Clean up temp file
+  unlink(temp_imzml)
+  
   meta$insert(list(
-    sample_name       = sample_name,
-    stage_type        = "raw_files",
-    created_at        = Sys.time(),
-    imzml_gridfs_id   = as.character(imz_id),
-    imzml_gridfs_name = imz_name,
-    ibd_gridfs_id     = as.character(ibd_id),
-    ibd_gridfs_name   = ibd_name
+    sample_name         = sample_name,
+    stage_type          = "raw_files",
+    created_at          = Sys.time(),
+    imzml_gridfs_id     = as.character(imz_id),
+    imzml_gridfs_name   = imz_name,
+    ibd_gridfs_id       = as.character(ibd_id),
+    ibd_gridfs_name     = ibd_name
   ))
-
-  message("✓ Raw files saved to MongoDB")
+  
+  message("✓ Raw files saved to MongoDB with corrected references")
   invisible(list(imzml_id = as.character(imz_id), ibd_id = as.character(ibd_id)))
 }
-
 
 fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
                                       db_name = "MSI_test_database",
                                       mongo_url = "mongodb://localhost",
                                       bucket = "fs") {
   grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
-  meta <- mongo(collection = "processing_artifacts_metadata",
+  meta <- mongo(collection = "processing_artifacts_metadata", 
                 db = db_name, url = mongo_url)
-
-  # find seneste raw_files-record
-  artifacts <- meta$find(jsonlite::toJSON(
-    list(sample_name = sample_name, stage_type = "raw_files"), auto_unbox = TRUE))
-
-  if (nrow(artifacts) == 0)
+  
+  query <- jsonlite::toJSON(
+    list(sample_name = sample_name, stage_type = "raw_files"),
+    auto_unbox = TRUE
+  )
+  
+  artifacts <- meta$find(query)
+  
+  if (nrow(artifacts) == 0) {
     stop("No raw_files artifact for sample_name = ", sample_name)
-
+  }
+  
   row <- artifacts[nrow(artifacts), , drop = FALSE]
-
-  # sikre stier og endelige navne (samme basename)
+  
+  # Create destination directory
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
+  
   base <- tools::file_path_sans_ext(basename(sample_name))
   final_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
   final_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
-
-  # hent _id'er som rene strenge
-  imz_id <- trimws(as.character(row$imzml_gridfs_id[[1]]))
-  ibd_id <- trimws(as.character(row$ibd_gridfs_id[[1]]))
-  if (!nzchar(imz_id) || !nzchar(ibd_id))
-    stop("Missing GridFS ids for raw_files (imzml/ibd).")
-
-  # download via _id → ingen navneproblemer
-  imz_query <- sprintf('{"_id":{"$oid":"%s"}}', imz_id)
-  ibd_query <- sprintf('{"_id":{"$oid":"%s"}}', ibd_id)
-
-  imz_tmp <- file.path(dest_dir, paste0(imz_id, ".imzML"))
-  ibd_tmp <- file.path(dest_dir, paste0(ibd_id, ".ibd"))
-
-  message("Downloading imzML by _id: ", imz_id)
-  grid$download(name = imz_query, path = imz_tmp)
-
-  message("Downloading ibd by _id: ", ibd_id)
-  grid$download(name = ibd_query, path = ibd_tmp)
-
-  # robust rename (falder tilbage til copy hvis rename fejler)
-  ok1 <- tryCatch(file.rename(imz_tmp, final_imzml), warning = function(w) FALSE, error = function(e) FALSE)
-  if (!ok1) file.copy(imz_tmp, final_imzml, overwrite = TRUE)
-  ok2 <- tryCatch(file.rename(ibd_tmp, final_ibd),   warning = function(w) FALSE, error = function(e) FALSE)
-  if (!ok2) file.copy(ibd_tmp, final_ibd, overwrite = TRUE)
-  unlink(c(imz_tmp, ibd_tmp), force = TRUE)
-
-  if (!file.exists(final_imzml) || !file.exists(final_ibd))
-    stop("Files missing after download/rename")
-
+  
+  # Download imzML
+  imzml_name <- as.character(row$imzml_gridfs_name[1])
+  message("Downloading imzML: ", imzml_name)
+  temp_imzml <- file.path(dest_dir, imzml_name)
+  grid$download(imzml_name, temp_imzml)
+  
+  if (!file.exists(temp_imzml)) {
+    stop("imzML download failed - file not found at: ", temp_imzml)
+  }
+  
+  # Download ibd
+  ibd_name <- as.character(row$ibd_gridfs_name[1])
+  message("Downloading ibd: ", ibd_name)
+  temp_ibd <- file.path(dest_dir, ibd_name)
+  grid$download(ibd_name, temp_ibd)
+  
+  if (!file.exists(temp_ibd)) {
+    stop("ibd download failed - file not found at: ", temp_ibd)
+  }
+  
+  message("✓ ibd: ", file.size(temp_ibd), " bytes")
+  
+  # FIX: Update imzML to point to correct ibd filename
+  message("Updating imzML file to reference correct ibd...")
+  imzml_lines <- readLines(temp_imzml)
+  
+  # Find and replace ibd reference
+  ibd_pattern <- '<binaryDataArrayList count="2" externalDataPath="([^"]+)">'
+  ibd_replacement <- sprintf('<binaryDataArrayList count="2" externalDataPath="%s">', basename(final_ibd))
+  
+  imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
+  
+  # Write updated imzML to final location
+  writeLines(imzml_lines, final_imzml)
+  
+  # Rename ibd to final location
+  if (temp_ibd != final_ibd) {
+    file.rename(temp_ibd, final_ibd)
+  }
+  
+  if (!file.exists(final_imzml) || !file.exists(final_ibd)) {
+    stop("Files missing after processing")
+  }
+  
+  message("✓ Files ready with correct references")
   message("✓ Raw files ready at: ", dest_dir)
+  
   list(imzml = final_imzml, ibd = final_ibd)
 }
-
-
 
 load_raw_object_from_mongo <- function(sample_name, workdir,
                                        db_name = "MSI_test_database",
@@ -246,50 +291,125 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
                                       mongo_url = "mongodb://localhost",
                                       memory    = FALSE,
                                       workdir   = NULL,
-                                      verbose   = TRUE) {
+                                      verbose   = TRUE,
+                                      check_external_path = TRUE) {
   if (verbose) message("[load] sample='", sample_name, "', stage='", stage_type, "'")
 
-  meta <- mongolite::mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
-  q <- list(sample_name = sample_name, stage_type = stage_type, file_format = "imzML")
-  if (!is.null(run_id)) q$run_id <- run_id
-  arts <- meta$find(jsonlite::toJSON(q, auto_unbox = TRUE))
-  if (nrow(arts) == 0) stop("No imzML artifact found for sample='", sample_name, "', stage='", stage_type, "'.")
+  # --- Find metadata for det ønskede stage (imzML-format) ---
+  meta <- mongolite::mongo(collection = "processing_artifacts_metadata",
+                           db = db_name, url = mongo_url)
 
-  if (nrow(arts) > 1) {
-    if (is.list(arts$created_at)) arts$created_at <- do.call(c, arts$created_at)
-    arts <- arts[order(arts$created_at, decreasing = TRUE), , drop = FALSE]
+  query_list <- list(
+    sample_name = sample_name,
+    stage_type  = stage_type,
+    file_format = "imzML"
+  )
+  if (!is.null(run_id)) query_list$run_id <- run_id
+
+  artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
+
+  if (nrow(artifacts) == 0) {
+    stop("No imzML artifact found for sample='", sample_name,
+         "', stage='", stage_type, "'.")
   }
-  row <- arts[1, , drop = FALSE]
 
+  # Vælg seneste, hvis flere
+  if (nrow(artifacts) > 1) {
+    if (verbose) message("[load] Multiple artifacts found; selecting most recent")
+    # håndter list/character i created_at
+    if (is.list(artifacts$created_at)) {
+      artifacts$created_at <- do.call(c, artifacts$created_at)
+    }
+    ord <- order(artifacts$created_at, decreasing = TRUE, na.last = TRUE)
+    artifacts <- artifacts[ord, , drop = FALSE]
+  }
+  row <- artifacts[1, , drop = FALSE]
+
+  # --- Forbered arbejdsmappe (behold den under hele kørsel) ---
   if (is.null(workdir)) {
-    workdir <- file.path(tempdir(), paste0("imzml_", sanitize_name(paste0(sample_name, "_", stage_type))))
+    workdir <- file.path(tempdir(),
+                         paste0("imzml_", gsub("[^A-Za-z0-9._-]+", "_",
+                                               paste0(sample_name, "_", stage_type))))
   }
   dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
   if (verbose) message("[load] workdir: ", workdir)
 
+  # --- Download fra GridFS ---
   fs <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
 
-  # skriv ned med MATCHENDE BASENAME
-  base <- tools::file_path_sans_ext(row$filename[1])
-  imz_local <- file.path(workdir, paste0(base, ".imzML"))
-  ibd_local <- file.path(workdir, paste0(base, ".ibd"))
+  imzml_name <- as.character(row$filename[1])
+  ibd_name   <- as.character(row$ibd_filename[1])
 
-  if (verbose) message("[load] Downloading ", row$filename[1])
-  fs$download(row$filename[1], imz_local)
+  imzml_local <- file.path(workdir, imzml_name)
+  if (verbose) message("[load] Downloading ", imzml_name)
+  fs$download(name = imzml_name, path = imzml_local)
+  if (!file.exists(imzml_local)) stop("imzML download failed: ", imzml_local)
 
-  if (!is.na(row$ibd_filename[1]) && nzchar(row$ibd_filename[1])) {
-    if (verbose) message("[load] Downloading ", row$ibd_filename[1])
-    fs$download(row$ibd_filename[1], ibd_local)
+  ibd_local <- NA_character_
+  if (!is.na(ibd_name) && nzchar(ibd_name)) {
+    ibd_local <- file.path(workdir, ibd_name)
+    if (verbose) message("[load] Downloading ", ibd_name)
+    fs$download(name = ibd_name, path = ibd_local)
+    if (!file.exists(ibd_local)) stop("ibd download failed: ", ibd_local)
+  } else {
+    warning("[load] No ibd filename in metadata for this stage; proceeding without it.")
   }
 
-  # ingen XML-ændringer; Cardinal finder .ibd via samme basename i samme mappe
+  # --- (Valgfrit) Hent evt. TSV’er (feature/pixel metadata) ---
+  if ("tsv_gridfs_ids" %in% names(row) && !is.null(row$tsv_gridfs_ids[[1]])) {
+    tsv_map <- row$tsv_gridfs_ids[[1]]
+    base_no_ext <- tools::file_path_sans_ext(imzml_name) # sådan blev de uploadet
+    for (tsv_name in names(tsv_map)) {
+      stored_tsv <- paste0(base_no_ext, "_", tsv_name)
+      tsv_local  <- file.path(workdir, tsv_name)
+      if (verbose) message("[load] Downloading ", stored_tsv, " -> ", tsv_local)
+      # ignorér fejl hvis ikke fundet
+      try(fs$download(name = stored_tsv, path = tsv_local), silent = TRUE)
+    }
+  }
+
+  # --- Sørg for at .imzML peger på korrekt .ibd (externalDataPath) ---
+  if (isTRUE(check_external_path) && !is.na(ibd_local) && file.exists(ibd_local)) {
+    if (verbose) message("[load] Ensuring externalDataPath points to ", basename(ibd_local))
+    lines <- readLines(imzml_local, warn = FALSE)
+
+    # almindelig attribut (mest typisk)
+    lines2 <- gsub('externalDataPath="[^"]+"',
+                   sprintf('externalDataPath="%s"', basename(ibd_local)),
+                   lines, perl = TRUE)
+
+    # fallback for evt. alternative placeringer (binaryDataArrayList-linje)
+    lines2 <- gsub('(<binaryDataArrayList[^>]*externalDataPath=")[^"]+(")',
+                   sprintf('\\1%s\\2', basename(ibd_local)),
+                   lines2, perl = TRUE)
+
+    if (!identical(lines, lines2)) {
+      writeLines(lines2, imzml_local)
+    } else {
+      # Hvis der slet ikke fandtes et externalDataPath, så advar
+      if (!any(grepl("externalDataPath=", lines2, fixed = TRUE))) {
+        warning("[load] No externalDataPath attribute found in imzML; file may be non-standard.")
+      }
+    }
+  }
+
+  # --- Læs ind i R (fil-backed hvis memory = FALSE) ---
   if (verbose) message("[load] Reading MSI with Cardinal (memory=", memory, ")")
-  obj <- Cardinal::readMSIData(imz_local, memory = memory)
+  obj <- Cardinal::readMSIData(imzml_local, memory = memory)
 
-  if (verbose) try(message(sprintf("[load] OK: pixels=%s, features=%s", nrow(obj), ncol(obj))), silent = TRUE)
-  obj
+  if (verbose) {
+    # let info print
+    try({
+      message(sprintf("[load] OK: pixels=%s, features=%s",
+                      nrow(obj), ncol(obj)))
+    }, silent = TRUE)
+  }
+
+  # VIGTIGT: INGEN unlink(workdir) — workdir/cachen skal eksistere,
+  # så længe objectet bruges i den videre pipeline (fil-backed).
+
+  return(obj)
 }
-
 
 
 
