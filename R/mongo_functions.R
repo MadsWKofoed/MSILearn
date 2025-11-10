@@ -35,35 +35,11 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
   imz_name <- sanitize_name(sprintf("%s__%s.imzML", base, ts))
   ibd_name <- sanitize_name(sprintf("%s__%s.ibd", base, ts))
   
-  # FIX: Create corrected imzML before upload
-  message("Preparing imzML with correct ibd reference...")
-  imzml_lines <- readLines(imzml_path, warn = FALSE)
-  
-  # Ensure ibd reference points to the ibd_name we'll use
-  ibd_pattern <- 'externalDataPath="[^"]*"'
-  ibd_replacement <- sprintf('externalDataPath="%s"', ibd_name)
-  
-  # Replace or add the reference
-  imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
-  
-  # If no match found, we need to add it (shouldn't happen with valid imzML)
-  if (!any(grepl('externalDataPath=', imzml_lines))) {
-    warning("No externalDataPath found in imzML - file may be invalid")
-  }
-  
-  # Write corrected imzML to temp file
-  temp_imzml <- tempfile(fileext = ".imzML")
-  writeLines(imzml_lines, temp_imzml)
-  
-  # Upload corrected imzML
-  message("Uploading corrected imzML to GridFS...")
-  imz_id <- unname(grid$upload(temp_imzml, name = imz_name))
+  message("Uploading imzML to GridFS...")
+  imz_id <- unname(grid$upload(imzml_path, name = imz_name))
   
   message("Uploading ibd to GridFS...")
   ibd_id <- unname(grid$upload(ibd_path, name = ibd_name))
-  
-  # Clean up temp file
-  unlink(temp_imzml)
   
   meta$insert(list(
     sample_name         = sample_name,
@@ -75,7 +51,7 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
     ibd_gridfs_name     = ibd_name
   ))
   
-  message("✓ Raw files saved to MongoDB with corrected references")
+  message("✓ Raw files saved to MongoDB")
   invisible(list(imzml_id = as.character(imz_id), ibd_id = as.character(ibd_id)))
 }
 
@@ -100,7 +76,6 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   
   row <- artifacts[nrow(artifacts), , drop = FALSE]
   
-  # Create destination directory
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
   
   base <- tools::file_path_sans_ext(basename(sample_name))
@@ -110,48 +85,23 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
   # Download imzML
   imzml_name <- as.character(row$imzml_gridfs_name[1])
   message("Downloading imzML: ", imzml_name)
-  temp_imzml <- file.path(dest_dir, imzml_name)
-  grid$download(imzml_name, temp_imzml)
+  grid$download(imzml_name, final_imzml)
   
-  if (!file.exists(temp_imzml)) {
-    stop("imzML download failed - file not found at: ", temp_imzml)
+  if (!file.exists(final_imzml)) {
+    stop("imzML download failed - file not found at: ", final_imzml)
   }
+  message("✓ imzML: ", file.size(final_imzml), " bytes")
   
   # Download ibd
   ibd_name <- as.character(row$ibd_gridfs_name[1])
   message("Downloading ibd: ", ibd_name)
-  temp_ibd <- file.path(dest_dir, ibd_name)
-  grid$download(ibd_name, temp_ibd)
+  grid$download(ibd_name, final_ibd)
   
-  if (!file.exists(temp_ibd)) {
-    stop("ibd download failed - file not found at: ", temp_ibd)
+  if (!file.exists(final_ibd)) {
+    stop("ibd download failed - file not found at: ", final_ibd)
   }
+  message("✓ ibd: ", file.size(final_ibd), " bytes")
   
-  message("✓ ibd: ", file.size(temp_ibd), " bytes")
-  
-  # FIX: Update imzML to point to correct ibd filename
-  message("Updating imzML file to reference correct ibd...")
-  imzml_lines <- readLines(temp_imzml)
-  
-  # Find and replace ibd reference
-  ibd_pattern <- '<binaryDataArrayList count="2" externalDataPath="([^"]+)">'
-  ibd_replacement <- sprintf('<binaryDataArrayList count="2" externalDataPath="%s">', basename(final_ibd))
-  
-  imzml_lines <- gsub(ibd_pattern, ibd_replacement, imzml_lines)
-  
-  # Write updated imzML to final location
-  writeLines(imzml_lines, final_imzml)
-  
-  # Rename ibd to final location
-  if (temp_ibd != final_ibd) {
-    file.rename(temp_ibd, final_ibd)
-  }
-  
-  if (!file.exists(final_imzml) || !file.exists(final_ibd)) {
-    stop("Files missing after processing")
-  }
-  
-  message("✓ Files ready with correct references")
   message("✓ Raw files ready at: ", dest_dir)
   
   list(imzml = final_imzml, ibd = final_ibd)
@@ -291,11 +241,9 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
                                       mongo_url = "mongodb://localhost",
                                       memory    = FALSE,
                                       workdir   = NULL,
-                                      verbose   = TRUE,
-                                      check_external_path = TRUE) {
+                                      verbose   = TRUE) {
   if (verbose) message("[load] sample='", sample_name, "', stage='", stage_type, "'")
 
-  # --- Find metadata for det ønskede stage (imzML-format) ---
   meta <- mongolite::mongo(collection = "processing_artifacts_metadata",
                            db = db_name, url = mongo_url)
 
@@ -313,10 +261,8 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
          "', stage='", stage_type, "'.")
   }
 
-  # Vælg seneste, hvis flere
   if (nrow(artifacts) > 1) {
     if (verbose) message("[load] Multiple artifacts found; selecting most recent")
-    # håndter list/character i created_at
     if (is.list(artifacts$created_at)) {
       artifacts$created_at <- do.call(c, artifacts$created_at)
     }
@@ -325,7 +271,6 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
   }
   row <- artifacts[1, , drop = FALSE]
 
-  # --- Forbered arbejdsmappe (behold den under hele kørsel) ---
   if (is.null(workdir)) {
     workdir <- file.path(tempdir(),
                          paste0("imzml_", gsub("[^A-Za-z0-9._-]+", "_",
@@ -334,7 +279,6 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
   dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
   if (verbose) message("[load] workdir: ", workdir)
 
-  # --- Download fra GridFS ---
   fs <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
 
   imzml_name <- as.character(row$filename[1])
@@ -355,58 +299,27 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
     warning("[load] No ibd filename in metadata for this stage; proceeding without it.")
   }
 
-  # --- (Valgfrit) Hent evt. TSV’er (feature/pixel metadata) ---
+  # Download TSV files if present
   if ("tsv_gridfs_ids" %in% names(row) && !is.null(row$tsv_gridfs_ids[[1]])) {
     tsv_map <- row$tsv_gridfs_ids[[1]]
-    base_no_ext <- tools::file_path_sans_ext(imzml_name) # sådan blev de uploadet
+    base_no_ext <- tools::file_path_sans_ext(imzml_name)
     for (tsv_name in names(tsv_map)) {
       stored_tsv <- paste0(base_no_ext, "_", tsv_name)
       tsv_local  <- file.path(workdir, tsv_name)
       if (verbose) message("[load] Downloading ", stored_tsv, " -> ", tsv_local)
-      # ignorér fejl hvis ikke fundet
       try(fs$download(name = stored_tsv, path = tsv_local), silent = TRUE)
     }
   }
 
-  # --- Sørg for at .imzML peger på korrekt .ibd (externalDataPath) ---
-  if (isTRUE(check_external_path) && !is.na(ibd_local) && file.exists(ibd_local)) {
-    if (verbose) message("[load] Ensuring externalDataPath points to ", basename(ibd_local))
-    lines <- readLines(imzml_local, warn = FALSE)
-
-    # almindelig attribut (mest typisk)
-    lines2 <- gsub('externalDataPath="[^"]+"',
-                   sprintf('externalDataPath="%s"', basename(ibd_local)),
-                   lines, perl = TRUE)
-
-    # fallback for evt. alternative placeringer (binaryDataArrayList-linje)
-    lines2 <- gsub('(<binaryDataArrayList[^>]*externalDataPath=")[^"]+(")',
-                   sprintf('\\1%s\\2', basename(ibd_local)),
-                   lines2, perl = TRUE)
-
-    if (!identical(lines, lines2)) {
-      writeLines(lines2, imzml_local)
-    } else {
-      # Hvis der slet ikke fandtes et externalDataPath, så advar
-      if (!any(grepl("externalDataPath=", lines2, fixed = TRUE))) {
-        warning("[load] No externalDataPath attribute found in imzML; file may be non-standard.")
-      }
-    }
-  }
-
-  # --- Læs ind i R (fil-backed hvis memory = FALSE) ---
   if (verbose) message("[load] Reading MSI with Cardinal (memory=", memory, ")")
   obj <- Cardinal::readMSIData(imzml_local, memory = memory)
 
   if (verbose) {
-    # let info print
     try({
       message(sprintf("[load] OK: pixels=%s, features=%s",
                       nrow(obj), ncol(obj)))
     }, silent = TRUE)
   }
-
-  # VIGTIGT: INGEN unlink(workdir) — workdir/cachen skal eksistere,
-  # så længe objectet bruges i den videre pipeline (fil-backed).
 
   return(obj)
 }
