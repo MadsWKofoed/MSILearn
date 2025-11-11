@@ -258,22 +258,23 @@ processing_module_server <- function(id) {
         ), auto_unbox = TRUE)
       )
       
-      # Check for exact processing match
+      # Check for exact processing match (INCLUDING RESOLUTION)
       exact_match <- mongo_meta$find(
         query = jsonlite::toJSON(list(
           sample_name = sample_name,
           stage_type = "binned_dataframe",
+          resolution = as.numeric(input$resolution),
           snr = as.numeric(input$snr),
           tolerance = as.numeric(input$tolerance),
           reference_name = mz_ref$name
         ), auto_unbox = TRUE)
       )
       
-      # Check for partial matches (can reuse)
+      # Check for partial matches (can reuse) - INCLUDING RESOLUTION
       partial_matches <- mongo_meta$find(
         query = jsonlite::toJSON(list(
           sample_name = sample_name,
-          stage_type = c("control_mean", "snr_reference")
+          stage_type = list("$in" = c("control_mean", "snr_reference"))
         ), auto_unbox = TRUE)
       )
       
@@ -299,12 +300,16 @@ processing_module_server <- function(id) {
           reuse_stages <- c(reuse_stages, "• Raw files (will upload)")
         }
         
-        # Check for control_mean
-        mean_match <- partial_matches[partial_matches$stage_type == "control_mean", ]
+        # Check for control_mean WITH RESOLUTION
+        mean_match <- partial_matches[
+          partial_matches$stage_type == "control_mean" & 
+          !is.na(partial_matches$resolution) &
+          abs(partial_matches$resolution - input$resolution) < 0.01,
+        ]
         if (nrow(mean_match) > 0) {
-          reuse_stages <- c(reuse_stages, "✓ Mean spectrum (will reuse)")
+          reuse_stages <- c(reuse_stages, sprintf("✓ Mean spectrum (resolution=%d, will reuse)", input$resolution))
         } else {
-          reuse_stages <- c(reuse_stages, "• Mean spectrum (will calculate)")
+          reuse_stages <- c(reuse_stages, sprintf("• Mean spectrum (resolution=%d, will calculate)", input$resolution))
         }
         
         # Check for SNR reference
@@ -320,8 +325,8 @@ processing_module_server <- function(id) {
         }
         
         reuse_stages <- c(reuse_stages, 
-                         sprintf("• Binning (Tol=%.2f, will process)", input$tolerance),
-                         sprintf("• Final dataframe (Ref=%s, will create)", mz_ref$name))
+                        sprintf("• Binning (Tol=%.2f, will process)", input$tolerance),
+                        sprintf("• Final dataframe (Ref=%s, will create)", mz_ref$name))
         
         processing_status(list(
           status = "ready",
