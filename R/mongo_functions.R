@@ -154,6 +154,12 @@ save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type,
       stage_type = stage_type
     )
     
+    # Add resolution for control_mean
+    if (stage_type == "control_mean" && !is.null(params$resolution)) {
+      query_list$resolution <- params$resolution
+    }
+    
+    # Add SNR for snr_reference
     if (stage_type == "snr_reference" && !is.null(params$snr)) {
       query_list$snr <- params$snr
     }
@@ -163,7 +169,7 @@ save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type,
     )
     
     if (nrow(existing) > 0) {
-      message("⚠ ", stage_type, " already exists. Skipping save.")
+      message("⚠ ", stage_type, " already exists with these parameters. Skipping save.")
       return(invisible(existing$run_id[1]))
     }
   }
