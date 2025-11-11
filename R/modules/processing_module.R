@@ -162,30 +162,41 @@ processing_module_server <- function(id) {
         ), auto_unbox = TRUE)
       )
       
-      info_parts <- c()
-      
-      if (nrow(raw_artifacts) > 0) {
-        created <- as.character(raw_artifacts$created_at[nrow(raw_artifacts)])
-        info_parts <- c(info_parts, 
-                       sprintf("✓ Raw files in database (uploaded: %s)", created))
-      }
-      
-      if (nrow(processed_artifacts) > 0) {
-        info_parts <- c(info_parts,
-          sprintf("\n%d processed version(s) exist:", nrow(processed_artifacts)),
-          sapply(1:nrow(processed_artifacts), function(i) {
-            sprintf("  - SNR: %.1f, Tol: %.2f, Ref: %s",
-                   processed_artifacts$snr[i], 
-                   processed_artifacts$tolerance[i], 
-                   processed_artifacts$reference_name[i])
-          })
-        )
-      } else {
-        info_parts <- c(info_parts, "\nNo processed versions exist yet")
-      }
-      
-      paste(info_parts, collapse = "\n")
-    })
+        info_parts <- c()
+        
+        if (nrow(raw_artifacts) > 0) {
+          created <- as.character(raw_artifacts$created_at[nrow(raw_artifacts)])
+          info_parts <- c(info_parts, 
+                        sprintf("✓ Raw files in database (uploaded: %s)", created))
+        }
+        
+        if (nrow(processed_artifacts) > 0) {
+          info_parts <- c(info_parts,
+            sprintf("\n%d processed version(s) exist:\n", nrow(processed_artifacts))
+          )
+          
+          # Format each version on its own line
+          for (i in 1:nrow(processed_artifacts)) {
+            res <- if (!is.null(processed_artifacts$resolution[i]) && !is.na(processed_artifacts$resolution[i])) {
+              sprintf("Res: %d ppm", processed_artifacts$resolution[i])
+            } else {
+              "Res: N/A"
+            }
+            
+            info_parts <- c(info_parts,
+              sprintf("  • %s, SNR: %.1f, Tol: %.2f, Ref: %s",
+                    res,
+                    processed_artifacts$snr[i], 
+                    processed_artifacts$tolerance[i], 
+                    processed_artifacts$reference_name[i])
+            )
+          }
+        } else {
+          info_parts <- c(info_parts, "\nNo processed versions exist yet")
+        }
+        
+        paste(info_parts, collapse = "\n")
+      })
     
     # Get selected reference
     selected_mz <- reactive({
