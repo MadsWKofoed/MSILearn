@@ -340,8 +340,17 @@ processing_module_server <- function(id) {
       shinyjs::disable("run_processing")
       on.exit({
         shinyjs::enable("run_processing")
-        cleanup_cache_dir()  
-      })
+        # Remove cache-folder made in this run
+        cleanup_cache_dir()
+        # Remove Cardinal temp made in this run
+        cleanup_cardinal_temp()
+        # Free RAM held by large objects
+        try({
+          rm(msi_data, control_mean, control_MSI_ref, msi_data_binned,
+            msi_matrix, full_df)
+        }, silent = TRUE)
+        gc()
+      }, add = TRUE)
       
       progress <- Progress$new(session, min = 0, max = 100)
       progress$set(message = "Starting processing pipeline...", value = 0)
