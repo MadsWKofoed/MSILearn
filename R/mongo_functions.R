@@ -118,7 +118,7 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
   message("Reading imzML with Cardinal...")
   obj <- readMSIData(
     paths$imzml, 
-    mmeory = FALSE, 
+    memory = FALSE, 
     check = FALSE,
     mass.range = NULL, 
     resolution = resolution,
