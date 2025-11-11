@@ -174,7 +174,7 @@ processing_module_server <- function(id) {
         info_parts <- c(info_parts,
           sprintf("\n%d processed version(s) exist:", nrow(processed_artifacts)),
           sapply(1:nrow(processed_artifacts), function(i) {
-            sprintf("\n%d - Res: %.1f, SNR: %.2f, Tol: %.3f, Ref: %s",
+            sprintf("\n - Res: %.1f, SNR: %.2f, Tol: %.3f, Ref: %s",
                    processed_artifacts$resolution[i],
                    processed_artifacts$snr[i], 
                    processed_artifacts$tolerance[i], 
