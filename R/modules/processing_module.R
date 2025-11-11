@@ -101,6 +101,54 @@ processing_module_server <- function(id) {
     current_cache_dir <- reactiveVal(NULL)
     current_sample_name <- reactiveVal(NULL)
     
+    # Clean cache helper
+    cleanup_cache_dir <- function(cache_dir = NULL) {
+      dir_to_clean <- cache_dir %||% current_cache_dir()
+      
+      if (is.null(dir_to_clean) || !dir.exists(dir_to_clean)) {
+        return(invisible(NULL))
+      }
+      
+      tryCatch({
+        files <- list.files(dir_to_clean, full.names = TRUE, recursive = TRUE)
+        total_size <- sum(file.size(files)) / 1024^2
+        unlink(dir_to_clean, recursive = TRUE)
+        
+        add_log(sprintf("✓ Cache cleaned: %.2f MB freed", total_size))
+        current_cache_dir(NULL)
+        
+        invisible(total_size)
+      }, error = function(e) {
+        add_log(sprintf("⚠ Cache cleanup warning: %s", e$message))
+        invisible(NULL)
+      })
+    }
+
+    # Clean Cardinal temp files
+    cleanup_cardinal_temp <- function() {
+      tryCatch({
+        # Find Cardinal temp filer
+        temp_files <- list.files(
+          tempdir(), 
+          pattern = "(imzml_|Cardinal|matter_array)",
+          full.names = TRUE, 
+          recursive = TRUE
+        )
+        
+        if (length(temp_files) > 0) {
+          sizes <- file.size(temp_files)
+          total_mb <- sum(sizes, na.rm = TRUE) / 1024^2
+          
+          unlink(temp_files, recursive = TRUE)
+          add_log(sprintf("✓ System temp cleaned: %.2f MB", total_mb))
+        }
+        
+        gc()  # Force garbage collection
+        invisible(NULL)
+      }, error = function(e) {
+        invisible(NULL)
+      })
+    }
     
     # Helper: Add to log
     add_log <- function(msg) {
@@ -290,13 +338,17 @@ processing_module_server <- function(id) {
       }
       
       shinyjs::disable("run_processing")
-      on.exit(shinyjs::enable("run_processing"))
+      on.exit({
+        shinyjs::enable("run_processing")
+        cleanup_cache_dir()  
+      })
       
       progress <- Progress$new(session, min = 0, max = 100)
       progress$set(message = "Starting processing pipeline...", value = 0)
       on.exit(progress$close(), add = TRUE)
       
-      processing_log("")  # Clear log
+      processing_log("")
+      cleanup_cardinal_temp()
       
       tryCatch({
         add_log(sprintf("=== PROCESSING STARTED ==="))

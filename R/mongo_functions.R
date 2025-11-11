@@ -118,7 +118,7 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
   message("Reading imzML with Cardinal...")
   obj <- readMSIData(
     paths$imzml, 
-    memory = FALSE, 
+    mmeory = FALSE, 
     check = FALSE,
     mass.range = NULL, 
     resolution = resolution,
@@ -327,7 +327,7 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
   if (verbose) {
     try({
       message(sprintf("[load] OK: pixels=%s, features=%s",
-                      nrow(obj), ncol(obj)))
+                      ncol(obj), nrow(obj)))
     }, silent = TRUE)
   }
 
