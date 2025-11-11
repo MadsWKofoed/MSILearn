@@ -301,23 +301,33 @@ processing_module_server <- function(id) {
         }
         
         # Check for control_mean WITH RESOLUTION
-        mean_match <- partial_matches[
-          partial_matches$stage_type == "control_mean" & 
-          !is.na(partial_matches$resolution) &
-          abs(partial_matches$resolution - input$resolution) < 0.01,
-        ]
+        if (nrow(partial_matches) > 0 && "resolution" %in% names(partial_matches)) {
+          mean_match <- partial_matches[
+            partial_matches$stage_type == "control_mean" & 
+            !is.na(partial_matches$resolution) &
+            abs(partial_matches$resolution - input$resolution) < 0.01,
+          ]
+        } else {
+          mean_match <- data.frame()
+        }
+
         if (nrow(mean_match) > 0) {
           reuse_stages <- c(reuse_stages, sprintf("✓ Mean spectrum (resolution=%d, will reuse)", input$resolution))
         } else {
           reuse_stages <- c(reuse_stages, sprintf("• Mean spectrum (resolution=%d, will calculate)", input$resolution))
         }
-        
+
         # Check for SNR reference
-        snr_match <- partial_matches[
-          partial_matches$stage_type == "snr_reference" & 
-          !is.na(partial_matches$snr) &
-          abs(partial_matches$snr - input$snr) < 0.01,
-        ]
+        if (nrow(partial_matches) > 0 && "snr" %in% names(partial_matches)) {
+          snr_match <- partial_matches[
+            partial_matches$stage_type == "snr_reference" & 
+            !is.na(partial_matches$snr) &
+            abs(partial_matches$snr - input$snr) < 0.01,
+          ]
+        } else {
+          snr_match <- data.frame()
+        }
+
         if (nrow(snr_match) > 0) {
           reuse_stages <- c(reuse_stages, sprintf("✓ SNR reference (SNR=%.1f, will reuse)", input$snr))
         } else {
