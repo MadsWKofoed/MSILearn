@@ -450,16 +450,31 @@ processing_module_server <- function(id) {
             stop("Both imzML and ibd files required")
           }
 
-          # Add a check for existing raw files
-          
-          add_log("Uploading raw files to MongoDB...")
-          save_raw_pair_to_mongo(
-            sample_name = sample_name,
-            imzml_path = files$datapath[imzml_idx][1],
-            ibd_path = files$datapath[ibd_idx][1],
-            db_name = "MSI_test_database"
+          # Check if raw files already exist in database
+          existing_raw <- mongo_meta$find(
+            query = jsonlite::toJSON(list(
+              sample_name = sample_name,
+              stage_type = "raw_files"
+            ), auto_unbox = TRUE)
           )
-          add_log("✓ Raw files saved to database")
+          
+          if (nrow(existing_raw) > 0) {
+            add_log("⚠ Raw files already exist in database - skipping upload")
+            showNotification(
+              "Raw files already exist in database. Reuse existing files instead.",
+              type = "message",
+              duration = 5
+            )
+          } else {
+            add_log("Uploading raw files to MongoDB...")
+            save_raw_pair_to_mongo(
+              sample_name = sample_name,
+              imzml_path = files$datapath[imzml_idx][1],
+              ibd_path = files$datapath[ibd_idx][1],
+              db_name = "MSI_test_database"
+            )
+            add_log("✓ Raw files saved to database")
+          }
         }
         
         progress$set(value = 30, message = "Loading MSI object...")
