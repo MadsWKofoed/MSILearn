@@ -111,6 +111,7 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
                                        db_name = "MSI_test_database",
                                        mongo_url = "mongodb://localhost",
                                        bucket = "fs",
+                                       resolution = 10,
                                        BPPARAM = BiocParallel::bpparam()) {
   paths <- fetch_raw_pair_from_mongo(sample_name, workdir, db_name, mongo_url, bucket)
   
@@ -120,7 +121,7 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
     memory = FALSE, 
     check = FALSE,
     mass.range = NULL, 
-    resolution = 10, 
+    resolution = resolution,
     units = "ppm",
     guess.max = 1000L, 
     as = "auto", 
@@ -236,7 +237,8 @@ save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type,
 }
 
 
-load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
+load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL, 
+                                      resolution = NULL,
                                       db_name   = "MSI_test_database",
                                       mongo_url = "mongodb://localhost",
                                       memory    = FALSE,
@@ -253,12 +255,14 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
     file_format = "imzML"
   )
   if (!is.null(run_id)) query_list$run_id <- run_id
+  if (!is.null(resolution)) query_list$resolution <- as.numeric(resolution)
 
   artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
 
   if (nrow(artifacts) == 0) {
     stop("No imzML artifact found for sample='", sample_name,
-         "', stage='", stage_type, "'.")
+         "', stage='", stage_type, "'.",
+          if (!is.null(resolution)) paste0("', resolution=", resolution) else "'", ".")
   }
 
   if (nrow(artifacts) > 1) {

@@ -461,7 +461,7 @@ processing_module_server <- function(id) {
           if (nrow(existing_raw) > 0) {
             add_log("⚠ Raw files already exist in database - skipping upload")
             showNotification(
-              "Raw files already exist in database. Reuse existing files instead.",
+              "Raw files already exist in database. Reusing existing files instead.",
               type = "message",
               duration = 5
             )
@@ -483,7 +483,8 @@ processing_module_server <- function(id) {
         msi_data <- load_raw_object_from_mongo(
           sample_name = sample_name,
           workdir = cache_dir,
-          db_name = "MSI_test_database"
+          db_name = "MSI_test_database",
+          resolution = as.numeric(input$resolution)
         )
         add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
                       ncol(msi_data), nrow(msi_data)))
@@ -495,7 +496,8 @@ processing_module_server <- function(id) {
           query = jsonlite::toJSON(list(
             sample_name = sample_name,
             stage_type = "control_mean",
-            file_format = "imzML"
+            file_format = "imzML",
+            resolution = as.numeric(input$resolution)
           ), auto_unbox = TRUE)
         )
         
@@ -504,6 +506,7 @@ processing_module_server <- function(id) {
           control_mean <- load_msi_stage_from_mongo(
             sample_name = sample_name,
             stage_type = "control_mean",
+            resolution = as.numeric(input$resolution),
             db_name = "MSI_test_database"
           )
           
@@ -521,6 +524,9 @@ processing_module_server <- function(id) {
             run_id,
             "control_mean",
             sample_name = sample_name,
+            params = list(
+              resolution = as.numeric(input$resolution)
+            ),
             db_name = "MSI_test_database"
           )
         }
