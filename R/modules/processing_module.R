@@ -376,7 +376,7 @@ processing_module_server <- function(id) {
       })
     })
     
-    # Run processing
+
     # Run processing
     observeEvent(input$run_processing, {
       mz_ref <- selected_mz()
@@ -393,6 +393,7 @@ processing_module_server <- function(id) {
         query = jsonlite::toJSON(list(
           sample_name = sample_name,
           stage_type = "binned_dataframe",
+          resolution = as.numeric(input$resolution),
           snr = as.numeric(input$snr),
           tolerance = as.numeric(input$tolerance),
           reference_name = mz_ref$name
@@ -448,6 +449,8 @@ processing_module_server <- function(id) {
           if (!any(imzml_idx) || !any(ibd_idx)) {
             stop("Both imzML and ibd files required")
           }
+
+          # Add a check for existing raw files
           
           add_log("Uploading raw files to MongoDB...")
           save_raw_pair_to_mongo(
@@ -508,65 +511,19 @@ processing_module_server <- function(id) {
         }
         add_log("✓ Mean spectrum ready")
         
-        progress$set(value = 65, message = "Applying SNR peak picking...")
+        progress$set(value = 70, message = "Applying SNR peak picking and aligning to feature list...")
         
-        # STEP 3: SNR reference
-        snr_artifacts <- mongo_meta$find(
-          query = jsonlite::toJSON(list(
-            sample_name = sample_name,
-            stage_type = "snr_reference",
-            file_format = "imzML",
-            snr = as.numeric(input$snr)
-          ), auto_unbox = TRUE)
-        )
-        
-        if (nrow(snr_artifacts) > 0) {
-          add_log(sprintf("Loading existing SNR reference (SNR=%.1f)...", input$snr))
-          control_SNR_ref <- load_msi_stage_from_mongo(
-            sample_name = sample_name,
-            stage_type = "snr_reference",
-            db_name = "MSI_test_database"
-          )
-        } else {
-          add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
-          control_SNR_ref <- control_mean %>%
-            peakPick(SNR = input$snr) %>%
-            process()
-          
-          save_msi_stage_to_mongo(
-            control_SNR_ref,
-            run_id,
-            "snr_reference",
-            sample_name = sample_name,
-            params = list(snr = as.numeric(input$snr)),
-            db_name = "MSI_test_database"
-          )
-        }
-        add_log("✓ SNR reference ready")
-        
-        progress$set(value = 75, message = "Aligning and binning...")
         
         # STEP 4: Alignment
+        add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
         add_log(sprintf("Aligning to reference (Tol=%.2f)...", input$tolerance))
         
-        processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-        control_MSI_ref <- control_SNR_ref %>%
+        control_MSI_ref <- control_mean %>%
+          peakPick(SNR = input$snr) %>%
           peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
           subsetFeatures() %>%
           process()
         
-        save_msi_stage_to_mongo(
-          control_MSI_ref,
-          processing_run_id,
-          "aligned_reference",
-          sample_name = sample_name,
-          params = list(
-            snr = as.numeric(input$snr),
-            tolerance = as.numeric(input$tolerance),
-            reference_name = mz_ref$name
-          ),
-          db_name = "MSI_test_database"
-        )
         add_log("✓ Reference aligned")
         
         progress$set(value = 85, message = "Binning full dataset...")
@@ -580,23 +537,11 @@ processing_module_server <- function(id) {
           BPPARAM = BiocParallel::bpparam()
         ) %>% process()
         
-        save_msi_stage_to_mongo(
-          msi_data_binned,
-          processing_run_id,
-          "binned_msi",
-          sample_name = sample_name,
-          params = list(
-            snr = as.numeric(input$snr),
-            tolerance = as.numeric(input$tolerance),
-            reference_name = mz_ref$name
-          ),
-          db_name = "MSI_test_database"
-        )
         add_log("✓ Data binned")
         
         progress$set(value = 95, message = "Creating feature matrix...")
         
-        # STEP 5: Create final dataframe (still saved as RDS)
+        # STEP 5: Create final dataframe (saved as RDS)
         add_log("Creating feature matrix...")
         msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
         mz_names <- paste0("mz_", mz(msi_data_binned))
