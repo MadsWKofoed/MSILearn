@@ -518,6 +518,7 @@ processing_module_server <- function(id) {
         add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
         add_log(sprintf("Aligning to reference (Tol=%.2f)...", input$tolerance))
         
+        processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
         control_MSI_ref <- control_mean %>%
           peakPick(SNR = input$snr) %>%
           peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
