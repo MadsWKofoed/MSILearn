@@ -62,11 +62,6 @@ processing_module_ui <- function(id) {
                ),
                
                hr(),
-               actionButton(ns("check_params"), "Check processing status", 
-                           class = "btn-info"),
-               br(), br(),
-               uiOutput(ns("param_check_ui")),
-               br(),
                actionButton(ns("run_processing"), "Run Processing", 
                            class = "btn-primary"),
                br(), br(),
@@ -105,7 +100,7 @@ processing_module_server <- function(id) {
     processing_log <- reactiveVal("")
     current_cache_dir <- reactiveVal(NULL)
     current_sample_name <- reactiveVal(NULL)
-    processing_status <- reactiveVal(NULL)
+    
     
     # Helper: Add to log
     add_log <- function(msg) {
@@ -237,137 +232,6 @@ processing_module_server <- function(id) {
       }
     })
     
-    # Check processing status
-    observeEvent(input$check_params, {
-      mz_ref <- selected_mz()
-      sample_name <- current_sample()
-      
-      if (is.null(mz_ref) || is.null(sample_name)) {
-        processing_status(list(
-          status = "error",
-          message = "Please select data source and reference first"
-        ))
-        return()
-      }
-      
-      # Check for raw files
-      raw_exists <- mongo_meta$find(
-        query = jsonlite::toJSON(list(
-          sample_name = sample_name,
-          stage_type = "raw_files"
-        ), auto_unbox = TRUE)
-      )
-      
-      # Check for exact processing match (INCLUDING RESOLUTION)
-      exact_match <- mongo_meta$find(
-        query = jsonlite::toJSON(list(
-          sample_name = sample_name,
-          stage_type = "binned_dataframe",
-          resolution = as.numeric(input$resolution),
-          snr = as.numeric(input$snr),
-          tolerance = as.numeric(input$tolerance),
-          reference_name = mz_ref$name
-        ), auto_unbox = TRUE)
-      )
-      
-      # Check for partial matches (can reuse) - INCLUDING RESOLUTION
-      partial_matches <- mongo_meta$find(
-        query = jsonlite::toJSON(list(
-          sample_name = sample_name,
-          stage_type = list("$in" = c("control_mean", "snr_reference"))
-        ), auto_unbox = TRUE)
-      )
-      
-      if (nrow(exact_match) > 0) {
-        processing_status(list(
-          status = "exists",
-          message = sprintf(
-            "⚠️ EXACT processing already exists!\n\nSample: %s\nResolution: %d ppm\nSNR: %.1f\nTolerance: %.2f\nReference: %s\n\nNo processing needed.",
-            sample_name, input$resolution, input$snr, input$tolerance, mz_ref$name
-          )
-        ))
-      } else if (nrow(raw_exists) == 0 && input$data_source == "Use existing dataset") {
-        processing_status(list(
-          status = "error",
-          message = "❌ No raw files found in database for this sample"
-        ))
-      } else {
-        reuse_stages <- c()
-        
-        if (nrow(raw_exists) > 0) {
-          reuse_stages <- c(reuse_stages, "✓ Raw files (will reuse from database)")
-        } else if (input$data_source == "Upload new files") {
-          reuse_stages <- c(reuse_stages, "• Raw files (will upload)")
-        }
-        
-        # Check for control_mean WITH RESOLUTION
-        if (nrow(partial_matches) > 0 && "resolution" %in% names(partial_matches)) {
-          mean_match <- partial_matches[
-            partial_matches$stage_type == "control_mean" & 
-            !is.na(partial_matches$resolution) &
-            abs(partial_matches$resolution - input$resolution) < 0.01,
-          ]
-        } else {
-          mean_match <- data.frame()
-        }
-
-        if (nrow(mean_match) > 0) {
-          reuse_stages <- c(reuse_stages, sprintf("✓ Mean spectrum (resolution=%d, will reuse)", input$resolution))
-        } else {
-          reuse_stages <- c(reuse_stages, sprintf("• Mean spectrum (resolution=%d, will calculate)", input$resolution))
-        }
-
-        # Check for SNR reference
-        if (nrow(partial_matches) > 0 && "snr" %in% names(partial_matches)) {
-          snr_match <- partial_matches[
-            partial_matches$stage_type == "snr_reference" & 
-            !is.na(partial_matches$snr) &
-            abs(partial_matches$snr - input$snr) < 0.01,
-          ]
-        } else {
-          snr_match <- data.frame()
-        }
-
-        if (nrow(snr_match) > 0) {
-          reuse_stages <- c(reuse_stages, sprintf("✓ SNR reference (SNR=%.1f, will reuse)", input$snr))
-        } else {
-          reuse_stages <- c(reuse_stages, sprintf("• SNR reference (SNR=%.1f, will calculate)", input$snr))
-        }
-        
-        reuse_stages <- c(reuse_stages, 
-                        sprintf("• Binning (Tol=%.2f, will process)", input$tolerance),
-                        sprintf("• Final dataframe (Ref=%s, will create)", mz_ref$name))
-        
-        processing_status(list(
-          status = "ready",
-          message = sprintf(
-            "✅ Ready to process with these parameters:\n\nSample: %s\nResolution: %d ppm\nSNR: %.1f\nTolerance: %.2f\nReference: %s\n\nProcessing plan:\n%s",
-            sample_name, input$resolution, input$snr, input$tolerance, mz_ref$name,
-            paste(reuse_stages, collapse = "\n")
-          )
-        ))
-      }
-    })
-    
-    # Display parameter check result
-    output$param_check_ui <- renderUI({
-      status <- processing_status()
-      req(status)
-      
-      if (status$status == "exists") {
-        div(class = "alert alert-warning",
-            style = "white-space: pre-line;",
-            HTML(status$message))
-      } else if (status$status == "error") {
-        div(class = "alert alert-danger",
-            style = "white-space: pre-line;",
-            HTML(status$message))
-      } else if (status$status == "ready") {
-        div(class = "alert alert-success",
-            style = "white-space: pre-line;",
-            HTML(status$message))
-      }
-    })
     
     # Clear cache
     observeEvent(input$clear_cache, {
