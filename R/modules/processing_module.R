@@ -347,7 +347,7 @@ processing_module_server <- function(id) {
         # Free RAM held by large objects
         try({
           rm(msi_data, control_mean, control_MSI_ref, msi_data_binned,
-            msi_matrix, full_df)
+            msi_matrix)
         }, silent = TRUE)
         gc()
       }, add = TRUE)
