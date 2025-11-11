@@ -143,53 +143,50 @@ processing_module_server <- function(id) {
     })
     
     # Show info about existing sample
-output$existing_info <- renderText({
-  req(input$data_source == "Use existing dataset", input$existing_sample)
-  
-  # Check raw files
-  raw_artifacts <- mongo_meta$find(
-    query = jsonlite::toJSON(list(
-      sample_name = input$existing_sample,
-      stage_type = "raw_files"
-    ), auto_unbox = TRUE)
-  )
-  
-    # Check processed versions
-    processed_artifacts <- mongo_meta$find(
-      query = jsonlite::toJSON(list(
-        sample_name = input$existing_sample,
-        stage_type = "binned_dataframe"
-      ), auto_unbox = TRUE)
-    )
-    
-    info_parts <- c()
-    
-    if (nrow(raw_artifacts) > 0) {
-      created <- as.character(raw_artifacts$created_at[nrow(raw_artifacts)])
-      info_parts <- c(info_parts, 
-                    sprintf("✓ Raw files in database (uploaded: %s)", created))
-    }
-    
-    if (nrow(processed_artifacts) > 0) {
-      info_parts <- c(info_parts,
-        sprintf("\n%d processed version(s) exist:", nrow(processed_artifacts))
+    output$existing_info <- renderText({
+      req(input$data_source == "Use existing dataset", input$existing_sample)
+      
+      # Check raw files
+      raw_artifacts <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = input$existing_sample,
+          stage_type = "raw_files"
+        ), auto_unbox = TRUE)
       )
       
-      # Add each version as separate element
-      for (i in 1:nrow(processed_artifacts)) {
-        version_line <- sprintf("  • Res: %d ppm, SNR: %.1f, Tol: %.2f, Ref: %s",
-                              processed_artifacts$resolution[i],
-                              processed_artifacts$snr[i], 
-                              processed_artifacts$tolerance[i], 
-                              processed_artifacts$reference_name[i])
-        info_parts <- c(info_parts, version_line)
+      # Check processed versions
+      processed_artifacts <- mongo_meta$find(
+        query = jsonlite::toJSON(list(
+          sample_name = input$existing_sample,
+          stage_type = "binned_dataframe"
+        ), auto_unbox = TRUE)
+      )
+      
+      info_parts <- c()
+      
+      if (nrow(raw_artifacts) > 0) {
+        created <- as.character(raw_artifacts$created_at[nrow(raw_artifacts)])
+        info_parts <- c(info_parts, 
+                       sprintf("✓ Raw files in database (uploaded: %s)", created))
       }
-    } else {
-      info_parts <- c(info_parts, "\nNo processed versions exist yet")
-    }
-    
-    paste(info_parts, collapse = "\n")
-  })
+      
+      if (nrow(processed_artifacts) > 0) {
+        info_parts <- c(info_parts,
+          sprintf("\n%d processed version(s) exist: \n", nrow(processed_artifacts)),
+          sapply(1:nrow(processed_artifacts), function(i) {
+            sprintf("\n - Res: %.1f, SNR: %.2f, Tol: %.3f, Ref: %s",
+                   processed_artifacts$resolution[i],
+                   processed_artifacts$snr[i], 
+                   processed_artifacts$tolerance[i], 
+                   processed_artifacts$reference_name[i])
+          })
+        )
+      } else {
+        info_parts <- c(info_parts, "\nNo processed versions exist yet")
+      }
+      
+      paste(info_parts, collapse = "\n")
+    })
     
     # Get selected reference
     selected_mz <- reactive({
