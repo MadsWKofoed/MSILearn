@@ -866,7 +866,7 @@ output$class_plot <- renderPlotly({
             column(6, plotOutput(ns("histology_plot"), height = "600px"))
           ),
           fluidRow(
-            column(12, plotlyOutput(ns("class_plot"), height = "600px"))
+            column(6, plotlyOutput(ns("class_plot"), height = "600px"))
           )
         )
       } else {
