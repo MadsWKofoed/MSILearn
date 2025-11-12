@@ -10,6 +10,8 @@ library(BiocParallel)
 library(sp)
 library(Cardinal)
 library(dplyr)
+library(png)
+library(jpeg)
 
 source("global.R")
 

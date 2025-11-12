@@ -10,6 +10,11 @@ clustering_module_ui <- function(id) {
                uiOutput(ns("ref_ui")),
                actionButton(ns("load_dataset"), "Load selected dataset"),
                tags$hr(),
+
+              fileInput(ns("histology_img"), "Upload histology image (optional):",
+                        accept = c("image/png", "image/jpeg", "image/jpg")),
+               actionButton(ns("clear_histology"), "Clear histology", class = "btn-sm btn-warning"),
+               tags$hr(),
                
                numericInput(ns("clusters"), "Number of clusters:", value = 3, min = 2, max = 30),
                selectInput(ns("method"), "Clustering method:", choices = c("K-means", "Hierarchical")),
@@ -51,6 +56,7 @@ clustering_module_server <- function(id, msi_con) {
     clustered_data <- reactiveVal(NULL)
     annotated_data <- reactiveVal(NULL)
     original_clustered <- reactiveVal(NULL)
+    histology_image <- reactiveVal(NULL)
     
     # --- Load all unique samples ---
     observe({
@@ -756,15 +762,120 @@ output$class_plot <- renderPlotly({
   p
 })
 
+# --- Histology image upload ---
+  observeEvent(input$histology_img, {
+    req(input$histology_img)
+    
+    tryCatch({
+      # Read image file and convert to base64
+      img_path <- input$histology_img$datapath
+      img_data <- readBin(img_path, "raw", file.info(img_path)$size)
+      
+      # Determine MIME type
+      ext <- tolower(tools::file_ext(input$histology_img$name))
+      mime <- switch(ext,
+                    "png" = "image/png",
+                    "jpg" = "image/jpeg",
+                    "jpeg" = "image/jpeg",
+                    "image/png")
+      
+      # Create data URI
+      img_uri <- paste0("data:", mime, ";base64,", 
+                        base64enc::base64encode(img_data))
+      
+      histology_image(img_uri)
+      
+      showNotification(
+        "Histology image loaded",
+        type = "message",
+        duration = 3
+      )
+    }, error = function(e) {
+      showNotification(
+        paste("Error loading image:", e$message),
+        type = "error",
+        duration = NULL
+      )
+    })
+  })
+  
+    # Clear histology
+    observeEvent(input$clear_histology, {
+      histology_image(NULL)
+      showNotification("Histology image cleared", type = "message", duration = 2)
+    })
+    
+    # TILFØJET: Histology plot (uden orientation transformationer)
+    output$histology_plot <- renderPlot({
+      req(histology_image())
+      
+      # Get coordinate ranges from clustered data
+      df <- clustered_data()
+      req(df)
+      
+      x_min <- min(df$x)
+      x_max <- max(df$x)
+      y_min <- min(df$y)
+      y_max <- max(df$y)
+      
+      # Decode base64 image
+      img_uri <- histology_image()
+      img_data <- sub("^data:image/[a-z]+;base64,", "", img_uri)
+      img_raw <- base64enc::base64decode(img_data)
+      
+      # Write to temp file and read
+      tmp_img <- tempfile(fileext = ".png")
+      writeBin(img_raw, tmp_img)
+      
+      # Read image based on type
+      img <- tryCatch({
+        if (grepl("data:image/png", img_uri)) {
+          png::readPNG(tmp_img)
+        } else {
+          jpeg::readJPEG(tmp_img)
+        }
+      }, error = function(e) NULL)
+      
+      if (is.null(img)) {
+        plot.new()
+        text(0.5, 0.5, "Error loading image", cex = 1.5)
+        return()
+      }
+      
+      # Plot with matching coordinate system (no orientation transformations)
+      par(mar = c(4, 4, 3, 1))
+      plot(NULL, xlim = c(x_min, x_max), ylim = c(y_min, y_max),
+          xlab = "x", ylab = "y", main = "Histology",
+          asp = 1)
+      
+      rasterImage(img, x_min, y_min, x_max, y_max)
+    })
 
     
     # --- Layout ---
     output$cluster_layout <- renderUI({
       req(clustered_data())
-      fluidRow(
-        column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-        column(6, plotlyOutput(ns("class_plot"), height = "600px"))
-      )
+      
+      has_histology <- !is.null(histology_image())
+      
+      if (has_histology) {
+        # Layout WITH histology: cluster + histology side-by-side, class below
+        tagList(
+          fluidRow(
+            column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
+            column(6, plotOutput(ns("histology_plot"), height = "600px"))
+          ),
+          fluidRow(
+            column(12, plotlyOutput(ns("class_plot"), height = "600px"))
+          )
+        )
+      } else {
+        # Layout WITHOUT histology: original side-by-side
+        fluidRow(
+          column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
+          column(6, plotlyOutput(ns("class_plot"), height = "600px"))
+        )
+      }
     })
     
     # --- Commit to MongoDB ---
