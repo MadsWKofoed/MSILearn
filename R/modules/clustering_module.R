@@ -4,6 +4,7 @@ clustering_module_ui <- function(id) {
            sidebarLayout(
              sidebarPanel(
                selectInput(ns("sample_select"), "Select sample:", choices = "Loading..."),
+               uiOutput(ns("res_ui")),
                uiOutput(ns("snr_ui")),
                uiOutput(ns("tol_ui")),
                uiOutput(ns("ref_ui")),
@@ -40,14 +41,11 @@ clustering_module_server <- function(id, msi_con) {
     ns <- session$ns
     
     mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                       db = "MSI_database", 
+                       db = "MSI_test_database",  
                        url = "mongodb://localhost")
     mongo_cluster_meta <- mongo(collection = "clustering_metadata",
-                               db = "MSI_database",
+                               db = "MSI_test_database",  
                                url = "mongodb://localhost")
-    mongo_data <- mongo(collection = "msi_data", 
-                       db = "msi_project", 
-                       url = "mongodb://localhost")
     
     processed_data <- reactiveVal(NULL)
     clustered_data <- reactiveVal(NULL)
@@ -68,6 +66,25 @@ clustering_module_server <- function(id, msi_con) {
         updateSelectInput(session, "sample_select", choices = samples)
       }
     })
+
+    # --- Resolution dropdown ---
+    output$res_ui <- renderUI({
+      req(input$sample_select)
+      
+      artifacts <- query_artifacts(
+        sample_name = input$sample_select,
+        stage_type = "binned_dataframe",
+        db_name = "MSI_test_database"
+      )
+      
+      if (nrow(artifacts) == 0) return(NULL)
+      
+      res_values <- unique(artifacts$resolution)
+      res_values <- res_values[!is.na(res_values)]
+      res_values <- sort(as.numeric(res_values))
+      
+      selectInput(ns("res_select"), "Select resolution (ppm):", choices = res_values)
+    })
     
     # --- Update SNR dropdown when sample is selected ---
     output$snr_ui <- renderUI({
@@ -75,7 +92,9 @@ clustering_module_server <- function(id, msi_con) {
       
       artifacts <- query_artifacts(
         sample_name = input$sample_select,
-        stage_type = "binned_dataframe"
+        stage_type = "binned_dataframe",
+        resolution = as.numeric(input$res_select),
+        db_name = "MSI_test_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -87,14 +106,16 @@ clustering_module_server <- function(id, msi_con) {
       selectInput(ns("snr_select"), "Select SNR:", choices = snr_values)
     })
     
-    # --- Update tolerance dropdown when SNR is selected ---
+    # --- Update tolerance dropdown when Res and SNR are selected ---
     output$tol_ui <- renderUI({
       req(input$sample_select, input$snr_select)
       
       artifacts <- query_artifacts(
         sample_name = input$sample_select,
         stage_type = "binned_dataframe",
-        snr = as.numeric(input$snr_select)
+        resolution = as.numeric(input$res_select),
+        snr = as.numeric(input$snr_select),
+        db_name = "MSI_test_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -108,13 +129,15 @@ clustering_module_server <- function(id, msi_con) {
     
     # --- Update reference dropdown when tolerance is selected ---
     output$ref_ui <- renderUI({
-      req(input$sample_select, input$snr_select, input$tol_select)
+      req(input$sample_select, input$res_select, input$snr_select, input$tol_select)
       
       artifacts <- query_artifacts(
         sample_name = input$sample_select,
         stage_type = "binned_dataframe",
+        resolution = as.numeric(input$res_select),  # TILFØJET
         snr = as.numeric(input$snr_select),
-        tolerance = as.numeric(input$tol_select)
+        tolerance = as.numeric(input$tol_select),
+        db_name = "MSI_test_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -127,25 +150,26 @@ clustering_module_server <- function(id, msi_con) {
     
     # --- Load selected dataset ---
     observeEvent(input$load_dataset, {
-      req(input$sample_select, input$snr_select, input$tol_select, input$ref_select)
+      req(input$sample_select, input$res_select, input$snr_select, 
+          input$tol_select, input$ref_select)
       
-      # Disable button during loading
       shinyjs::disable("load_dataset")
       on.exit(shinyjs::enable("load_dataset"))
       
-      # Create progress
       progress <- Progress$new(session, min = 0, max = 100)
       progress$set(message = "Loading dataset...", value = 0)
       on.exit(progress$close(), add = TRUE)
       
       tryCatch({
-        # Query exact match
+        # OPDATERET query med resolution
         artifacts <- query_artifacts(
           sample_name = input$sample_select,
           stage_type = "binned_dataframe",
+          resolution = as.numeric(input$res_select),  
           snr = as.numeric(input$snr_select),
           tolerance = as.numeric(input$tol_select),
-          reference_name = input$ref_select
+          reference_name = input$ref_select,
+          db_name = "MSI_test_database"
         )
         
         if (nrow(artifacts) == 0) {
@@ -155,15 +179,15 @@ clustering_module_server <- function(id, msi_con) {
         
         progress$set(value = 30, message = "Loading from database...")
         
-        # Load the first match
         gridfs_id <- artifacts$gridfs_id[1]
-        df <- load_artifact_by_id(gridfs_id)
+        df <- load_artifact_by_id(gridfs_id, db_name = "MSI_test_database")
         
         progress$set(value = 90, message = "Processing data...")
         
-        # Store dataset info for reference
+        # OPDATERET dataset info med resolution
         dataset_info <- paste0(
           "Sample: ", input$sample_select, "\n",
+          "Resolution: ", input$res_select, " ppm\n",  
           "SNR: ", input$snr_select, " | ",
           "Tolerance: ", input$tol_select, " | ",
           "Reference: ", input$ref_select, "\n",
@@ -810,22 +834,20 @@ output$class_plot <- renderPlotly({
           sample_name = input$sample_select,
           created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC"),
           
-          # Processing parameters used
+          # OPDATERET: Tilføj resolution
+          resolution = as.numeric(input$res_select),  # TILFØJET
           snr = as.numeric(input$snr_select),
           tolerance = as.numeric(input$tol_select),
           reference_name = input$ref_select,
           
-          # Clustering parameters
           clustering_method = input$method,
           num_clusters = as.integer(input$clusters),
           log_scale_used = as.logical(input$log_scale),
-          orientation_used = input$orientation,  
+          orientation_used = input$orientation,
           
-          # Data dimensions
           num_pixels = as.integer(nrow(df_to_save)),
           num_features = as.integer(sum(grepl("^mz_", names(df_to_save)))),
           
-          # Assignment statistics
           num_assigned = as.integer(n_assigned),
           num_unassigned = as.integer(n_unassigned),
           unique_classes = if (length(unique_classes) > 0) paste(unique_classes, collapse = ", ") else "",

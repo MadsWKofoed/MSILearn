@@ -454,11 +454,12 @@ load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
 # --- Query artifacts (returns dataframe) ---
 query_artifacts <- function(sample_name = NULL, 
                             stage_type = NULL,
+                            resolution = NULL,  # TILFØJET
                             snr = NULL, 
                             tolerance = NULL,
                             reference_name = NULL,
                             run_id = NULL,
-                            db_name = "MSI_database",
+                            db_name = "MSI_test_database",  # ÆNDRET fra MSI_database
                             mongo_url = "mongodb://localhost") {
   
   mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
@@ -468,8 +469,9 @@ query_artifacts <- function(sample_name = NULL,
   query_parts <- list()
   if (!is.null(sample_name)) query_parts$sample_name <- sample_name
   if (!is.null(stage_type)) query_parts$stage_type <- stage_type
-  if (!is.null(snr)) query_parts$snr <- snr
-  if (!is.null(tolerance)) query_parts$tolerance <- tolerance
+  if (!is.null(resolution)) query_parts$resolution <- as.numeric(resolution)  # TILFØJET
+  if (!is.null(snr)) query_parts$snr <- as.numeric(snr)
+  if (!is.null(tolerance)) query_parts$tolerance <- as.numeric(tolerance)
   if (!is.null(reference_name)) query_parts$reference_name <- reference_name
   if (!is.null(run_id)) query_parts$run_id <- run_id
   
@@ -486,7 +488,7 @@ query_artifacts <- function(sample_name = NULL,
 
 # --- Load artifact by gridfs_id ---
 load_artifact_by_id <- function(gridfs_id,
-                                db_name = "MSI_database",
+                                db_name = "MSI_test_database",  
                                 mongo_url = "mongodb://localhost") {
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
