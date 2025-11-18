@@ -558,34 +558,33 @@ processing_module_server <- function(id) {
         norm_top3_idx <- order(norm_var_intensity, decreasing = TRUE)[1:3]
         norm_top3_mz <- mz(norm_msi_binned)[norm_top3_idx]
         
-        # Create plots and save as plot objects
         vizi_style("dark")
         
-        # Raw plot
-        p_raw <- recordPlot()
-        image(
-          msi_data_binned,
-          mz = top3_mz,
-          superpose = TRUE,
-          contrast.enhance = "suppress",
-          normalize.image = "linear",
-          col = c("blue", "red", "green")
-        )
-        plot_top3_raw(recordPlot())
-        dev.off()
+        # Raw plot - brug en funktion der plotter
+        create_raw_plot <- function() {
+          image(
+            msi_data_binned,
+            mz = top3_mz,
+            superpose = TRUE,
+            contrast.enhance = "suppress",
+            normalize.image = "linear",
+            col = c("blue", "red", "green")
+          )
+        }
+        plot_top3_raw(create_raw_plot)
         
         # Normalized plot
-        p_norm <- recordPlot()
-        image(
-          norm_msi_binned,
-          mz = norm_top3_mz,
-          superpose = TRUE,
-          contrast.enhance = "suppress",
-          normalize.image = "linear",
-          col = c("blue", "red", "green")
-        )
-        plot_top3_norm(recordPlot())
-        dev.off()
+        create_norm_plot <- function() {
+          image(
+            norm_msi_binned,
+            mz = norm_top3_mz,
+            superpose = TRUE,
+            contrast.enhance = "suppress",
+            normalize.image = "linear",
+            col = c("blue", "red", "green")
+          )
+        }
+        plot_top3_norm(create_norm_plot)
         
         # Distance calculations
         add_log("Calculating spatial vs intensity distances...")
@@ -774,15 +773,18 @@ processing_module_server <- function(id) {
         current_sample_name() %||% "None"
       )
     })
-        # Render plots from saved objects
+        
+   # Render plots from saved objects
     output$top3_raw_plot <- renderPlot({
       req(plot_top3_raw())
-      replayPlot(plot_top3_raw())
+      vizi_style("dark")
+      plot_top3_raw()()  # Kald funktionen
     })
     
     output$top3_norm_plot <- renderPlot({
       req(plot_top3_norm())
-      replayPlot(plot_top3_norm())
+      vizi_style("dark")
+      plot_top3_norm()()  # Kald funktionen
     })
     
     output$distance_binned_plot <- renderPlot({
