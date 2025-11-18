@@ -2,8 +2,9 @@
 processing_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Processing",
-           sidebarLayout(
-             sidebarPanel(
+           fluidRow(
+             # Kolonne 1: Sidebar panel (3/12 bred)
+             column(3,
                h4("Data Source"),
                radioButtons(
                  ns("data_source"),
@@ -66,11 +67,11 @@ processing_module_ui <- function(id) {
                            class = "btn-primary"),
                br(), br(),
                actionButton(ns("clear_cache"), "Clear local cache", 
-                           class = "btn-warning"),
-               width = 3
+                           class = "btn-warning")
              ),
              
-             mainPanel(
+             # Kolonne 2: Status og Log (5/12 bred)
+             column(5,
                h3("Processing Pipeline Status"),
                uiOutput(ns("pipeline_status")),
                hr(),
@@ -78,8 +79,24 @@ processing_module_ui <- function(id) {
                verbatimTextOutput(ns("processing_log")),
                hr(),
                h4("Cache Status"),
-               verbatimTextOutput(ns("cache_status")),
-               width = 9
+               verbatimTextOutput(ns("cache_status"))
+             ),
+             
+             # Kolonne 3: Plots (4/12 bred)
+             column(4,
+               h3("Visualizations"),
+               tabsetPanel(
+                 id = ns("plot_tabs"),
+                 tabPanel("Mean Spectrum",
+                          plotOutput(ns("mean_spectrum_plot"), height = "400px")
+                 ),
+                 tabPanel("Peak Detection",
+                          plotOutput(ns("peak_detection_plot"), height = "400px")
+                 ),
+                 tabPanel("Features",
+                          plotOutput(ns("feature_summary_plot"), height = "400px")
+                 )
+               )
              )
            )
   )
