@@ -3,8 +3,8 @@ processing_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Processing",
            fluidRow(
-             # Kolonne 1: Sidebar panel (3/12 bred)
-             column(3,
+             # Kolonne 1: Sidebar panel (2/12 bred)
+             column(2,
                h4("Data Source"),
                radioButtons(
                  ns("data_source"),
@@ -70,8 +70,8 @@ processing_module_ui <- function(id) {
                            class = "btn-warning")
              ),
              
-             # Kolonne 2: Status og Log (5/12 bred)
-             column(5,
+             # Kolonne 2: Status og Log (4/12 bred)
+             column(4,
                h3("Processing Pipeline Status"),
                uiOutput(ns("pipeline_status")),
                hr(),
@@ -82,19 +82,33 @@ processing_module_ui <- function(id) {
                verbatimTextOutput(ns("cache_status"))
              ),
              
-             # Kolonne 3: Plots (4/12 bred)
-             column(4,
-               h3("Visualizations"),
-               tabsetPanel(
-                 id = ns("plot_tabs"),
-                 tabPanel("Mean Spectrum",
-                          plotOutput(ns("mean_spectrum_plot"), height = "400px")
-                 ),
-                 tabPanel("Peak Detection",
-                          plotOutput(ns("peak_detection_plot"), height = "400px")
-                 ),
-                 tabPanel("Features",
-                          plotOutput(ns("feature_summary_plot"), height = "400px")
+             # Kolonne 3: Plots (6/12 bred)
+             column(6,
+               # Øverste plot panel - Image plots
+               wellPanel(
+                 h4("MSI Images - Top 3 m/z (by variance)"),
+                 tabsetPanel(
+                   id = ns("image_tabs"),
+                   tabPanel("Raw",
+                            plotOutput(ns("top3_raw_plot"), height = "400px")
+                   ),
+                   tabPanel("Normalized",
+                            plotOutput(ns("top3_norm_plot"), height = "400px")
+                   )
+                 )
+               ),
+               
+               # Nederste plot panel - Distance plots
+               wellPanel(
+                 h4("Spatial vs Intensity Distance"),
+                 tabsetPanel(
+                   id = ns("distance_tabs"),
+                   tabPanel("Binned",
+                            plotOutput(ns("distance_binned_plot"), height = "400px")
+                   ),
+                   tabPanel("Scatter",
+                            plotOutput(ns("distance_scatter_plot"), height = "400px")
+                   )
                  )
                )
              )
@@ -117,6 +131,8 @@ processing_module_server <- function(id) {
     processing_log <- reactiveVal("")
     current_cache_dir <- reactiveVal(NULL)
     current_sample_name <- reactiveVal(NULL)
+    msi_data_binned_rv <- reactiveVal(NULL)
+    norm_msi_binned_rv <- reactiveVal(NULL)
     
     # Clean cache helper
     cleanup_cache_dir <- function(cache_dir = NULL) {
@@ -519,6 +535,17 @@ processing_module_server <- function(id) {
         
         add_log("✓ Data binned")
         
+       # Gem binned MSI objekt
+        msi_data_binned_rv(msi_data_binned)
+        
+       # Lav og gem normaliseret version
+        add_log("Normalizing binned data (TIC)...")
+        norm_msi_binned <- normalize(msi_data_binned, method = "tic") %>%
+          process()
+        norm_msi_binned_rv(norm_msi_binned)
+        add_log("✓ Normalized data ready")
+         
+
         progress$set(value = 95, message = "Creating feature matrix...")
         
         # STEP 5: Create final dataframe (saved as RDS)
@@ -620,6 +647,148 @@ processing_module_server <- function(id) {
         total_size,
         current_sample_name() %||% "None"
       )
+    })
+    # Top 3 m/z (Raw)
+    output$top3_raw_plot <- renderPlot({
+      req(msi_data_binned_rv())
+      
+      msi_data_binned <- msi_data_binned_rv()
+      
+      var_intensity <- apply(as.matrix(spectra(msi_data_binned)), 1, var)
+      top3_idx <- order(var_intensity, decreasing = TRUE)[1:3]
+      top3_mz <- mz(msi_data_binned)[top3_idx]
+      
+      vizi_style("dark")
+      image(
+        msi_data_binned,
+        mz = top3_mz,
+        superpose = TRUE,
+        contrast.enhance = "suppress",
+        normalize.image = "linear",
+        col = c("blue", "red", "green")
+      )
+    })
+    
+    # Top 3 m/z (Normalized)
+    output$top3_norm_plot <- renderPlot({
+      req(norm_msi_binned_rv())
+      
+      norm_msi_binned <- norm_msi_binned_rv()
+      
+      norm_var_intensity <- apply(as.matrix(spectra(norm_msi_binned)), 1, var)
+      norm_top3_idx <- order(norm_var_intensity, decreasing = TRUE)[1:3]
+      norm_top3_mz <- mz(norm_msi_binned)[norm_top3_idx]
+      
+      vizi_style("dark")
+      image(
+        norm_msi_binned,
+        mz = norm_top3_mz,
+        superpose = TRUE,
+        contrast.enhance = "suppress",
+        normalize.image = "linear",
+        col = c("blue", "red", "green")
+      )
+    })
+    
+    # Helper function for distance calculations
+    calculate_distances <- function(norm_msi_binned) {
+      # Create matrix from normalized MSI
+      norm_msi_matrix <- t(as.matrix(spectra(norm_msi_binned)))
+      coords_df <- coord(norm_msi_binned)
+      norm_msi_matrix <- cbind(
+        x = coords_df$x,
+        y = coords_df$y,
+        norm_msi_matrix
+      )
+      
+      # Sample pixel pairs
+      n_pairs <- 10000
+      n <- nrow(norm_msi_matrix)
+      
+      pairs <- data.frame(
+        i = sample(n, n_pairs, replace = TRUE),
+        j = sample(n, n_pairs, replace = TRUE)
+      )
+      pairs <- subset(pairs, i != j)
+      pairs$ii <- pmin(pairs$i, pairs$j)
+      pairs$jj <- pmax(pairs$i, pairs$j)
+      pairs <- unique(pairs[, c("ii", "jj")])
+      names(pairs) <- c("i", "j")
+      
+      if (nrow(pairs) > n_pairs) pairs <- pairs[1:n_pairs, ]
+      
+      # Calculate spatial distances
+      coords <- norm_msi_matrix[, c("x", "y")]
+      space_distance <- sqrt(
+        rowSums(
+          (coords[pairs$i, , drop = FALSE] -
+             coords[pairs$j, , drop = FALSE])^2
+        )
+      )
+      
+      # Calculate intensity distances (cosine)
+      intens <- norm_msi_matrix[, -c(1:2), drop = FALSE]
+      
+      cosine_distance <- function(a, b) {
+        sim <- sum(a * b) / (sqrt(sum(a^2)) * sqrt(sum(b^2)))
+        return(1 - sim)
+      }
+      
+      intensity_distance <- mapply(
+        function(i, j) cosine_distance(intens[i, ], intens[j, ]),
+        pairs$i, pairs$j
+      )
+      
+      data.frame(
+        space_distance = space_distance,
+        intensity_distance = intensity_distance
+      )
+    }
+    
+    # Distance binned plot
+    output$distance_binned_plot <- renderPlot({
+      req(norm_msi_binned_rv())
+      
+      df_dist <- calculate_distances(norm_msi_binned_rv())
+      
+      # Bin and summarize
+      nbins <- 50
+      df_binned <- df_dist %>%
+        mutate(bin = cut(space_distance, breaks = nbins)) %>%
+        group_by(bin) %>%
+        summarise(
+          space_mid = mean(space_distance),
+          int_median = median(intensity_distance),
+          int_q25 = quantile(intensity_distance, 0.25),
+          int_q75 = quantile(intensity_distance, 0.75),
+          .groups = "drop"
+        )
+      
+      ggplot(df_binned, aes(x = space_mid, y = int_median)) +
+        geom_line() +
+        geom_ribbon(aes(ymin = int_q25, ymax = int_q75), alpha = 0.2) +
+        theme_bw() +
+        labs(
+          x = "Euclidean distance between pixels",
+          y = "Cosine distance (median, 25–75% interval)",
+          title = "Spatial vs Intensity Distance (binned)"
+        )
+    })
+    
+    # Distance scatter plot
+    output$distance_scatter_plot <- renderPlot({
+      req(norm_msi_binned_rv())
+      
+      df_plot <- calculate_distances(norm_msi_binned_rv())
+      
+      ggplot(df_plot, aes(x = space_distance, y = intensity_distance)) +
+        geom_point(alpha = 0.2, size = 1) +
+        theme_bw() +
+        labs(
+          x = "Euclidean distance between pixels",
+          y = "Cosine distance in m/z-intensities",
+          title = "Spatial vs Intensity Distance (10,000 pixel pairs)"
+        )
     })
   })
 }
