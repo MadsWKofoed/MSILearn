@@ -327,12 +327,46 @@ processing_module_server <- function(id) {
       }
       
       tryCatch({
-        size <- sum(file.size(list.files(cache_dir, full.names = TRUE, recursive = TRUE))) / 1024^2
+        # Beregn størrelse
+        files <- list.files(cache_dir, full.names = TRUE, recursive = TRUE)
+        cache_size <- sum(file.size(files)) / 1024^2
+        
+        # Slet cache directory
         unlink(cache_dir, recursive = TRUE)
         current_cache_dir(NULL)
-        add_log(sprintf("Cleared cache: %.2f MB freed", size))
-        showNotification(sprintf("Cache cleared: %.2f MB freed", size), 
-                        type = "message", duration = 5)
+        add_log(sprintf("Cache cleared: %.2f MB freed", cache_size))
+        
+        # Ryd Cardinal temp files
+        temp_files <- list.files(
+          tempdir(), 
+          pattern = "(imzml_|Cardinal|matter_array)",
+          full.names = TRUE, 
+          recursive = TRUE
+        )
+        
+        if (length(temp_files) > 0) {
+          temp_size <- sum(file.size(temp_files), na.rm = TRUE) / 1024^2
+          unlink(temp_files, recursive = TRUE)
+          add_log(sprintf("System temp cleaned: %.2f MB", temp_size))
+        }
+        
+        # Nulstil plot reactive values
+        plot_top3_raw(NULL)
+        plot_top3_norm(NULL)
+        plot_distance_binned(NULL)
+        plot_distance_scatter(NULL)
+        
+        # Force garbage collection
+        gc()
+        
+        total_freed <- cache_size + (if(exists("temp_size")) temp_size else 0)
+        
+        showNotification(
+          sprintf("✓ All cleared: %.2f MB freed from disk + plots removed from memory", total_freed), 
+          type = "message", 
+          duration = 5
+        )
+        
       }, error = function(e) {
         showNotification(paste("Cache clear error:", e$message), 
                         type = "error", duration = NULL)
@@ -372,19 +406,15 @@ processing_module_server <- function(id) {
         return()
       }
       
+      # Reset plots at the start of new processing
+      plot_top3_raw(NULL)
+      plot_top3_norm(NULL)
+      plot_distance_binned(NULL)
+      plot_distance_scatter(NULL)
+
       shinyjs::disable("run_processing")
       on.exit({
         shinyjs::enable("run_processing")
-        # Remove cache-folder made in this run
-        cleanup_cache_dir()
-        # Remove Cardinal temp made in this run
-        cleanup_cardinal_temp()
-        # Free RAM held by large objects
-        try({
-          rm(msi_data, control_mean, control_MSI_ref, msi_data_binned,
-            msi_matrix)
-        }, silent = TRUE)
-        gc()
       }, add = TRUE)
       
       progress <- Progress$new(session, min = 0, max = 100)
