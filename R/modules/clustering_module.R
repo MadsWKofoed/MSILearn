@@ -551,46 +551,64 @@ observeEvent(input$assign_all, {
 output$cluster_plot <- renderPlotly({
   df <- clustered_data()
   req(df)
-  
-  cols <- setNames(
-    brewer.pal(max(df$cluster), "Set3")[seq_len(max(df$cluster))],
-    as.character(1:max(df$cluster))
+
+  # Sørg for at cluster er character (tillader både tal og "No_cluster")
+  df$cluster <- as.character(df$cluster)
+
+  # Hvilke clusters findes faktisk?
+  present_clusters <- unique(df$cluster)
+  present_clusters <- c(
+    if ("No_cluster" %in% present_clusters) "No_cluster",
+    sort(setdiff(present_clusters, "No_cluster"))
   )
-  img_uri <- make_raster_png(df, "cluster", cols)
-  
-  # Determine axis ranges and image anchor based on orientation
+
+  # “Rigtige” clusters uden No_cluster
+  valid_clusters <- sort(setdiff(present_clusters, "No_cluster"))
+  n_valid <- length(valid_clusters)
+
+  # Farver til rigtige clusters
+  cols_base <- RColorBrewer::brewer.pal(max(n_valid, 3), "Set3")[seq_len(n_valid)]
+  names(cols_base) <- valid_clusters
+
+  # Farve til No_cluster (lys grå)
+  no_cluster_col <- "#D9D9D9"
+
+  all_colors <- c("No_cluster" = no_cluster_col)
+  for (cl in valid_clusters) {
+    all_colors[cl] <- cols_base[[cl]]
+  }
+
+  # Raster til cluster
+  img_uri <- make_raster_png(df, "cluster", all_colors)
+
+  # --- Orientering: behold din nuværende logik ---------------------------
   base_df <- original_clustered()
   req(base_df)
-  
+
   orientation <- input$orientation %||% "Default"
-  
-  # Calculate ranges
-  x_min <- min(df$x)
-  x_max <- max(df$x)
-  y_min <- min(df$y)
-  y_max <- max(df$y)
-  
+
+  x_min <- min(df$x); x_max <- max(df$x)
+  y_min <- min(df$y); y_max <- max(df$y)
+
   x_range <- c(x_min, x_max)
   y_range <- c(y_min, y_max)
-  
-  # Image positioning and size
-  img_x <- x_min
-  img_y <- y_max
+
+  img_x     <- x_min
+  img_y     <- y_max
   img_sizex <- x_max - x_min
   img_sizey <- y_max - y_min
-  
-  # Adjust for flipped axes
+
   if (orientation == "Flip X" || orientation == "Flip Both") {
-    x_range <- rev(x_range)
-    img_x <- x_max  # Start from right
-    img_sizex <- -(x_max - x_min)  # Negative size flips image
+    x_range  <- rev(x_range)
+    img_x    <- x_max
+    img_sizex <- -(x_max - x_min)
   }
   if (orientation == "Flip Y" || orientation == "Flip Both") {
-    y_range <- rev(y_range)
-    img_y <- y_min  # Start from bottom
-    img_sizey <- y_max - y_min  # Positive (y is already flipped in make_raster_png)
+    y_range  <- rev(y_range)
+    img_y    <- y_min
+    img_sizey <- y_max - y_min
   }
-  
+
   p <- plot_ly(source = "cluster") %>%
     add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
     layout(
@@ -598,17 +616,17 @@ output$cluster_plot <- renderPlotly({
         source = img_uri,
         xref = "x", yref = "y",
         x = img_x, y = img_y,
-        sizex = img_sizex, 
+        sizex = img_sizex,
         sizey = img_sizey,
         sizing = "stretch", layer = "below"
       )),
       dragmode = "drawclosedpath",
       newshape = list(line = list(color = "black", width = 1),
-                    fillcolor = "rgba(0,0,0,0.05)"),
+                      fillcolor = "rgba(0,0,0,0.05)"),
       title = "MSI Clustering Result",
       xaxis = list(range = x_range, title = "x"),
       yaxis = list(range = y_range, title = "y",
-                  scaleanchor = "x", scaleratio = 1),
+                   scaleanchor = "x", scaleratio = 1),
       showlegend = TRUE,
       legend = list(
         orientation = "h",
@@ -621,27 +639,31 @@ output$cluster_plot <- renderPlotly({
     config(
       displaylogo = FALSE,
       modeBarButtonsToAdd = list("drawclosedpath", "eraseshape"),
-      modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
-                                "toggleSpikelines", "toImage", "select2d", "lasso2d")
+      modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian",
+                                 "toggleSpikelines", "toImage", "select2d", "lasso2d")
     )
-  
-  # Add legend traces
-  for (i in seq_len(max(df$cluster))) {
+
+  # Legend-traces – samme stil som class_plot
+  for (cls in present_clusters) {
+    col <- all_colors[[cls]]
+
     p <- p %>%
       add_trace(
-        x = c(x_min - 1000),
-        y = c(y_min - 1000),
+        x = x_min - 1000,
+        y = y_min - 1000,
         type = "scatter",
         mode = "markers",
-        marker = list(size = 10, color = cols[as.character(i)]),
-        name = paste("Cluster", i),
+        marker = list(size = 10, color = col),
+        name = if (cls == "No_cluster") "No cluster" else paste("Cluster", cls),
         showlegend = TRUE,
-        hoverinfo = "skip"
+        hoverinfo = "skip",
+        inherit = FALSE
       )
   }
-  
+
   p
 })
+
 
 # --- Class plot (interactive with raster) ---
 output$class_plot <- renderPlotly({
