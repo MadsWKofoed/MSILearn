@@ -16,9 +16,22 @@ clustering_module_ui <- function(id) {
                actionButton(ns("clear_histology"), "Clear histology", class = "btn-sm btn-warning"),
                tags$hr(),
                
-               numericInput(ns("clusters"), "Number of clusters:", value = 3, min = 2, max = 30),
-               selectInput(ns("method"), "Clustering method:", choices = c("K-means", "Hierarchical")),
-               checkboxInput(ns("log_scale"), "Use log-scale transformation", value = FALSE),
+               h4("Clustering Configuration"),
+                selectInput(ns("method"), "Clustering method:", 
+                          choices = c("K-means", "VSClust")),
+
+                # Normalization selection
+                selectInput(ns("normalize"), "Normalization:", 
+                          choices = c("None" = "none",
+                                    "Log transform" = "log",
+                                    "Scale (z-score)" = "scale")),
+
+                # Number of clusters (fælles for begge metoder)
+                numericInput(ns("clusters"), "Number of clusters:", 
+                            value = 3, min = 2, max = 30),
+
+                # Dynamic parameter UI based on method
+                uiOutput(ns("method_params_ui")),
                actionButton(ns("run_clustering"), "Run Clustering"),
                tags$hr(),
                
@@ -224,6 +237,24 @@ clustering_module_server <- function(id, msi_con) {
       })
     })
     
+    # Dynamic parameter UI based on selected method
+    output$method_params_ui <- renderUI({
+      req(input$method)
+      
+      if (input$method == "K-means") {
+        helpText("K-means partitions data into k distinct clusters")
+      } else if (input$method == "VSClust") {
+        tagList(
+          numericInput(ns("Sds"), "Fuzziness parameter (Sds):", 
+                      value = 1.3, min = 0.5, max = 3, step = 0.1),
+          numericInput(ns("minMem"), "Minimum membership:", 
+                      value = 0.5, min = 0.1, max = 1, step = 0.05),
+          helpText("VSClust uses fuzzy clustering with membership scores")
+        )
+      }
+    })
+
+
     # --- Run clustering ---
     observeEvent(input$run_clustering, {
       df <- processed_data()
@@ -241,11 +272,21 @@ clustering_module_server <- function(id, msi_con) {
         progress$set(value = 30, 
                     message = paste0("Running ", input$method, " with k=", input$clusters, "..."))
         
-        clustered <- if (input$method == "K-means") {
-          run_kmeans(df, input$clusters, log_scale = input$log_scale)
-        } else {
-          run_hclust(df, input$clusters, log_scale = input$log_scale)
-        }
+        clustered <- switch(input$method,
+          "K-means" = {
+            run_kmeans(df, 
+                      k = input$clusters, 
+                      normalize_method = input$normalize)
+          },
+          "VSClust" = {
+            run_vsclust(df,
+                      k = input$clusters,
+                      normalize_method = input$normalize,
+                      Sds = input$Sds %||% 1.3,
+                      minMem = input$minMem %||% 0.5)
+          },
+          stop("Unknown clustering method")
+        )
         
         progress$set(value = 90, message = "Finalizing...")
         
@@ -256,8 +297,15 @@ clustering_module_server <- function(id, msi_con) {
         
         progress$set(value = 100, message = "Complete!")
         
+        norm_text <- if (input$normalize == "none") {
+          "no normalization"
+        } else {
+          paste("with", input$normalize, "normalization")
+        }
+
         output$status_text <- renderText(
-          paste0("Clustering complete: ", input$method, " with ", input$clusters, " clusters")
+          paste0("Clustering complete: ", input$method, " (", norm_text, ") - ",
+                input$clusters, " clusters")
         )
         
         showNotification(
@@ -975,7 +1023,9 @@ output$class_plot <- renderPlotly({
           
           clustering_method = input$method,
           num_clusters = as.integer(input$clusters),
-          log_scale_used = as.logical(input$log_scale),
+          normalization_method = input$normalize,
+          vsclust_Sds = if (input$method == "VSClust") as.numeric(input$Sds) else NA,
+          vsclust_minMem = if (input$method == "VSClust") as.numeric(input$minMem) else NA,
           orientation_used = input$orientation,
           
           num_pixels = as.integer(nrow(df_to_save)),

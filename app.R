@@ -12,6 +12,8 @@ library(Cardinal)
 library(dplyr)
 library(png)
 library(jpeg)
+library(vsclust)
+library(matrixStats)
 
 source("global.R")
 
