@@ -250,7 +250,7 @@ clustering_module_server <- function(id, msi_con) {
           numericInput(ns("Sds"), "Fuzziness parameter (Sds):", 
                       value = 1.3, min = 0.5, max = 3, step = 0.1),
           numericInput(ns("minMem"), "Minimum membership:", 
-                      value = 0.5, min = 0.1, max = 1, step = 0.05),
+                      value = 0.5, min = 0.1, max = 1, step = 0.01),
           helpText("VSClust uses fuzzy clustering with membership scores")
         )
       }
