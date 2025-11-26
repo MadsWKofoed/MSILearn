@@ -70,6 +70,8 @@ clustering_module_server <- function(id, msi_con) {
     annotated_data <- reactiveVal(NULL)
     original_clustered <- reactiveVal(NULL)
     histology_image <- reactiveVal(NULL)
+    vsclust_membership_data <- reactiveVal(NULL)
+    current_method <- reactiveVal(NULL)
     
     # --- Load all unique samples ---
     observe({
@@ -260,7 +262,6 @@ clustering_module_server <- function(id, msi_con) {
       df <- processed_data()
       req(df)
       
-      # Disable button during clustering
       shinyjs::disable("run_clustering")
       on.exit(shinyjs::enable("run_clustering"))
       
@@ -274,23 +275,29 @@ clustering_module_server <- function(id, msi_con) {
         
         clustered <- switch(input$method,
           "K-means" = {
+            current_method("K-means")
+            vsclust_membership_data(NULL)  # Clear membership data
             run_kmeans(df, 
                       k = input$clusters, 
                       normalize_method = input$normalize)
           },
           "VSClust" = {
-            run_vsclust(df,
+            current_method("VSClust")
+            result <- run_vsclust(df,
                       k = input$clusters,
                       normalize_method = input$normalize,
                       Sds = input$Sds %||% 1.3,
                       minMem = input$minMem %||% 0.5)
+            
+            # Store membership data for later re-thresholding
+            vsclust_membership_data(result)
+            result
           },
           stop("Unknown clustering method")
         )
         
         progress$set(value = 90, message = "Finalizing...")
         
-        # Store original before any transformations
         original_clustered(clustered)
         clustered_data(clustered)
         annotated_data(NULL)
@@ -323,6 +330,62 @@ clustering_module_server <- function(id, msi_con) {
       })
     })
     
+    observeEvent(input$minMem, {
+      # Only react if VSClust was used and we have membership data
+      req(current_method() == "VSClust")
+      req(vsclust_membership_data())
+      
+      # Don't trigger during initial clustering run
+      req(clustered_data())
+      
+      tryCatch({
+        # Get stored membership data
+        df <- vsclust_membership_data()
+        
+        # Reapply threshold with new minMem value
+        df_updated <- apply_minmem_threshold(df, input$minMem)
+        
+        # Update both original and current clustered data
+        original_clustered(df_updated)
+        
+        # Apply current orientation transformation
+        orientation <- input$orientation %||% "Default"
+        
+        if (orientation == "Default") {
+          clustered_data(df_updated)
+        } else {
+          df_adjusted <- df_updated
+          
+          if (orientation == "Flip X" || orientation == "Flip Both") {
+            df_adjusted$x <- max(df_updated$x) - df_adjusted$x + min(df_updated$x)
+          }
+          if (orientation == "Flip Y" || orientation == "Flip Both") {
+            df_adjusted$y <- max(df_updated$y) - df_adjusted$y + min(df_updated$y)
+          }
+          
+          clustered_data(df_adjusted)
+        }
+        
+        # Clear annotations since cluster assignments changed
+        annotated_data(NULL)
+        class_colors(c())
+        next_color_i(1)
+        
+        showNotification(
+          paste0("Cluster assignments updated with minMem = ", input$minMem),
+          type = "message",
+          duration = 3
+        )
+        
+      }, error = function(e) {
+        showNotification(
+          paste("Error updating membership threshold:", e$message),
+          type = "error",
+          duration = NULL
+        )
+      })
+    }, ignoreInit = TRUE)
+
     # --- Apply orientation adjustment ---
     observe({
       req(input$orientation)

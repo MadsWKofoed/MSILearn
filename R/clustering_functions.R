@@ -63,26 +63,44 @@ run_vsclust <- function(full_df, k = 3, normalize_method = "scale",
     m = fuzz$m
   )
   
-  # Collect clustering results
-  clust_alg_res <- data.frame(
-    cluster = vsclust_alg[["cluster"]],
-    isClusterMember = rowMaxs(vsclust_alg[["membership"]]) > minMem,
-    maxMembership = rowMaxs(vsclust_alg[["membership"]]),
-    vsclust_alg$membership
-  )
+  # Store membership matrix in original dataframe
+  membership_cols <- paste0("membership_", seq_len(k))
+  full_df[, membership_cols] <- vsclust_alg$membership
+  full_df$max_membership <- rowMaxs(vsclust_alg$membership)
+  full_df$raw_cluster <- vsclust_alg$cluster
   
-  # Correct cluster labels: assign "No_cluster" if membership < minMem
-  clust_alg_res$cluster_corrected <- ifelse(
-    clust_alg_res$isClusterMember,
-    as.character(clust_alg_res$cluster),
-    "No_cluster"
-  )
-  
-  # Add cluster labels back to original data
-  full_df$cluster <- clust_alg_res$cluster_corrected
+  # Apply minMem threshold to get corrected clusters
+  full_df <- apply_minmem_threshold(full_df, minMem)
   
   full_df
 }
 
+# Helper function to apply minMem threshold (can be called independently)
+apply_minmem_threshold <- function(df, minMem = 0.5) {
+  # Determine cluster based on membership threshold
+  cluster_corrected <- ifelse(
+    df$max_membership > minMem,
+    as.character(df$raw_cluster),
+    "No_cluster"
+  )
+  
+  # Renumber remaining clusters to be consecutive
+  valid_clusters <- cluster_corrected[cluster_corrected != "No_cluster"]
+  
+  if (length(valid_clusters) > 0) {
+    existing_nums <- sort(unique(as.numeric(valid_clusters)))
+    new_nums <- seq_along(existing_nums)
+    cluster_map <- setNames(as.character(new_nums), as.character(existing_nums))
+    
+    cluster_corrected <- ifelse(
+      cluster_corrected == "No_cluster",
+      "No_cluster",
+      cluster_map[cluster_corrected]
+    )
+  }
+  
+  df$cluster <- cluster_corrected
+  df
+}
 
 
