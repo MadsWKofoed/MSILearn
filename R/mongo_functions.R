@@ -21,8 +21,8 @@ sanitize_name <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
 
 # ===== RAW FILE STORAGE =====
 save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
-                                   db_name = "MSI_test_database",
-                                   mongo_url = "mongodb://localhost",
+                                   db_name = "MSI_database",
+                                   mongo_url = "mongodb://localhost:27018",
                                    bucket = "fs") {
   stopifnot(file.exists(imzml_path), file.exists(ibd_path))
   
@@ -56,8 +56,8 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
 }
 
 fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
-                                      db_name = "MSI_test_database",
-                                      mongo_url = "mongodb://localhost",
+                                      db_name = "MSI_database",
+                                      mongo_url = "mongodb://localhost:27018",
                                       bucket = "fs") {
   grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
   meta <- mongo(collection = "processing_artifacts_metadata", 
@@ -108,8 +108,8 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
 }
 
 load_raw_object_from_mongo <- function(sample_name, workdir,
-                                       db_name = "MSI_test_database",
-                                       mongo_url = "mongodb://localhost",
+                                       db_name = "MSI_database",
+                                       mongo_url = "mongodb://localhost:27018",
                                        bucket = "fs",
                                        resolution = 10,
                                        BPPARAM = BiocParallel::bpparam()) {
@@ -141,8 +141,8 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
 save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type, 
                                     sample_name,
                                     params = list(),
-                                    db_name = "MSI_test_database",
-                                    mongo_url = "mongodb://localhost") {
+                                    db_name = "MSI_database",
+                                    mongo_url = "mongodb://localhost:27018") {
   
   # Check for duplicates (control_mean and snr_reference only)
   if (stage_type %in% c("control_mean", "snr_reference")) {
@@ -245,8 +245,8 @@ save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type,
 
 load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL, 
                                       resolution = NULL,
-                                      db_name   = "MSI_test_database",
-                                      mongo_url = "mongodb://localhost",
+                                      db_name   = "MSI_database",
+                                      mongo_url = "mongodb://localhost:27018",
                                       memory    = FALSE,
                                       workdir   = NULL,
                                       verbose   = TRUE) {
@@ -346,8 +346,8 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
 save_stage_to_mongo <- function(msi_object, run_id, stage_type, 
                                 sample_name,
                                 params = list(),
-                                db_name = "MSI_test_database",  # CHANGED default
-                                mongo_url = "mongodb://localhost") {
+                                db_name = "MSI_database", 
+                                mongo_url = "mongodb://localhost:27018") {
   
   # Check for duplicates (control_mean and snr_reference only)
   if (stage_type %in% c("control_mean", "snr_reference")) {
@@ -406,8 +406,8 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
 }
 
 load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
-                                  db_name = "MSI_test_database",
-                                  mongo_url = "mongodb://localhost") {
+                                  db_name = "MSI_database",
+                                  mongo_url = "mongodb://localhost:27018") {
   
   meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
   
@@ -454,13 +454,13 @@ load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
 # --- Query artifacts (returns dataframe) ---
 query_artifacts <- function(sample_name = NULL, 
                             stage_type = NULL,
-                            resolution = NULL,  # TILFØJET
+                            resolution = NULL,  
                             snr = NULL, 
                             tolerance = NULL,
                             reference_name = NULL,
                             run_id = NULL,
-                            db_name = "MSI_test_database",  # ÆNDRET fra MSI_database
-                            mongo_url = "mongodb://localhost") {
+                            db_name = "MSI_database",  
+                            mongo_url = "mongodb://localhost:27018") {
   
   mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                       db = db_name, url = mongo_url)
@@ -488,8 +488,8 @@ query_artifacts <- function(sample_name = NULL,
 
 # --- Load artifact by gridfs_id ---
 load_artifact_by_id <- function(gridfs_id,
-                                db_name = "MSI_test_database",  
-                                mongo_url = "mongodb://localhost") {
+                                db_name = "MSI_database",  
+                                mongo_url = "mongodb://localhost:27018") {
   
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   
@@ -524,7 +524,7 @@ load_artifact <- function(sample_name = NULL,
                           reference_name = NULL,
                           run_id = NULL,
                           db_name = "MSI_database",
-                          mongo_url = "mongodb://localhost") {
+                          mongo_url = "mongodb://localhost:27018") {
   
   artifacts <- query_artifacts(
     sample_name = sample_name,
@@ -553,7 +553,7 @@ load_artifact <- function(sample_name = NULL,
 # --- Check if artifact exists ---
 artifact_exists <- function(sample_name, stage_type, params = list(),
                            db_name = "MSI_database",
-                           mongo_url = "mongodb://localhost") {
+                           mongo_url = "mongodb://localhost:27018") {
   
   mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                       db = db_name, url = mongo_url)
@@ -575,7 +575,7 @@ artifact_exists <- function(sample_name, stage_type, params = list(),
 # --- Find what stages exist for a sample ---
 get_existing_stages <- function(sample_name, 
                                db_name = "MSI_database",
-                               mongo_url = "mongodb://localhost") {
+                               mongo_url = "mongodb://localhost:27018") {
   
   mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                       db = db_name, url = mongo_url)
@@ -606,7 +606,7 @@ get_existing_stages <- function(sample_name,
 # --- Find compatible run_id (same sample + raw stage exists) ---
 find_compatible_run <- function(sample_name,
                                db_name = "MSI_database",
-                               mongo_url = "mongodb://localhost") {
+                               mongo_url = "mongodb://localhost:27018") {
   
   mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                       db = db_name, url = mongo_url)
@@ -634,7 +634,7 @@ query_clustering_artifacts <- function(sample_name = NULL,
                                       tolerance = NULL,
                                       reference_name = NULL,
                                       db_name = "MSI_database",
-                                      mongo_url = "mongodb://localhost") {
+                                      mongo_url = "mongodb://localhost:27018") {
   
   mongo_cluster_meta <- mongo(collection = "clustering_metadata",
                              db = db_name, url = mongo_url)
@@ -662,7 +662,7 @@ query_clustering_artifacts <- function(sample_name = NULL,
 # --- Load clustering result by assignment_id ---
 load_clustering_by_id <- function(assignment_id,
                                   db_name = "MSI_database",
-                                  mongo_url = "mongodb://localhost") {
+                                  mongo_url = "mongodb://localhost:27018") {
   
   # Query metadata
   artifacts <- query_clustering_artifacts(
@@ -717,7 +717,7 @@ load_clustering <- function(sample_name = NULL,
                            reference_name = NULL,
                            most_recent = TRUE,
                            db_name = "MSI_database",
-                           mongo_url = "mongodb://localhost") {
+                           mongo_url = "mongodb://localhost:27018") {
   
   artifacts <- query_clustering_artifacts(
     sample_name = sample_name,

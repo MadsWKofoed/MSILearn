@@ -11,7 +11,7 @@ setCardinalParallel(workers = bp)
 msi_con <- mongo(
   collection = "msi_data",
   db = "MSI_database",  
-  url = "mongodb://localhost"
+  url = "mongodb://localhost:27018"
 )
 
 # Custom CSS for font

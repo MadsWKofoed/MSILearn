@@ -59,11 +59,11 @@ clustering_module_server <- function(id, msi_con) {
     ns <- session$ns
     
     mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                       db = "MSI_test_database",  
-                       url = "mongodb://localhost")
+                       db = "MSI_database",  
+                       url = "mongodb://localhost:27018")
     mongo_cluster_meta <- mongo(collection = "clustering_metadata",
-                               db = "MSI_test_database",  
-                               url = "mongodb://localhost")
+                               db = "MSI_database",  
+                               url = "mongodb://localhost:27018")
     
     processed_data <- reactiveVal(NULL)
     clustered_data <- reactiveVal(NULL)
@@ -95,7 +95,7 @@ clustering_module_server <- function(id, msi_con) {
       artifacts <- query_artifacts(
         sample_name = input$sample_select,
         stage_type = "binned_dataframe",
-        db_name = "MSI_test_database"
+        db_name = "MSI_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -115,7 +115,7 @@ clustering_module_server <- function(id, msi_con) {
         sample_name = input$sample_select,
         stage_type = "binned_dataframe",
         resolution = as.numeric(input$res_select),
-        db_name = "MSI_test_database"
+        db_name = "MSI_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -136,7 +136,7 @@ clustering_module_server <- function(id, msi_con) {
         stage_type = "binned_dataframe",
         resolution = as.numeric(input$res_select),
         snr = as.numeric(input$snr_select),
-        db_name = "MSI_test_database"
+        db_name = "MSI_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -158,7 +158,7 @@ clustering_module_server <- function(id, msi_con) {
         resolution = as.numeric(input$res_select),  # TILFØJET
         snr = as.numeric(input$snr_select),
         tolerance = as.numeric(input$tol_select),
-        db_name = "MSI_test_database"
+        db_name = "MSI_database"
       )
       
       if (nrow(artifacts) == 0) return(NULL)
@@ -190,7 +190,7 @@ clustering_module_server <- function(id, msi_con) {
           snr = as.numeric(input$snr_select),
           tolerance = as.numeric(input$tol_select),
           reference_name = input$ref_select,
-          db_name = "MSI_test_database"
+          db_name = "MSI_database"
         )
         
         if (nrow(artifacts) == 0) {
@@ -201,7 +201,7 @@ clustering_module_server <- function(id, msi_con) {
         progress$set(value = 30, message = "Loading from database...")
         
         gridfs_id <- artifacts$gridfs_id[1]
-        df <- load_artifact_by_id(gridfs_id, db_name = "MSI_test_database")
+        df <- load_artifact_by_id(gridfs_id, db_name = "MSI_database")
         
         progress$set(value = 90, message = "Processing data...")
         
@@ -1063,7 +1063,7 @@ output$class_plot <- renderPlotly({
         temp_path <- tempfile(pattern = "annotated_clustering_", fileext = ".rds")
         saveRDS(df_to_save, temp_path)
         
-        grid <- gridfs(db = "MSI_database", prefix = "fs", url = "mongodb://localhost")
+        grid <- gridfs(db = "MSI_database", prefix = "fs", url = "mongodb://localhost:27018")
         gridfs_result <- grid$upload(temp_path, name = paste0(assignment_id, "_annotated_clustering.rds"))
         
         # Extract just the ID as string (consistent with processing pipeline)

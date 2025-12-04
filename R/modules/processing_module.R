@@ -122,10 +122,10 @@ processing_module_server <- function(id) {
     
     # MongoDB connections
     mongo_ref <- mongo(collection = "mz_references",
-                       db = "msi_project", url = "mongodb://localhost")
+                       db = "msi_project", url = "mongodb://localhost:27018")
     
     mongo_meta <- mongo(collection = "processing_artifacts_metadata",
-                       db = "MSI_test_database", url = "mongodb://localhost")
+                       db = "MSI_database", url = "mongodb://localhost:27018")
     
     # Reactive values for state
     processing_log <- reactiveVal("")
@@ -477,7 +477,7 @@ processing_module_server <- function(id) {
               sample_name = sample_name,
               imzml_path = files$datapath[imzml_idx][1],
               ibd_path = files$datapath[ibd_idx][1],
-              db_name = "MSI_test_database"
+              db_name = "MSI_database"
             )
             add_log("✓ Raw files saved to database")
           }
@@ -489,7 +489,7 @@ processing_module_server <- function(id) {
         msi_data <- load_raw_object_from_mongo(
           sample_name = sample_name,
           workdir = cache_dir,
-          db_name = "MSI_test_database",
+          db_name = "MSI_database",
           resolution = as.numeric(input$resolution)
         )
         add_log(sprintf("✓ MSI data loaded: %d pixels, %d m/z values",
@@ -513,7 +513,7 @@ processing_module_server <- function(id) {
             sample_name = sample_name,
             stage_type = "control_mean",
             resolution = as.numeric(input$resolution),
-            db_name = "MSI_test_database"
+            db_name = "MSI_database"
           )
           
           run_id <- mean_artifacts$run_id[nrow(mean_artifacts)]
@@ -533,7 +533,7 @@ processing_module_server <- function(id) {
             params = list(
               resolution = as.numeric(input$resolution)
             ),
-            db_name = "MSI_test_database"
+            db_name = "MSI_database"
           )
         }
         add_log("✓ Mean spectrum ready")
@@ -733,7 +733,7 @@ processing_module_server <- function(id) {
             num_features = ncol(full_df) - 3,
             num_pixels = nrow(full_df)
           ),
-          db_name = "MSI_test_database"
+          db_name = "MSI_database"
         )
         
         add_log(sprintf("✓ Final dataframe: %d pixels × %d features", 
