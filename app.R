@@ -14,7 +14,7 @@ library(png)
 library(jpeg)
 library(vsclust)
 library(matrixStats)
-
+#test
 source("global.R")
 
 shinyApp(ui = ui, server = server)
