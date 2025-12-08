@@ -279,7 +279,7 @@ processing_module_server <- function(id) {
         req(input$ref_csv)
         df <- read.csv(input$ref_csv$datapath, stringsAsFactors = FALSE)
         list(
-          mz = df$mz,
+          mz = as.numeric(df$mz),
           name = tools::file_path_sans_ext(basename(input$ref_csv$name)),
           source = "upload"
         )
@@ -292,7 +292,7 @@ processing_module_server <- function(id) {
         if (nrow(ref_doc) == 0) return(NULL)
         
         list(
-          mz = unlist(ref_doc$mz_values[[1]]),
+          mz = as.numeric(unlist(ref_doc$mz_values[[1]])),
           name = input$ref_csv_mongo,
           source = "database"
         )
