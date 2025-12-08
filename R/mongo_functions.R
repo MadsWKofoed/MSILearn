@@ -323,6 +323,8 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
 
   if (verbose) message("[load] Reading MSI with Cardinal (memory=", memory, ")")
   obj <- Cardinal::readMSIData(imzml_local, memory = memory)
+  obj <- as(obj, "MSImagingExperiment")
+  obj <- process(obj) 
 
   if (verbose) {
     try({
