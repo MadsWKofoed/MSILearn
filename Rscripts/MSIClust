@@ -1,0 +1,287 @@
+library(Cardinal)
+library(matter)
+library(dplyr)
+library(vsclust)
+library(matrixStats)
+library(plotly)
+library(RColorBrewer)
+
+temp_imzml <- "kidney_and_tumor/PROCESSED_kidney.imzML"
+temp_imzml <- "kidney_and_tumor/RAW_tumor.imzml"
+
+
+msi_data <- readImzML(temp_imzml, memory = FALSE, check = FALSE,
+                      mass.range = NULL, resolution = 0.0001, units = c("mz"),
+                      guess.max = 1000L, as = "auto", parse.only=FALSE,
+                      verbose = getCardinalVerbose(), chunkopts = list(),
+                      BPPARAM = bpparam())
+
+control_mean <- summarizeFeatures(msi_data, "mean")
+
+
+
+control_MSI_ref <- control_mean %>%
+  peakPick(SNR = input$snr) %>%
+  peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
+  subsetFeatures() %>%
+  process()
+
+msi_df <- make_msi_dataframe(msi_data)
+
+rows_with_0 <- msi_df[apply(msi_df, 1, function(row) mean(row == 0) > 0.0001), ]
+
+vizi_style("dark")
+image(
+  msi_data,
+  #mz = c(846.3, 695.3, 725.3),
+  mz = c(369.3, 798.5, 830.6),
+  superpose = TRUE,
+  contrast.enhance = "suppress",
+  normalize.image = "linear",
+  col = c("blue", "red", "green")
+)
+image(
+  msi_data,
+  mz = 846.3
+  #superpose = TRUE,
+  #contrast.enhance = "suppress",
+  #normalize.image = "linear",
+  #col = "blue"
+)
+selectROI(msi_data)
+
+
+# Remove RunName column
+msi_df_clust <- msi_df[, !names(msi_df) %in% "runNames"]
+
+
+cor_data <- msi_df_clust
+
+cor_data$avg_corr_neighbors <- compute_neighbor_cor_8(cor_data, x_col = "x", y_col = "y", cores = 30)
+hist(cor_data$avg_corr_neighbors, 
+     breaks = 100, 
+     main = "Distribution of mean correlations", 
+     xlab = "Correlation value")
+range(na.omit(cor_data$avg_corr_neighbors))
+sum(is.na(cor_data$avg_corr_neighbors))
+
+test <- cor_data$avg_corr_neighbors
+
+cor_test <- 1 - test
+hist(cor_test, 
+     breaks = 100, 
+     main = "Distribution of 1 - mean correlation", 
+     xlab = "1 - Correlation value")
+
+scale_to_0_2 <- function(x) {
+  1.5 * (x - min(x))/(max(x) - min(x))
+}
+pow_test <- scale_to_0_2(2^(1 - test) ) 
+range(na.omit(pow_test))
+hist(pow_test, 
+     breaks = 100, 
+     main = "Distribution of ((1 - mean correlation) ^ 0.3) * 2", 
+     xlab = "Power transformed 1 - Correlation value")
+
+
+
+
+fuzz <- determine_fuzz(dims = dim(msi_df_clust), NClust = 3, Sds = pow_test)
+range(fuzz$m)
+hist(fuzz$m, 
+     breaks = 200, 
+     main = "Distribution of Fuzzifiers from\n Sds = ((1 - mean correlation) ^ 0.3) * 2", 
+     xlab = "Fuzzifier values",
+     xlim = c(1, 4))
+
+
+# # Without x and y do this step. If not then skip to scaling
+# msi_df_clust <- as.matrix(msi_df[, grep("^mz_", colnames(msi_df))])
+
+
+msi_df_clust <- scale(msi_df_clust)
+
+vsclust_alg <- vsclust_algorithm(msi_df_clust,
+                                 centers = 3,
+                                 iterMax = 100,
+                                 m = fuzz$m)
+
+
+
+minMem <- 0.6
+
+clust_alg_res <- data.frame(cluster = vsclust_alg[["cluster"]],
+                            isClusterMember =  rowMaxs(vsclust_alg[["membership"]]) > minMem,
+                            maxMembership = rowMaxs(vsclust_alg[["membership"]]),
+                            vsclust_alg$membership)
+
+range(clust_alg_res$maxMembership)
+sum(clust_alg_res$maxMembership == 1)
+hist(clust_alg_res$maxMembership, 
+     breaks = 100, 
+     main = "Maximum Membership values", 
+     xlab = "Maximum membership values")
+
+clust_alg_res$cluster_corrected <- ifelse(
+  clust_alg_res$isClusterMember,
+  as.character(clust_alg_res$cluster),
+  "No_cluster"
+)
+
+
+msi_df$cluster <- clust_alg_res$cluster_corrected
+
+
+
+
+
+df <- msi_df
+base_df <- df
+orientation <- "Flip Y"
+
+if (orientation == "Flip X") {
+  df$x <- max(base_df$x) - df$x + min(base_df$x)
+} else if (orientation == "Flip Y") {
+  df$y <- max(base_df$y) - df$y + min(base_df$y)
+} else if (orientation == "Flip Both") {
+  df$x <- max(base_df$x) - df$x + min(base_df$x)
+  df$y <- max(base_df$y) - df$y + min(base_df$y)
+}
+
+# Sørg for at cluster er character
+df$cluster <- as.character(df$cluster)
+
+## --- Farver til clusters -------------------------------------------------
+
+# Alle klasser der faktisk findes
+present_clusters <- unique(df$cluster)
+present_clusters <- c(
+  if ("No_cluster" %in% present_clusters) "No_cluster",
+  sort(setdiff(present_clusters, "No_cluster"))
+)
+
+# Rigtige klynger (uden "No_cluster")
+valid_clusters <- sort(setdiff(present_clusters, "No_cluster"))
+n_valid <- length(valid_clusters)
+
+# Farver til rigtige klynger
+cols_base <- RColorBrewer::brewer.pal(max(n_valid, 3), "Set3")[seq_len(n_valid)]
+names(cols_base) <- valid_clusters
+
+# Brug en HEX-farve til "No_cluster" så Plotly også forstår den
+no_cluster_col <- "#D9D9D9"   # lys grå
+
+all_colors <- c("No_cluster" = no_cluster_col)
+for (cl in valid_clusters) {
+  all_colors[cl] <- cols_base[[cl]]
+}
+
+## --- Raster-billede ------------------------------------------------------
+
+img_uri <- make_raster_png(df, "cluster", all_colors)
+
+## --- Orientering / akser -------------------------------------------------
+
+# base_df <- original_clustered()
+# req(base_df)
+
+
+# Axis ranges
+x_min <- min(df$x); x_max <- max(df$x)
+y_min <- min(df$y); y_max <- max(df$y)
+
+x_range <- c(x_min, x_max)
+y_range <- c(y_min, y_max)
+
+# Billede position og størrelse
+img_x <- x_min
+img_y <- y_max
+img_sizex <- x_max - x_min
+img_sizey <- y_max - y_min
+
+# Flip X
+if (orientation == "Flip X" || orientation == "Flip Both") {
+  x_range <- rev(x_range)
+  img_x <- x_max                # start fra højre
+  img_sizex <- -(x_max - x_min) # negativ bredde flip’er billedet horisontalt
+}
+
+# Flip Y
+if (orientation == "Flip Y" || orientation == "Flip Both") {
+  y_range <- rev(y_range)
+  img_y <- y_min                # start fra bunden
+  img_sizey <- y_max - y_min    # positiv højde (y er allerede vendt i make_raster_png)
+}
+
+## --- Plotly-plot ---------------------------------------------------------
+
+p <- plot_ly(source = "cluster") %>%
+  add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
+  layout(
+    images = list(list(
+      source = img_uri,
+      xref = "x", yref = "y",
+      x = img_x, y = img_y,
+      sizex = img_sizex,
+      sizey = img_sizey,
+      sizing = "stretch", layer = "below"
+    )),
+    dragmode = "drawclosedpath",
+    newshape = list(line = list(color = "black", width = 1),
+                    fillcolor = "rgba(0,0,0,0.05)"),
+    title = "MSI Clustering Result",
+    xaxis = list(range = x_range, title = "x"),
+    yaxis = list(range = y_range, title = "y",
+                 scaleanchor = "x", scaleratio = 1),
+    showlegend = TRUE,
+    legend = list(
+      orientation = "h",
+      x = 0.5,
+      xanchor = "center",
+      y = -0.15,
+      yanchor = "top"
+    )
+  ) %>%
+  config(
+    displaylogo = FALSE,
+    modeBarButtonsToAdd = list("drawclosedpath", "eraseshape"),
+    modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian",
+                               "toggleSpikelines", "toImage", "select2d", "lasso2d")
+  )
+
+## --- Legend-traces (samme stil som Class-koden) --------------------------
+
+for (cls in present_clusters) {
+  col <- all_colors[[cls]]
+  
+  p <- p %>%
+    add_trace(
+      x = x_min - 1000,
+      y = y_min - 1000,
+      type = "scatter",
+      mode = "markers",
+      marker = list(size = 10, color = col),
+      name = if (cls == "No_cluster") "No cluster" else paste("Cluster", cls),
+      showlegend = TRUE,
+      hoverinfo = "skip",
+      inherit = FALSE
+    )
+}
+
+p
+
+
+
+table(clust_alg_res$cluster_corrected)
+
+
+msi_df_clust <- as.matrix(msi_df[, grep("^mz_", colnames(msi_df))])
+msi_df_clust <- scale(msi_df_clust)
+km <- kmeans(msi_df_clust, centers = 3, nstart = 25)
+msi_df$cluster <- km$cluster
+table(msi_df$cluster)
+
+
+
+
+
