@@ -568,76 +568,72 @@ processing_module_server <- function(id) {
         add_log("✓ Data binned")
         
 
-        
-       # Lav og gem normaliseret version
-        add_log("Normalizing binned data (TIC)...")
+      
+      # Lav og gem normaliseret version
+      add_log("Normalizing binned data (TIC)...")
 
-        spec_mat <- as.matrix(spectra(msi_data_binned))
-        tic <- colSums(spec_mat, na.rm = TRUE)
+      spec_mat <- as.matrix(Cardinal::spectra(msi_data_binned))  # features x pixels
+      tic <- colSums(spec_mat, na.rm = TRUE)
 
-        bad <- which(!is.finite(tic) | tic <= 0)
+      # robust beskyttelse (selvom dine tal ser fine ud)
+      tic[!is.finite(tic) | tic <= 0] <- NA_real_
 
-        if (length(bad) > 0) {
-          # sæt disse pixels til 0 så normalize(tic) ikke giver NaN/Inf
-          spec_mat[, bad] <- 0
-          spectra(msi_data_binned) <- spec_mat
-        }
+      # TIC-normaliseret matrix (features x pixels)
+      spec_mat_tic <- sweep(spec_mat, 2, tic, "/")
 
-        norm_msi_binned <- normalize(msi_data_binned, method = "tic") %>%
-          process()
+      add_log("✓ Normalized matrix ready (TIC)")
 
-        add_log("✓ Normalized data ready")
-        
-        # Generate plots
-        add_log("Generating visualization plots...")
-        
-        # Top 3 m/z plots
-        var_intensity <- apply(as.matrix(spectra(msi_data_binned)), 1, var)
-        top3_idx <- order(var_intensity, decreasing = TRUE)[1:3]
-        top3_mz <- mz(msi_data_binned)[top3_idx]
-        
-        norm_var_intensity <- apply(as.matrix(spectra(norm_msi_binned)), 1, var)
-        norm_top3_idx <- order(norm_var_intensity, decreasing = TRUE)[1:3]
-        norm_top3_mz <- mz(norm_msi_binned)[norm_top3_idx]
-        
-        vizi_style("dark")
-        
-        # Raw plot - brug en funktion der plotter
-        create_raw_plot <- function() {
-          image(
-            msi_data_binned,
-            mz = top3_mz,
-            superpose = TRUE,
-            contrast.enhance = "suppress",
-            normalize.image = "linear",
-            col = c("blue", "red", "green")
-          )
-        }
-        plot_top3_raw(create_raw_plot)
-        
-        # Normalized plot
-        create_norm_plot <- function() {
-          image(
-            norm_msi_binned,
-            mz = norm_top3_mz,
-            superpose = TRUE,
-            contrast.enhance = "suppress",
-            normalize.image = "linear",
-            col = c("blue", "red", "green")
-          )
-        }
-        plot_top3_norm(create_norm_plot)
-        
-        # Distance calculations
-        add_log("Calculating spatial vs intensity distances...")
-        norm_msi_matrix <- t(as.matrix(spectra(norm_msi_binned)))
-        coords_df <- coord(norm_msi_binned)
-        norm_msi_matrix <- cbind(
-          x = coords_df$x,
-          y = coords_df$y,
-          norm_msi_matrix
+      # Generate plots
+      add_log("Generating visualization plots...")
+
+      # Top 3 m/z plots (RAW)
+      var_intensity <- apply(spec_mat, 1, var, na.rm = TRUE)
+      top3_idx <- order(var_intensity, decreasing = TRUE)[1:3]
+      top3_mz <- mz(msi_data_binned)[top3_idx]
+
+      # Top 3 m/z plots (NORMALIZED selection)
+      norm_var_intensity <- apply(spec_mat_tic, 1, var, na.rm = TRUE)
+      norm_top3_idx <- order(norm_var_intensity, decreasing = TRUE)[1:3]
+      norm_top3_mz <- mz(msi_data_binned)[norm_top3_idx]
+
+      vizi_style("dark")
+
+      create_raw_plot <- function() {
+        image(
+          msi_data_binned,
+          mz = top3_mz,
+          superpose = TRUE,
+          contrast.enhance = "suppress",
+          normalize.image = "linear",
+          col = c("blue", "red", "green")
         )
-        
+      }
+      plot_top3_raw(create_raw_plot)
+
+      # NB: vi plotter stadig fra msi_data_binned, men top3-mz er valgt ud fra TIC-normaliserede intensiteter
+      create_norm_plot <- function() {
+        image(
+          msi_data_binned,
+          mz = norm_top3_mz,
+          superpose = TRUE,
+          contrast.enhance = "suppress",
+          normalize.image = "linear",
+          col = c("blue", "red", "green")
+        )
+      }
+      plot_top3_norm(create_norm_plot)
+
+      # Distance calculations baseret på TIC-normaliseret matrix
+      add_log("Calculating spatial vs intensity distances...")
+
+      norm_msi_matrix <- t(spec_mat_tic)  # pixels x features
+      coords_df <- coord(msi_data_binned)
+
+      norm_msi_matrix <- cbind(
+        x = coords_df$x,
+        y = coords_df$y,
+        norm_msi_matrix
+      )
         n_pairs <- 10000
         n <- nrow(norm_msi_matrix)
         
