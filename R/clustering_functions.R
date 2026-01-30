@@ -97,30 +97,34 @@ run_vsclust <- function(full_df, k = 3, normalize_method = c("none", "tic", "med
 
   normalize_method <- match.arg(normalize_method)
 
-  # Drop runNames for clustering input (keep x,y)
+  # Drop runNames, but keep x/y available in full_df for plotting later
   msi_df_clust <- full_df[, !names(full_df) %in% "runNames", drop = FALSE]
 
+  mz_cols <- grep("^mz_", names(msi_df_clust), value = TRUE)
+  if (length(mz_cols) == 0) stop("run_vsclust(): No mz_ columns found.")
+
+  # Normalize only signal columns (pixel-wise), do not include x/y in clustering input
   if (normalize_method != "none") {
-    mz_cols <- grep("^mz_", names(msi_df_clust), value = TRUE)
     df_norm <- normalize_pixels(
       data = msi_df_clust,
       signal_cols = mz_cols,
       spatial_cols = c("x", "y"),
       method = normalize_method
     )
-
-    # ensure same columns/order as msi_df_clust (x,y + mz_)
-    msi_df_clust <- df_norm
+    # take only signal columns for VSClust
+    X_vs <- as.matrix(df_norm[, mz_cols, drop = FALSE])
+  } else {
+    X_vs <- as.matrix(msi_df_clust[, mz_cols, drop = FALSE])
   }
 
   fuzz <- determine_fuzz(
-    dims = dim(msi_df_clust),
+    dims = dim(X_vs),
     NClust = k,
     Sds = Sds
   )
 
   vsclust_alg <- vsclust_algorithm(
-    msi_df_clust,
+    X_vs,
     centers = k,
     iterMax = 100,
     m = fuzz$m
