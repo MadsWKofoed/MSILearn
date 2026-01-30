@@ -571,6 +571,18 @@ processing_module_server <- function(id) {
         
        # Lav og gem normaliseret version
         add_log("Normalizing binned data (TIC)...")
+
+        spec_mat <- as.matrix(spectra(msi_data_binned))
+        tic <- colSums(spec_mat, na.rm = TRUE)
+
+        bad <- which(!is.finite(tic) | tic <= 0)
+
+        if (length(bad) > 0) {
+          # sæt disse pixels til 0 så normalize(tic) ikke giver NaN/Inf
+          spec_mat[, bad] <- 0
+          spectra(msi_data_binned) <- spec_mat
+        }
+
         norm_msi_binned <- normalize(msi_data_binned, method = "tic") %>%
           process()
 
