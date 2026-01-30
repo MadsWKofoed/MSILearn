@@ -21,10 +21,16 @@ clustering_module_ui <- function(id) {
                           choices = c("K-means", "VSClust")),
 
                 # Normalization selection
-                selectInput(ns("normalize"), "Normalization:", 
-                          choices = c("None" = "none",
-                                    "Log transform" = "log",
-                                    "Scale (z-score)" = "scale")),
+                selectInput(
+                  ns("normalize"),
+                  "Normalization:",
+                  choices = c(
+                    "None" = "none",
+                    "TIC (row sum)" = "tic",
+                    "Median (row median)" = "median",
+                    "RMS (row RMS)" = "rms"
+                  )
+                ),
 
                 # Number of clusters (fælles for begge metoder)
                 numericInput(ns("clusters"), "Number of clusters:", 

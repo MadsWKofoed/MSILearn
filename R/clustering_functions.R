@@ -1,5 +1,45 @@
 # R/clustering_functions.R
 
+# Pixel-wise normalization (TIC/median/RMS) on signal columns only
+normalize_pixels <- function(
+  data,
+  signal_cols,
+  spatial_cols = c("x", "y"),
+  method = c("tic", "median", "rms"),
+  na.rm = TRUE
+) {
+  method <- match.arg(method)
+
+  signal_cols <- intersect(signal_cols, names(data))
+  if (length(signal_cols) == 0) stop("normalize_pixels(): 'signal_cols' matches no columns in data.")
+
+  spatial_keep <- intersect(spatial_cols, names(data))
+
+  X_signal <- as.matrix(data[, signal_cols, drop = FALSE])
+  storage.mode(X_signal) <- "numeric"
+
+  X_spatial <- if (length(spatial_keep) > 0) {
+    data[, spatial_keep, drop = FALSE]
+  } else {
+    data.frame()
+  }
+
+  denom <- switch(
+    method,
+    tic = rowSums(X_signal, na.rm = na.rm),
+    median = apply(X_signal, 1, median, na.rm = na.rm),
+    rms = sqrt(rowMeans(X_signal^2, na.rm = na.rm))
+  )
+
+  denom[denom == 0] <- NA_real_
+
+  X_signal_norm <- sweep(X_signal, 1, denom, "/")
+
+  out <- cbind(X_spatial, as.data.frame(X_signal_norm, check.names = FALSE))
+  out
+}
+
+
 # Normalization function
 normalize_pixels_wrapper <- function(data, method = c("none", "tic", "median", "rms"),
                                      signal_prefix = "^mz_", spatial_cols = c("x", "y"),
@@ -21,54 +61,77 @@ normalize_pixels_wrapper <- function(data, method = c("none", "tic", "median", "
 }
 
 # K-means clustering
-run_kmeans <- function(full_df, k = 3, normalize_method = "none") {
-  feature_matrix <- as.matrix(full_df[, grep("^mz_", colnames(full_df))])
-  
-  # Apply normalization
-  feature_matrix <- normalize_data(feature_matrix, normalize_method)
-  
-  # Run clustering
+run_kmeans <- function(full_df, k = 3, normalize_method = c("none", "tic", "median", "rms")) {
+  normalize_method <- match.arg(normalize_method)
+
+  mz_cols <- grep("^mz_", colnames(full_df), value = TRUE)
+  if (length(mz_cols) == 0) stop("run_kmeans(): No mz_ columns found.")
+
+  df_norm <- if (normalize_method == "none") {
+    full_df
+  } else {
+    df_norm_part <- normalize_pixels_wrapper(
+      data = full_df,
+      method = normalize_method,
+      signal_prefix = "^mz_",
+      spatial_cols = c("x", "y")
+    )
+
+    # Merge normalized mz_ back onto original full_df (keeping other cols like runNames)
+    full_df_out <- full_df
+    full_df_out[, mz_cols] <- df_norm_part[, mz_cols, drop = FALSE]
+    full_df_out
+  }
+
+  feature_matrix <- as.matrix(df_norm[, mz_cols, drop = FALSE])
   km <- kmeans(feature_matrix, centers = k, nstart = 25)
-  
-  # Assign clusters to original dataframe
-  full_df$cluster <- km$cluster
-  full_df
+
+  df_norm$cluster <- km$cluster
+  df_norm
 }
 
 # VSClust clustering
-run_vsclust <- function(full_df, k = 3, normalize_method = "scale", 
+
+run_vsclust <- function(full_df, k = 3, normalize_method = c("none", "tic", "median", "rms"),
                         Sds = 1.3, minMem = 0.5) {
-  
-  # Remove RunName column (keep x, y coordinates)
-  msi_df_clust <- full_df[, !names(full_df) %in% "runNames"]
-  
-  # Apply normalization
-  msi_df_clust <- normalize_data(msi_df_clust, normalize_method)
-  
-  # Determine fuzziness parameter
+
+  normalize_method <- match.arg(normalize_method)
+
+  # Drop runNames for clustering input (keep x,y)
+  msi_df_clust <- full_df[, !names(full_df) %in% "runNames", drop = FALSE]
+
+  if (normalize_method != "none") {
+    mz_cols <- grep("^mz_", names(msi_df_clust), value = TRUE)
+    df_norm <- normalize_pixels(
+      data = msi_df_clust,
+      signal_cols = mz_cols,
+      spatial_cols = c("x", "y"),
+      method = normalize_method
+    )
+
+    # ensure same columns/order as msi_df_clust (x,y + mz_)
+    msi_df_clust <- df_norm
+  }
+
   fuzz <- determine_fuzz(
     dims = dim(msi_df_clust),
     NClust = k,
     Sds = Sds
   )
-  
-  # Run vsclust algorithm
+
   vsclust_alg <- vsclust_algorithm(
     msi_df_clust,
     centers = k,
     iterMax = 100,
     m = fuzz$m
   )
-  
-  # Store membership matrix in original dataframe
+
   membership_cols <- paste0("membership_", seq_len(k))
   full_df[, membership_cols] <- vsclust_alg$membership
-  full_df$max_membership <- rowMaxs(vsclust_alg$membership)
+  full_df$max_membership <- matrixStats::rowMaxs(vsclust_alg$membership)
   full_df$raw_cluster <- vsclust_alg$cluster
-  
-  # Apply minMem threshold to get corrected clusters
+
   full_df <- apply_minmem_threshold(full_df, minMem)
-  
   full_df
 }
 
