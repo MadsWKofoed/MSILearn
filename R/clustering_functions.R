@@ -1,26 +1,23 @@
 # R/clustering_functions.R
 
-# Normalization functions
-normalize_data <- function(feature_matrix, method = "none") {
-  if (method == "none") {
-    return(feature_matrix)
-  }
+# Normalization function
+normalize_pixels_wrapper <- function(data, method = c("none", "tic", "median", "rms"),
+                                     signal_prefix = "^mz_", spatial_cols = c("x", "y"),
+                                     na.rm = TRUE) {
+  method <- match.arg(method)
   
-  normalized <- switch(method,
-    "log" = {
-      log_matrix <- log1p(feature_matrix)
-      log_matrix[is.na(log_matrix)] <- 0
-      log_matrix
-    },
-    "scale" = {
-      scaled_matrix <- scale(feature_matrix)
-      scaled_matrix[is.infinite(scaled_matrix) | is.na(scaled_matrix)] <- 0
-      scaled_matrix
-    },
-    feature_matrix  # fallback
+  if (method == "none") return(data)
+  
+  signal_cols <- grep(signal_prefix, names(data), value = TRUE)
+  if (length(signal_cols) == 0) stop("No signal columns found (expected columns matching '^mz_').")
+  
+  normalize_pixels(
+    data = data,
+    signal_cols = signal_cols,
+    spatial_cols = spatial_cols,
+    method = method,
+    na.rm = na.rm
   )
-  
-  normalized
 }
 
 # K-means clustering
