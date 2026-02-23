@@ -18,7 +18,7 @@ clustering_module_ui <- function(id) {
                
                h4("Clustering Configuration"),
                 selectInput(ns("method"), "Clustering method:", 
-                          choices = c("K-means", "VSClust")),
+                          choices = c("K-means", "VSClust", "MSIClust")),
 
                 # Normalization selection
                 selectInput(
@@ -259,6 +259,18 @@ clustering_module_server <- function(id, msi_con) {
                       value = 0.5, min = 0.1, max = 1, step = 0.01),
           helpText("VSClust uses fuzzy clustering with membership scores")
         )
+      } else if (input$method == "MSIClust") {
+        tagList(
+          numericInput(ns("cor_radius"), "Correlation radius (pixels):",
+                      value = 1, min = 1, max = 5, step = 1),
+          numericInput(ns("cor_scale"), "Correlation scale factor:",
+                      value = 25, min = 1, max = 100, step = 1),
+          numericInput(ns("cor_cores"), "Parallel cores:",
+                      value = 1, min = 1, max = parallel::detectCores() - 1, step = 1),
+          numericInput(ns("minMem"), "Minimum membership:", 
+                      value = 0.5, min = 0.1, max = 1, step = 0.01),
+          helpText("MSIClust uses spatial correlation to set per-pixel fuzzifiers")
+        )
       }
     })
 
@@ -282,7 +294,7 @@ clustering_module_server <- function(id, msi_con) {
         clustered <- switch(input$method,
           "K-means" = {
             current_method("K-means")
-            vsclust_membership_data(NULL)  # Clear membership data
+            vsclust_membership_data(NULL)
             run_kmeans(df, 
                       k = input$clusters, 
                       normalize_method = input$normalize)
@@ -294,8 +306,18 @@ clustering_module_server <- function(id, msi_con) {
                       normalize_method = input$normalize,
                       Sds = input$Sds %||% 1.3,
                       minMem = input$minMem %||% 0.5)
-            
-            # Store membership data for later re-thresholding
+            vsclust_membership_data(result)
+            result
+          },
+          "MSIClust" = {
+            current_method("MSIClust")
+            result <- run_msiclust(df,
+                      k = input$clusters,
+                      normalize_method = input$normalize,
+                      cor_radius = input$cor_radius %||% 1,
+                      cor_scale = input$cor_scale %||% 25,
+                      cor_cores = input$cor_cores %||% 1,
+                      minMem = input$minMem %||% 0.5)
             vsclust_membership_data(result)
             result
           },
@@ -337,8 +359,8 @@ clustering_module_server <- function(id, msi_con) {
     })
     
     observeEvent(input$minMem, {
-      # Only react if VSClust was used and we have membership data
-      req(current_method() == "VSClust")
+      # Only react if VSClust or MSIClust was used and we have membership data
+      req(current_method() %in% c("VSClust", "MSIClust"))
       req(vsclust_membership_data())
       
       # Don't trigger during initial clustering run
