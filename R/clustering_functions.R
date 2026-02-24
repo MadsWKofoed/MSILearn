@@ -183,17 +183,10 @@ compute_neighbor_cor <- function(dat,
   xy <- as.matrix(dat[, c(x_col, y_col)])
   intens <- as.matrix(dat[, mz_cols])
   n <- nrow(dat)
-  p <- ncol(intens)
   
   # Build spatial lookup: key -> row index
   key_vec <- paste(xy[, 1], xy[, 2], sep = "_")
   index_lookup <- setNames(seq_len(n), key_vec)
-  
-  # Pre-compute row means and centered matrix
-  row_means <- rowMeans(intens, na.rm = TRUE)
-  intens_c <- intens - row_means                          # centered
-  row_ss <- sqrt(rowSums(intens_c^2, na.rm = TRUE))       # sqrt(sum of squares)
-  row_ss[row_ss == 0] <- NA_real_                          # avoid 0/0
   
   # Generate all offset vectors within radius r (excluding origin)
   offsets <- as.matrix(expand.grid(
@@ -206,19 +199,15 @@ compute_neighbor_cor <- function(dat,
   offset_step <- pmax(abs(offsets[, 1]), abs(offsets[, 2]))
   offset_weight <- 1 / offset_step
   
-  # For each offset direction, find which pixels have a neighbor there
-  # and compute correlation in one vectorized pass
   weighted_cor_sum <- numeric(n)
   weight_sum <- numeric(n)
   
   for (k in seq_len(nrow(offsets))) {
-    # Neighbor coordinates
     nx <- xy[, 1] + offsets[k, 1]
     ny <- xy[, 2] + offsets[k, 2]
     nkey <- paste(nx, ny, sep = "_")
     
-    # Lookup neighbor indices
-    j <- index_lookup[nkey]  # NA if neighbor doesn't exist
+    j <- index_lookup[nkey]
     has_neighbor <- !is.na(j)
     
     if (!any(has_neighbor)) next
@@ -226,14 +215,33 @@ compute_neighbor_cor <- function(dat,
     idx_i <- which(has_neighbor)
     idx_j <- j[has_neighbor]
     
-    # Vectorized Pearson correlation between pixel i and neighbor j:
-    # cor(i,j) = sum(centered_i * centered_j) / (ss_i * ss_j)
-    # This is a row-wise dot product of centered vectors
-    dot <- rowSums(intens_c[idx_i, , drop = FALSE] * intens_c[idx_j, , drop = FALSE], na.rm = TRUE)
-    denom <- row_ss[idx_i] * row_ss[idx_j]
+    # Per-pair Pearson correlation, matching cor(v, z, use="pairwise.complete.obs")
+    mat_i <- intens[idx_i, , drop = FALSE]
+    mat_j <- intens[idx_j, , drop = FALSE]
     
-    cors <- dot / denom
-    cors[!is.finite(cors)] <- NA_real_
+    # Pairwise: exclude positions where either is NA
+    valid <- !is.na(mat_i) & !is.na(mat_j)
+    
+    # Replace invalid with NA so they don't contribute
+    mat_i[!valid] <- NA
+    mat_j[!valid] <- NA
+    
+    # Per-row means (only over valid pairs)
+    n_valid <- rowSums(valid)
+    mean_i <- rowSums(mat_i, na.rm = TRUE) / n_valid
+    mean_j <- rowSums(mat_j, na.rm = TRUE) / n_valid
+    
+    # Center
+    mat_i_c <- mat_i - mean_i
+    mat_j_c <- mat_j - mean_j
+    
+    # Dot product and norms
+    dot <- rowSums(mat_i_c * mat_j_c, na.rm = TRUE)
+    ss_i <- sqrt(rowSums(mat_i_c^2, na.rm = TRUE))
+    ss_j <- sqrt(rowSums(mat_j_c^2, na.rm = TRUE))
+    
+    cors <- dot / (ss_i * ss_j)
+    cors[!is.finite(cors) | n_valid < 3] <- NA_real_
     
     w <- offset_weight[k]
     ok <- !is.na(cors)
