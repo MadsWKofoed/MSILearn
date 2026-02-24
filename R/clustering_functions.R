@@ -168,7 +168,7 @@ apply_minmem_threshold <- function(df, minMem = 0.5) {
 }
 
 
-# Compute distance-weighted neighbor correlation per pixel
+# Fast vectorized neighbor correlation
 compute_neighbor_cor <- function(dat,
                                  x_col = "x",
                                  y_col = "y",
@@ -182,63 +182,69 @@ compute_neighbor_cor <- function(dat,
   
   xy <- as.matrix(dat[, c(x_col, y_col)])
   intens <- as.matrix(dat[, mz_cols])
-  
-  key_vec <- paste(xy[, 1], xy[, 2], sep = "_")
-  index_lookup <- setNames(seq_len(nrow(dat)), key_vec)
-  
-  neighbor_idx_fun <- function(i, xy, r, index_lookup) {
-    x <- xy[i, 1]; y <- xy[i, 2]
-    grid <- expand.grid(
-      xx = (x - r):(x + r),
-      yy = (y - r):(y + r)
-    )
-    coords <- as.matrix(grid)
-    coords <- coords[!(coords[, 1] == x & coords[, 2] == y), , drop = FALSE]
-    keys <- paste(coords[, 1], coords[, 2], sep = "_")
-    idx <- index_lookup[keys]
-    ok <- !is.na(idx)
-    if (!any(ok)) return(list(idx = integer(0), step = integer(0)))
-    coords_ok <- coords[ok, , drop = FALSE]
-    idx_ok <- as.integer(idx[ok])
-    dx <- abs(coords_ok[, 1] - x)
-    dy <- abs(coords_ok[, 2] - y)
-    step <- pmax(dx, dy)
-    list(idx = idx_ok, step = step)
-  }
-  
-  pixel_cor_fun <- function(i, xy, intens, r, index_lookup) {
-    nei <- neighbor_idx_fun(i, xy, r, index_lookup)
-    if (length(nei$idx) == 0) return(NA_real_)
-    v <- intens[i, ]
-    mats <- intens[nei$idx, , drop = FALSE]
-    cors <- apply(mats, 1, function(z) cor(v, z, use = "pairwise.complete.obs"))
-    w <- 1 / (nei$step)
-    ok <- !is.na(cors) & !is.na(w) & is.finite(w)
-    if (!any(ok)) return(NA_real_)
-    sum(w[ok] * cors[ok]) / sum(w[ok])
-  }
-  
   n <- nrow(dat)
+  p <- ncol(intens)
   
-  if (cores > 1) {
-    cl <- parallel::makeCluster(cores)
-    on.exit(parallel::stopCluster(cl))
-    parallel::clusterExport(
-      cl,
-      varlist = c("xy", "intens", "index_lookup",
-                  "neighbor_idx_fun", "pixel_cor_fun", "r"),
-      envir = environment()
-    )
-    avg_cor <- parallel::parSapply(
-      cl, X = seq_len(n), FUN = pixel_cor_fun,
-      xy = xy, intens = intens, r = r, index_lookup = index_lookup
-    )
-  } else {
-    avg_cor <- sapply(
-      seq_len(n), pixel_cor_fun,
-      xy = xy, intens = intens, r = r, index_lookup = index_lookup
-    )
+  # Build spatial lookup: key -> row index
+  key_vec <- paste(xy[, 1], xy[, 2], sep = "_")
+  index_lookup <- setNames(seq_len(n), key_vec)
+  
+  # Pre-compute row means and centered matrix
+  row_means <- rowMeans(intens, na.rm = TRUE)
+  intens_c <- intens - row_means                          # centered
+  row_ss <- sqrt(rowSums(intens_c^2, na.rm = TRUE))       # sqrt(sum of squares)
+  row_ss[row_ss == 0] <- NA_real_                          # avoid 0/0
+  
+  # Generate all offset vectors within radius r (excluding origin)
+  offsets <- as.matrix(expand.grid(
+    dx = (-r):r,
+    dy = (-r):r
+  ))
+  offsets <- offsets[!(offsets[, 1] == 0 & offsets[, 2] == 0), , drop = FALSE]
+  
+  # Chebyshev distance for each offset (= weight denominator)
+  offset_step <- pmax(abs(offsets[, 1]), abs(offsets[, 2]))
+  offset_weight <- 1 / offset_step
+  
+  # For each offset direction, find which pixels have a neighbor there
+  # and compute correlation in one vectorized pass
+  weighted_cor_sum <- numeric(n)
+  weight_sum <- numeric(n)
+  
+  for (k in seq_len(nrow(offsets))) {
+    # Neighbor coordinates
+    nx <- xy[, 1] + offsets[k, 1]
+    ny <- xy[, 2] + offsets[k, 2]
+    nkey <- paste(nx, ny, sep = "_")
+    
+    # Lookup neighbor indices
+    j <- index_lookup[nkey]  # NA if neighbor doesn't exist
+    has_neighbor <- !is.na(j)
+    
+    if (!any(has_neighbor)) next
+    
+    idx_i <- which(has_neighbor)
+    idx_j <- j[has_neighbor]
+    
+    # Vectorized Pearson correlation between pixel i and neighbor j:
+    # cor(i,j) = sum(centered_i * centered_j) / (ss_i * ss_j)
+    # This is a row-wise dot product of centered vectors
+    dot <- rowSums(intens_c[idx_i, , drop = FALSE] * intens_c[idx_j, , drop = FALSE], na.rm = TRUE)
+    denom <- row_ss[idx_i] * row_ss[idx_j]
+    
+    cors <- dot / denom
+    cors[!is.finite(cors)] <- NA_real_
+    
+    w <- offset_weight[k]
+    ok <- !is.na(cors)
+    
+    weighted_cor_sum[idx_i[ok]] <- weighted_cor_sum[idx_i[ok]] + w * cors[ok]
+    weight_sum[idx_i[ok]] <- weight_sum[idx_i[ok]] + w
   }
+  
+  avg_cor <- rep(NA_real_, n)
+  has_any <- weight_sum > 0
+  avg_cor[has_any] <- weighted_cor_sum[has_any] / weight_sum[has_any]
   
   avg_cor
 }
