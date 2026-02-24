@@ -247,7 +247,7 @@ load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
                                       resolution = NULL,
                                       db_name   = "MSI_database",
                                       mongo_url = "mongodb://localhost:27018",
-                                      memory    = FALSE,
+                                      memory    = TRUE,
                                       workdir   = NULL,
                                       verbose   = TRUE) {
   if (verbose) message("[load] sample='", sample_name, "', stage='", stage_type, "'")
