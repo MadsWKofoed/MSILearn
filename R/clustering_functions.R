@@ -251,40 +251,58 @@ run_msiclust <- function(full_df, k = 3,
                          minMem = 0.5) {
   
   normalize_method <- match.arg(normalize_method)
+  t0 <- Sys.time()
   
   mz_cols <- grep("^mz_", names(full_df), value = TRUE)
   if (length(mz_cols) == 0) stop("run_msiclust(): No mz_ columns found.")
+  
+  message(sprintf("[MSIClust] Start: %d pixels, %d features, k=%d, norm=%s, r=%d, cores=%d",
+                  nrow(full_df), length(mz_cols), k, normalize_method, cor_radius, cor_cores))
   
   # --- 1) Prepare data for correlation (x, y + mz_ only) ---
   cor_input_cols <- c("x", "y", mz_cols)
   cor_data <- full_df[, intersect(cor_input_cols, names(full_df)), drop = FALSE]
   
   # --- 2) Compute per-pixel neighbor correlation ---
+  message("[MSIClust] Computing neighbor correlations...")
+  t1 <- Sys.time()
+  
   cor_data$avg_corr_neighbors <- compute_neighbor_cor(
     dat = cor_data, x_col = "x", y_col = "y",
     mz_cols = mz_cols, r = cor_radius, cores = cor_cores
   )
+  
+  t2 <- Sys.time()
+  message(sprintf("[MSIClust] Neighbor correlations done (%.1f sec)", as.numeric(t2 - t1, units = "secs")))
+  
   cor_data$inv_cor <- 1 - cor_data$avg_corr_neighbors
   inv_cor_scaled <- cor_data$inv_cor * cor_scale
   
   # --- 3) Remove pixels with no neighbors ---
   has_neighbors <- !is.na(cor_data$avg_corr_neighbors)
+  n_removed <- sum(!has_neighbors)
   cor_data <- cor_data[has_neighbors, ]
   inv_cor_scaled <- inv_cor_scaled[has_neighbors]
   
-  # Also subset full_df to matching pixels
   key_full <- paste(full_df$x, full_df$y)
   key_cor <- paste(cor_data$x, cor_data$y)
   full_df <- full_df[key_full %in% key_cor, ]
   
+  if (n_removed > 0) message(sprintf("[MSIClust] Removed %d pixels with no neighbors", n_removed))
+  
   # --- 4) Normalize signal columns (pixel-wise) ---
   if (normalize_method != "none") {
+    message(sprintf("[MSIClust] Normalizing (%s)...", normalize_method))
+    t3 <- Sys.time()
+    
     cor_data_norm_xy <- normalize_pixels_wrapper(
       data = cor_data[, c("x", "y", mz_cols), drop = FALSE],
       method = normalize_method,
       signal_prefix = "^mz_",
       spatial_cols = c("x", "y")
     )
+    
+    message(sprintf("[MSIClust] Normalization done (%.1f sec)", as.numeric(Sys.time() - t3, units = "secs")))
   } else {
     cor_data_norm_xy <- cor_data[, c("x", "y", mz_cols), drop = FALSE]
   }
@@ -293,19 +311,31 @@ run_msiclust <- function(full_df, k = 3,
   X_clust <- as.matrix(cor_data_norm_xy[, mz_cols, drop = FALSE])
   
   # --- 6) Determine per-pixel fuzzifier ---
+  message("[MSIClust] Computing fuzzifiers...")
+  t4 <- Sys.time()
+  
   fuzz <- determine_fuzz(
     dims = dim(X_clust),
     NClust = k,
     Sds = inv_cor_scaled
   )
   
+  message(sprintf("[MSIClust] Fuzzifiers done (%.1f sec), m range: [%.2f, %.2f]",
+                  as.numeric(Sys.time() - t4, units = "secs"),
+                  min(fuzz$m), max(fuzz$m)))
+  
   # --- 7) Run VSClust algorithm with per-pixel fuzzifiers ---
+  message("[MSIClust] Running vsclust_algorithm...")
+  t5 <- Sys.time()
+  
   msiclust_alg <- vsclust_algorithm(
     X_clust,
     centers = k,
     iterMax = 100,
     m = fuzz$m
   )
+  
+  message(sprintf("[MSIClust] vsclust_algorithm done (%.1f sec)", as.numeric(Sys.time() - t5, units = "secs")))
   
   # --- 8) Assign results back to full_df ---
   membership_cols <- paste0("membership_", seq_len(k))
@@ -314,5 +344,11 @@ run_msiclust <- function(full_df, k = 3,
   full_df$raw_cluster <- msiclust_alg$cluster
   
   full_df <- apply_minmem_threshold(full_df, minMem)
+  
+  n_no <- sum(full_df$cluster == "No_cluster")
+  message(sprintf("[MSIClust] Complete: %.1f sec total, %d/%d pixels assigned (minMem=%.2f)",
+                  as.numeric(Sys.time() - t0, units = "secs"),
+                  nrow(full_df) - n_no, nrow(full_df), minMem))
+  
   full_df
 }
