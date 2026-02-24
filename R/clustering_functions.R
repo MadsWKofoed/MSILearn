@@ -241,7 +241,7 @@ compute_neighbor_cor <- function(dat,
     ss_j <- sqrt(rowSums(mat_j_c^2, na.rm = TRUE))
     
     cors <- dot / (ss_i * ss_j)
-    cors[!is.finite(cors) | n_valid < 3] <- NA_real_
+    cors[!is.finite(cors) | n_valid < 2] <- NA_real_
     
     w <- offset_weight[k]
     ok <- !is.na(cors)
