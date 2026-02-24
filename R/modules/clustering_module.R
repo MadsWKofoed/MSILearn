@@ -265,8 +265,6 @@ clustering_module_server <- function(id, msi_con) {
                       value = 1, min = 1, max = 5, step = 1),
           numericInput(ns("cor_scale"), "Correlation scale factor:",
                       value = 25, min = 1, max = 100, step = 1),
-          numericInput(ns("cor_cores"), "Parallel cores:",
-                      value = 1, min = 1, max = parallel::detectCores() - 1, step = 1),
           numericInput(ns("minMem"), "Minimum membership:", 
                       value = 0.5, min = 0.1, max = 1, step = 0.01),
           helpText("MSIClust uses spatial correlation to set per-pixel fuzzifiers")
@@ -316,7 +314,7 @@ clustering_module_server <- function(id, msi_con) {
                       normalize_method = input$normalize,
                       cor_radius = input$cor_radius %||% 1,
                       cor_scale = input$cor_scale %||% 25,
-                      cor_cores = input$cor_cores %||% 1,
+                      cor_cores = max(parallel::detectCores() - 1, 1),
                       minMem = input$minMem %||% 0.5)
             vsclust_membership_data(result)
             result
