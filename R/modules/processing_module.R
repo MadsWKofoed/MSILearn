@@ -658,7 +658,9 @@ processing_module_server <- function(id) {
         
         intens <- norm_msi_matrix[, -c(1:2), drop = FALSE]
         cosine_distance <- function(a, b) {
-          sim <- sum(a * b) / (sqrt(sum(a^2)) * sqrt(sum(b^2)))
+          denom <- sqrt(sum(a^2)) * sqrt(sum(b^2))
+          if (denom == 0) return(NA_real_)
+          sim <- sum(a * b) / denom
           return(1 - sim)
         }
         
@@ -678,10 +680,10 @@ processing_module_server <- function(id) {
           mutate(bin = cut(space_distance, breaks = nbins)) %>%
           group_by(bin) %>%
           summarise(
-            space_mid = mean(space_distance),
-            int_median = median(intensity_distance),
-            int_q25 = quantile(intensity_distance, 0.25),
-            int_q75 = quantile(intensity_distance, 0.75),
+            space_mid = mean(space_distance, na.rm = TRUE),
+            int_median = median(intensity_distance, na.rm = TRUE),
+            int_q25 = quantile(intensity_distance, 0.25, na.rm = TRUE),
+            int_q75 = quantile(intensity_distance, 0.75, na.rm = TRUE),
             .groups = "drop"
           )
         
