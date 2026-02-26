@@ -1,29 +1,19 @@
 # R/processing_functions.R
 
 process_import_and_summary <- function(imzml_path, ibd_path, imzml_name, run_id) {
-  base      <- tools::file_path_sans_ext(basename(imzml_name))
-  temp_dir  <- tempfile(); dir.create(temp_dir)
-  on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
-
+  base <- tools::file_path_sans_ext(basename(imzml_name))
+  temp_dir <- tempfile(); dir.create(temp_dir)
   temp_imzml <- file.path(temp_dir, paste0(base, ".imzML"))
   temp_ibd   <- file.path(temp_dir, paste0(base, ".ibd"))
   file.copy(imzml_path, temp_imzml, overwrite = TRUE)
-  file.copy(ibd_path,   temp_ibd,   overwrite = TRUE)
-
+  file.copy(ibd_path, temp_ibd, overwrite = TRUE)
+  
   message("Reading MSI data...")
-  msi_data <- Cardinal::readMSIData(        # <-- was readImzML()
-    temp_imzml,
-    memory     = FALSE,
-    check      = FALSE,
-    mass.range = NULL,
-    resolution = 10,
-    units      = "ppm",
-    guess.max  = 1000L,
-    as         = "auto",
-    parse.only = FALSE,
-    verbose    = Cardinal::getCardinalVerbose(),
-    BPPARAM    = BiocParallel::bpparam()
-  )
+  msi_data <- readImzML(temp_imzml, memory = FALSE, check = FALSE,
+                        mass.range = NULL, resolution = 10, units = c("ppm"),
+                        guess.max = 1000L, as = "auto", parse.only=FALSE,
+                        verbose = getCardinalVerbose(), chunkopts = list(),
+                        BPPARAM = bpparam())
   
   save_stage_to_mongo(msi_data, run_id, "raw", 
                       sample_name = imzml_name)

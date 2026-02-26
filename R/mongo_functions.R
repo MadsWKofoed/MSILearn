@@ -136,146 +136,203 @@ load_raw_object_from_mongo <- function(sample_name, workdir,
 }
 
 
-# ===== CARDINAL OBJECT SAVE/LOAD AS RDS =====
+# ===== CARDINAL MSI OBJECT SAVE/LOAD (with .ibd handling) =====
 
-# Materialize a Cardinal object: forces lazy pipeline, severs .ibd dependency
-materialize_cardinal <- function(obj) {
-  # Force all pending lazy operations
-  obj <- Cardinal::process(obj)
-
-  # Extract components using Cardinal 3.x API
-  spec_matrix <- as.matrix(Cardinal::spectra(obj))   # features × pixels
-  mz_vals     <- Cardinal::mz(obj)
-  coords_df   <- Cardinal::coord(obj)                # data.frame with x, y (and optionally z)
-  run_vec     <- Cardinal::run(obj)                  # factor/character vector, length = ncols
-
-  # Rebuild as in-memory MSImagingExperiment (no .ibd file)
-  Cardinal::MSImagingExperiment(
-    spectraData = S4Vectors::SimpleList(intensity = spec_matrix),
-    featureData = Cardinal::MassDataFrame(mz = mz_vals),
-    pixelData   = Cardinal::PositionDataFrame(
-      coord = coords_df,
-      run   = run_vec
-    )
-  )
-}
-
-
-save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type,
+save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type, 
                                     sample_name,
-                                    params   = list(),
-                                    db_name  = "MSI_database",
+                                    params = list(),
+                                    db_name = "MSI_database",
                                     mongo_url = "mongodb://localhost:27018") {
-
-  # Dedup check
-  if (stage_type %in% c("control_mean", "snr_reference", "mean_snr_reference")) {
-    mongo_meta <- mongo(collection = "processing_artifacts_metadata",
+  
+  # Check for duplicates (control_mean and snr_reference only)
+  if (stage_type %in% c("control_mean", "snr_reference")) {
+    mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                         db = db_name, url = mongo_url)
-    query_list <- list(sample_name = sample_name, stage_type = stage_type)
-    if (!is.null(params$resolution)) query_list$resolution <- as.numeric(params$resolution)
-    if (!is.null(params$snr))        query_list$snr        <- as.numeric(params$snr)
-
-    existing <- mongo_meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
+    
+    query_list <- list(
+      sample_name = sample_name,
+      stage_type = stage_type
+    )
+    
+    # Add resolution for control_mean
+    if (stage_type == "control_mean" && !is.null(params$resolution)) {
+      query_list$resolution <- params$resolution
+    }
+    
+    # Add SNR for snr_reference
+    if (stage_type == "snr_reference" && !is.null(params$snr)) {
+      query_list$snr <- params$snr
+    }
+    
+    existing <- mongo_meta$find(
+      query = jsonlite::toJSON(query_list, auto_unbox = TRUE)
+    )
+    
     if (nrow(existing) > 0) {
-      message("⚠ '", stage_type, "' already exists. Skipping save.")
-      return(invisible(existing$gridfs_id[1]))
+      message("⚠ ", stage_type, " already exists with these parameters. Skipping save.")
+      return(invisible(existing$run_id[1]))
     }
   }
-
-  message("Materializing '", stage_type, "' for serialization...")
-  obj_materialized <- materialize_cardinal(msi_obj)
-
-  temp_path <- tempfile(pattern = paste0(stage_type, "_"), fileext = ".rds")
-  on.exit(unlink(temp_path), add = TRUE)
-
-  # compress = FALSE is ~3× faster for large matrices
-  saveRDS(obj_materialized, temp_path, compress = FALSE)
-  size_mb <- file.size(temp_path) / 1024^2
-  message(sprintf("  RDS size: %.1f MB", size_mb))
-
-  grid     <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  filename <- paste0(run_id, "_", stage_type, ".rds")
-  grid_result <- grid$upload(temp_path, name = filename)
-  grid_id  <- as.character(grid_result$id)
-
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata",
+  
+  # Create temp directory for Cardinal files
+  tmp_dir <- tempfile("imzml_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE))
+  
+  base_name <- paste0(run_id, "_", stage_type)
+  imzml_path <- file.path(tmp_dir, paste0(base_name, ".imzML"))
+  
+  # Write MSI object to imzML + ibd
+  message("Writing MSI stage to imzML format...")
+  writeMSIData(msi_obj, imzml_path, bundle = FALSE)
+  
+  # Upload both files to GridFS
+  fs <- gridfs(url = mongo_url, db = db_name, prefix = "fs")
+  
+  message("Uploading ", base_name, ".imzML to GridFS...")
+  imzml_result <- fs$upload(imzml_path, name = paste0(base_name, ".imzML"))
+  imzml_grid_id <- as.character(imzml_result$id)
+  
+  ibd_path <- file.path(tmp_dir, paste0(base_name, ".ibd"))
+  if (file.exists(ibd_path)) {
+    message("Uploading ", base_name, ".ibd to GridFS...")
+    ibd_result <- fs$upload(ibd_path, name = paste0(base_name, ".ibd"))
+    ibd_grid_id <- as.character(ibd_result$id)
+  } else {
+    warning("No .ibd file found for stage: ", stage_type)
+    ibd_grid_id <- NA_character_
+  }
+  
+  # Upload any .tsv files (feature/pixel metadata)
+  tsvs <- list.files(tmp_dir, pattern = "\\.tsv$", full.names = TRUE)
+  tsv_grid_ids <- list()
+  for (tsv_path in tsvs) {
+    tsv_name <- paste0(base_name, "_", basename(tsv_path))
+    message("Uploading ", tsv_name, " to GridFS...")
+    tsv_result <- fs$upload(tsv_path, name = tsv_name)
+    tsv_grid_ids[[basename(tsv_path)]] <- as.character(tsv_result$id)
+  }
+  
+  # Create metadata document
+  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
                       db = db_name, url = mongo_url)
-
-  metadata_row <- c(
-    list(
-      gridfs_id   = grid_id,
-      filename    = filename,
-      run_id      = run_id,
-      sample_name = sample_name,
-      stage_type  = stage_type,
-      created_at  = Sys.time(),
-      file_format = "rds"
-    ),
-    params
+  
+  metadata_row <- list(
+    gridfs_id = imzml_grid_id,
+    ibd_gridfs_id = ibd_grid_id,
+    filename = paste0(base_name, ".imzML"),
+    ibd_filename = paste0(base_name, ".ibd"),
+    run_id = run_id,
+    sample_name = sample_name,
+    stage_type = stage_type,
+    created_at = Sys.time(),
+    file_format = "imzML"
   )
+  
+  # Add TSV GridFS IDs if present
+  if (length(tsv_grid_ids) > 0) {
+    metadata_row$tsv_gridfs_ids <- tsv_grid_ids
+  }
+  
+  metadata_row <- c(metadata_row, params)
+  
   mongo_meta$insert(metadata_row)
-
-  message(sprintf("✓ Saved '%s' as RDS (%.1f MB, GridFS ID: %s)",
-                  stage_type, size_mb, grid_id))
-  invisible(grid_id)
+  
+  message("✓ Saved '", stage_type, "' (GridFS ID: ", imzml_grid_id, ")")
+  invisible(imzml_grid_id)
 }
 
 
-load_msi_stage_from_mongo <- function(sample_name, stage_type,
-                                      run_id     = NULL,
+load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL, 
                                       resolution = NULL,
-                                      snr        = NULL,
-                                      db_name    = "MSI_database",
-                                      mongo_url  = "mongodb://localhost:27018",
-                                      verbose    = TRUE) {
-
+                                      db_name   = "MSI_database",
+                                      mongo_url = "mongodb://localhost:27018",
+                                      memory    = FALSE,
+                                      workdir   = NULL,
+                                      verbose   = TRUE) {
   if (verbose) message("[load] sample='", sample_name, "', stage='", stage_type, "'")
 
-  meta <- mongo(collection = "processing_artifacts_metadata",
-                db = db_name, url = mongo_url)
+  meta <- mongolite::mongo(collection = "processing_artifacts_metadata",
+                           db = db_name, url = mongo_url)
 
-  query_list <- list(sample_name = sample_name, stage_type = stage_type,
-                     file_format = "rds")
-  if (!is.null(run_id))    query_list$run_id     <- run_id
+  query_list <- list(
+    sample_name = sample_name,
+    stage_type  = stage_type,
+    file_format = "imzML"
+  )
+  if (!is.null(run_id)) query_list$run_id <- run_id
   if (!is.null(resolution)) query_list$resolution <- as.numeric(resolution)
-  if (!is.null(snr))        query_list$snr        <- as.numeric(snr)
 
   artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
 
-  if (nrow(artifacts) == 0)
-    stop("No RDS artifact for sample='", sample_name, "', stage='", stage_type, "'")
+  if (nrow(artifacts) == 0) {
+    stop("No imzML artifact found for sample='", sample_name,
+         "', stage='", stage_type, "'.",
+          if (!is.null(resolution)) paste0("', resolution=", resolution) else "'", ".")
+  }
 
   if (nrow(artifacts) > 1) {
-    if (is.list(artifacts$created_at))
+    if (verbose) message("[load] Multiple artifacts found; selecting most recent")
+    if (is.list(artifacts$created_at)) {
       artifacts$created_at <- do.call(c, artifacts$created_at)
-    artifacts <- artifacts[order(artifacts$created_at, decreasing = TRUE), ]
+    }
+    ord <- order(artifacts$created_at, decreasing = TRUE, na.last = TRUE)
+    artifacts <- artifacts[ord, , drop = FALSE]
   }
   row <- artifacts[1, , drop = FALSE]
 
-  grid_id  <- as.character(row$gridfs_id[1])
-  filename <- as.character(row$filename[1])
-  if (verbose) message("[load] Downloading ", filename)
+  if (is.null(workdir)) {
+    workdir <- file.path(tempdir(),
+                         paste0("imzml_", gsub("[^A-Za-z0-9._-]+", "_",
+                                               paste0(sample_name, "_", stage_type))))
+  }
+  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
+  if (verbose) message("[load] workdir: ", workdir)
 
-  # Temp file cleaned immediately after readRDS
-  temp_path <- tempfile(fileext = ".rds")
-  on.exit(unlink(temp_path), add = TRUE)
+  fs <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
 
-  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  grid$download(filename, temp_path)
-  if (!file.exists(temp_path)) stop("Download failed: ", filename)
+  imzml_name <- as.character(row$filename[1])
+  ibd_name   <- as.character(row$ibd_filename[1])
 
-  obj <- readRDS(temp_path)
-  # temp_path deleted by on.exit
+  imzml_local <- file.path(workdir, imzml_name)
+  if (verbose) message("[load] Downloading ", imzml_name)
+  fs$download(name = imzml_name, path = imzml_local)
+  if (!file.exists(imzml_local)) stop("imzML download failed: ", imzml_local)
+
+  ibd_local <- NA_character_
+  if (!is.na(ibd_name) && nzchar(ibd_name)) {
+    ibd_local <- file.path(workdir, ibd_name)
+    if (verbose) message("[load] Downloading ", ibd_name)
+    fs$download(name = ibd_name, path = ibd_local)
+    if (!file.exists(ibd_local)) stop("ibd download failed: ", ibd_local)
+  } else {
+    warning("[load] No ibd filename in metadata for this stage; proceeding without it.")
+  }
+
+  # Download TSV files if present
+  if ("tsv_gridfs_ids" %in% names(row) && !is.null(row$tsv_gridfs_ids[[1]])) {
+    tsv_map <- row$tsv_gridfs_ids[[1]]
+    base_no_ext <- tools::file_path_sans_ext(imzml_name)
+    for (tsv_name in names(tsv_map)) {
+      stored_tsv <- paste0(base_no_ext, "_", tsv_name)
+      tsv_local  <- file.path(workdir, tsv_name)
+      if (verbose) message("[load] Downloading ", stored_tsv, " -> ", tsv_local)
+      try(fs$download(name = stored_tsv, path = tsv_local), silent = TRUE)
+    }
+  }
+
+  if (verbose) message("[load] Reading MSI with Cardinal (memory=", memory, ")")
+  obj <- Cardinal::readMSIData(imzml_local, memory = memory)
 
   if (verbose) {
-    tryCatch(
-      message(sprintf("[load] OK: %d pixels, %d features", ncol(obj), nrow(obj))),
-      error = function(e) NULL
-    )
+    try({
+      message(sprintf("[load] OK: pixels=%s, features=%s",
+                      ncol(obj), nrow(obj)))
+    }, silent = TRUE)
   }
-  obj
-}
 
+  return(obj)
+}
 
 
 
@@ -351,26 +408,45 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
 load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
                                   db_name = "MSI_database",
                                   mongo_url = "mongodb://localhost:27018") {
+  
   meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
-
-  query_list <- list(sample_name = sample_name, stage_type = stage_type)
-  if (!is.null(run_id)) query_list$run_id <- run_id
-
-  artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
-  if (nrow(artifacts) == 0)
+  
+  query_list <- list(
+    sample_name = sample_name,
+    stage_type = stage_type
+  )
+  
+  if (!is.null(run_id)) {
+    query_list$run_id <- run_id
+  }
+  
+  query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
+  artifacts <- meta$find(query)
+  
+  if (nrow(artifacts) == 0) {
     stop("No artifact found for sample=", sample_name, ", stage=", stage_type)
-
-  row  <- artifacts[nrow(artifacts), , drop = FALSE]
+  }
+  
+  # Use most recent
+  if (nrow(artifacts) > 1) {
+    message("Multiple artifacts found, using most recent")
+  }
+  row <- artifacts[nrow(artifacts), , drop = FALSE]
+  
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
   fname <- as.character(row$filename[1])
-
-  temp_path <- tempfile(fileext = ".rds")
-  on.exit(unlink(temp_path), add = TRUE)   # <-- was missing
-
+  
   message("Downloading ", fname, "...")
-  grid$download(fname, temp_path)
-
-  obj <- readRDS(temp_path)
+  temp_dir <- tempdir()
+  local_path <- file.path(temp_dir, fname)
+  
+  if (!file.exists(local_path)) {
+    grid$download(fname, local_path)
+  }
+  
+  message("Loading RDS...")
+  obj <- readRDS(local_path)
+  
   message("✓ Loaded stage: ", stage_type)
   obj
 }
@@ -412,20 +488,29 @@ query_artifacts <- function(sample_name = NULL,
 
 # --- Load artifact by gridfs_id ---
 load_artifact_by_id <- function(gridfs_id,
-                                db_name = "MSI_database",
+                                db_name = "MSI_database",  
                                 mongo_url = "mongodb://localhost:27018") {
+  
   grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-
+  
+  # Find file by _id
   query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
   file_info <- grid$find(query)
-  if (nrow(file_info) == 0) stop("GridFS file not found: ", gridfs_id)
-
-  filename  <- file_info$name[1]
-  temp_path <- tempfile(fileext = ".rds")
-  on.exit(unlink(temp_path), add = TRUE)
-
-  grid$download(filename, temp_path)
-  obj <- readRDS(temp_path)
+  
+  if (nrow(file_info) == 0) {
+    stop("GridFS file not found: ", gridfs_id)
+  }
+  
+  filename <- file_info$name[1]
+  
+  # Download to temp directory
+  temp_dir <- tempdir()
+  grid$download(filename, temp_dir)
+  
+  # Read the downloaded file
+  downloaded_path <- file.path(temp_dir, filename)
+  obj <- readRDS(downloaded_path)
+  
   message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
   obj
 }
@@ -575,35 +660,50 @@ query_clustering_artifacts <- function(sample_name = NULL,
 
 
 # --- Load clustering result by assignment_id ---
-
 load_clustering_by_id <- function(assignment_id,
                                   db_name = "MSI_database",
                                   mongo_url = "mongodb://localhost:27018") {
+  
+  # Query metadata
   artifacts <- query_clustering_artifacts(
     assignment_id = assignment_id,
-    db_name = db_name, mongo_url = mongo_url
+    db_name = db_name,
+    mongo_url = mongo_url
   )
-  if (nrow(artifacts) == 0)
+  
+  if (nrow(artifacts) == 0) {
     stop("No clustering found with assignment_id: ", assignment_id)
-
+  }
+  
   gridfs_id <- artifacts$gridfs_id[1]
-  grid      <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-
-  query     <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
+  
+  # Load from GridFS
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  
+  query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
   file_info <- grid$find(query)
-  if (nrow(file_info) == 0) stop("GridFS file not found: ", gridfs_id)
-
-  filename  <- file_info$name[1]
-  temp_path <- tempfile(fileext = ".rds")
-  on.exit(unlink(temp_path), add = TRUE)
-
-  grid$download(filename, temp_path)
-  df <- readRDS(temp_path)
-
+  
+  if (nrow(file_info) == 0) {
+    stop("GridFS file not found: ", gridfs_id)
+  }
+  
+  filename <- file_info$name[1]
+  
+  # Download to temp directory
+  temp_dir <- tempdir()
+  grid$download(filename, temp_dir)
+  
+  # Read the downloaded file
+  downloaded_path <- file.path(temp_dir, filename)
+  df <- readRDS(downloaded_path)
+  
   message("Loaded clustering (assignment_id: ", assignment_id, ")")
   message("  Sample: ", artifacts$sample_name[1])
   message("  Method: ", artifacts$clustering_method[1])
-  message("  Dimensions: ", nrow(df), " × ", ncol(df))
+  message("  Dimensions: ", nrow(df), " pixels × ", ncol(df), " columns")
+  message("  Coordinate ranges: x = ", min(df$x), "-", max(df$x), 
+          ", y = ", min(df$y), "-", max(df$y))
+  
   df
 }
 

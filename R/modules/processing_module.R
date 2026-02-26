@@ -259,8 +259,8 @@ processing_module_server <- function(id) {
           sapply(1:nrow(processed_artifacts), function(i) {
             sprintf("\n - Res: %.0f, SNR: %.1f, Tol: %.1f, Ref: %s",
                    processed_artifacts$resolution[i],
-                   processed_artifacts$snr[i],
-                   processed_artifacts$tolerance[i],
+                   processed_artifacts$snr[i], 
+                   processed_artifacts$tolerance[i], 
                    processed_artifacts$reference_name[i])
           })
         )
@@ -430,16 +430,18 @@ processing_module_server <- function(id) {
         add_log(sprintf("Parameters: Resolution=%d, SNR=%.1f, Tol=%.2f, Ref=%s",
                       input$resolution, input$snr, input$tolerance, mz_ref$name))
         
-        # Throw-away working dir — deleted automatically when handler exits
-        cache_dir <- tempfile("msi_run_")
-        dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
-        on.exit(
-          tryCatch(unlink(cache_dir, recursive = TRUE), error = function(e) NULL),
-          add = TRUE
-        )
+        # Setup cache directory
+        cache_base <- file.path(tempdir(), "msi_processing_cache")
+        cache_dir <- file.path(cache_base, sanitize_name(sample_name))
         current_cache_dir(cache_dir)
         current_sample_name(sample_name)
-        add_log(sprintf("Work dir: %s (deleted on finish)", cache_dir))
+        
+        if (dir.exists(cache_dir)) {
+          add_log("Clearing existing cache...")
+          unlink(cache_dir, recursive = TRUE)
+        }
+        dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+        add_log(sprintf("Cache directory: %s", cache_dir))
         
         progress$set(value = 10, message = "Loading/uploading raw data...")
         
@@ -458,7 +460,7 @@ processing_module_server <- function(id) {
           existing_raw <- mongo_meta$find(
             query = jsonlite::toJSON(list(
               sample_name = sample_name,
-              stage_type  = "raw_files"
+              stage_type = "raw_files"
             ), auto_unbox = TRUE)
           )
           
@@ -500,7 +502,7 @@ processing_module_server <- function(id) {
           query = jsonlite::toJSON(list(
             sample_name = sample_name,
             stage_type = "control_mean",
-            file_format = "rds",           
+            file_format = "imzML",
             resolution = as.numeric(input$resolution)
           ), auto_unbox = TRUE)
         )
@@ -535,50 +537,21 @@ processing_module_server <- function(id) {
           )
         }
         add_log("✓ Mean spectrum ready")
-
-        progress$set(value = 70, message = "Peak picking + aligning to reference...")
-        processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-
-        # Check for existing SNR reference (same sample + SNR + resolution)
-        snr_artifacts <- mongo_meta$find(
-          query = jsonlite::toJSON(list(
-            sample_name = sample_name,
-            stage_type  = "mean_snr_reference",
-            file_format = "rds",
-            snr         = as.numeric(input$snr),
-            resolution  = as.numeric(input$resolution)
-          ), auto_unbox = TRUE)
-        )
-
-        if (nrow(snr_artifacts) > 0) {
-          add_log(sprintf("Loading existing SNR reference (SNR=%.1f) from MongoDB...", input$snr))
-          control_SNR_ref <- load_msi_stage_from_mongo(
-            sample_name = sample_name,
-            stage_type  = "mean_snr_reference",
-            snr         = as.numeric(input$snr),
-            resolution  = as.numeric(input$resolution),
-            db_name     = "MSI_database"
-          )
-        } else {
-          add_log(sprintf("Peak picking (SNR=%.1f)...", input$snr))
-          control_SNR_ref <- Cardinal::peakPick(control_mean, SNR = input$snr)
-          save_msi_stage_to_mongo(
-            control_SNR_ref, processing_run_id, "mean_snr_reference",
-            sample_name = sample_name,
-            params      = list(
-              snr        = as.numeric(input$snr),
-              resolution = as.numeric(input$resolution)
-            ),
-            db_name = "MSI_database"
-          )
-          add_log("✓ SNR reference saved to MongoDB")
-        }
-
+        
+        progress$set(value = 70, message = "Applying SNR peak picking and aligning to feature list...")
+        
+        
+        # STEP 4: Alignment
+        add_log(sprintf("Applying SNR peak picking (SNR=%.1f)...", input$snr))
         add_log(sprintf("Aligning to reference (Tol=%.2f)...", input$tolerance))
-        control_MSI_ref <- control_SNR_ref %>%
+        
+        processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+        control_MSI_ref <- control_mean %>%
+          peakPick(SNR = input$snr) %>%
           peakAlign(ref = mz_ref$mz, tolerance = input$tolerance, units = "mz") %>%
           subsetFeatures() %>%
           process()
+        
         add_log("✓ Reference aligned")
         
         progress$set(value = 85, message = "Binning full dataset...")
@@ -596,224 +569,221 @@ processing_module_server <- function(id) {
         
 
       
-        # Lav og gem normaliseret version
-        add_log("Normalizing binned data (TIC)...")
+      # Lav og gem normaliseret version
+      add_log("Normalizing binned data (TIC)...")
 
-        spec_mat <- as.matrix(Cardinal::spectra(msi_data_binned))  # features x pixels
-        tic <- colSums(spec_mat, na.rm = TRUE)
+      spec_mat <- as.matrix(Cardinal::spectra(msi_data_binned))  # features x pixels
+      tic <- colSums(spec_mat, na.rm = TRUE)
 
-        # robust beskyttelse (selvom dine tal ser fine ud)
-        tic[!is.finite(tic) | tic <= 0] <- NA_real_
+      # robust beskyttelse (selvom dine tal ser fine ud)
+      tic[!is.finite(tic) | tic <= 0] <- NA_real_
 
-        # TIC-normaliseret matrix (features x pixels)
-        spec_mat_tic <- sweep(spec_mat, 2, tic, "/")
+      # TIC-normaliseret matrix (features x pixels)
+      spec_mat_tic <- sweep(spec_mat, 2, tic, "/")
 
-        add_log("✓ Normalized matrix ready (TIC)")
+      add_log("✓ Normalized matrix ready (TIC)")
 
-        # Generate plots
-        add_log("Generating visualization plots...")
+      # Generate plots
+      add_log("Generating visualization plots...")
 
-        # Top 3 m/z plots (RAW)
-        var_intensity <- apply(spec_mat, 1, var, na.rm = TRUE)
-        top3_idx <- order(var_intensity, decreasing = TRUE)[1:3]
-        top3_mz <- mz(msi_data_binned)[top3_idx]
+      # Top 3 m/z plots (RAW)
+      var_intensity <- apply(spec_mat, 1, var, na.rm = TRUE)
+      top3_idx <- order(var_intensity, decreasing = TRUE)[1:3]
+      top3_mz <- mz(msi_data_binned)[top3_idx]
 
-        # Top 3 m/z plots (NORMALIZED selection)
-        norm_var_intensity <- apply(spec_mat_tic, 1, var, na.rm = TRUE)
-        norm_top3_idx <- order(norm_var_intensity, decreasing = TRUE)[1:3]
-        norm_top3_mz <- mz(msi_data_binned)[norm_top3_idx]
+      # Top 3 m/z plots (NORMALIZED selection)
+      norm_var_intensity <- apply(spec_mat_tic, 1, var, na.rm = TRUE)
+      norm_top3_idx <- order(norm_var_intensity, decreasing = TRUE)[1:3]
+      norm_top3_mz <- mz(msi_data_binned)[norm_top3_idx]
 
-        vizi_style("dark")
+      vizi_style("dark")
 
-        # Capture mz values and binned data BEFORE cache_dir is deleted
-        # Force Cardinal to materialize - severs .ibd dependency
-        msi_data_binned_mem <- materialize_cardinal(msi_data_binned)
+      create_raw_plot <- function() {
+        image(
+          msi_data_binned,
+          mz = top3_mz,
+          superpose = TRUE,
+          contrast.enhance = "suppress",
+          normalize.image = "linear",
+          col = c("blue", "red", "green")
+        )
+      }
+      plot_top3_raw(create_raw_plot)
 
-        create_raw_plot <- function() {
-          image(
-            msi_data_binned_mem,
-            mz = top3_mz,
-            superpose = TRUE,
-            contrast.enhance = "suppress",
-            normalize.image = "linear",
-            col = c("blue", "red", "green")
+      # NB: vi plotter stadig fra msi_data_binned, men top3-mz er valgt ud fra TIC-normaliserede intensiteter
+      create_norm_plot <- function() {
+        image(
+          msi_data_binned,
+          mz = norm_top3_mz,
+          superpose = TRUE,
+          contrast.enhance = "suppress",
+          normalize.image = "linear",
+          col = c("blue", "red", "green")
+        )
+      }
+      plot_top3_norm(create_norm_plot)
+
+      # Distance calculations baseret på TIC-normaliseret matrix
+      add_log("Calculating spatial vs intensity distances...")
+
+      norm_msi_matrix <- t(spec_mat_tic)  # pixels x features
+      coords_df <- coord(msi_data_binned)
+
+      norm_msi_matrix <- cbind(
+        x = coords_df$x,
+        y = coords_df$y,
+        norm_msi_matrix
+      )
+      
+        # Remove pixels with NA/NaN intensities (zero-TIC pixels)
+        valid_rows <- complete.cases(norm_msi_matrix)
+        norm_msi_matrix <- norm_msi_matrix[valid_rows, , drop = FALSE]
+        add_log(sprintf("Using %d/%d valid pixels for distance calculation",
+                        sum(valid_rows), length(valid_rows)))
+
+        n_pairs <- 10000
+        n <- nrow(norm_msi_matrix)
+        
+        pairs <- data.frame(
+          i = sample(n, n_pairs, replace = TRUE),
+          j = sample(n, n_pairs, replace = TRUE)
+        )
+        pairs <- subset(pairs, i != j)
+        pairs$ii <- pmin(pairs$i, pairs$j)
+        pairs$jj <- pmax(pairs$i, pairs$j)
+        pairs <- unique(pairs[, c("ii", "jj")])
+        names(pairs) <- c("i", "j")
+        if (nrow(pairs) > n_pairs) pairs <- pairs[1:n_pairs, ]
+        
+        coords <- norm_msi_matrix[, c("x", "y")]
+        space_distance <- sqrt(
+          rowSums(
+            (coords[pairs$i, , drop = FALSE] -
+               coords[pairs$j, , drop = FALSE])^2
           )
-        }
-        plot_top3_raw(create_raw_plot)
-
-        create_norm_plot <- function() {
-          image(
-            msi_data_binned_mem,
-            mz = norm_top3_mz,
-            superpose = TRUE,
-            contrast.enhance = "suppress",
-            normalize.image = "linear",
-            col = c("blue", "red", "green")
-          )
-        }
-        plot_top3_norm(create_norm_plot)
-
-        # Distance calculations baseret på TIC-normaliseret matrix
-        add_log("Calculating spatial vs intensity distances...")
-
-        norm_msi_matrix <- t(spec_mat_tic)  # pixels x features
-        coords_df <- coord(msi_data_binned)
-
-        norm_msi_matrix <- cbind(
-          x = coords_df$x,
-          y = coords_df$y,
-          norm_msi_matrix
         )
         
-          # Remove pixels with NA/NaN intensities (zero-TIC pixels)
-          valid_rows <- complete.cases(norm_msi_matrix)
-          norm_msi_matrix <- norm_msi_matrix[valid_rows, , drop = FALSE]
-          add_log(sprintf("Using %d/%d valid pixels for distance calculation",
-                          sum(valid_rows), length(valid_rows)))
-
-          n_pairs <- 10000
-          n <- nrow(norm_msi_matrix)
-          
-          pairs <- data.frame(
-            i = sample(n, n_pairs, replace = TRUE),
-            j = sample(n, n_pairs, replace = TRUE)
-          )
-          pairs <- subset(pairs, i != j)
-          pairs$ii <- pmin(pairs$i, pairs$j)
-          pairs$jj <- pmax(pairs$i, pairs$j)
-          pairs <- unique(pairs[, c("ii", "jj")])
-          names(pairs) <- c("i", "j")
-          if (nrow(pairs) > n_pairs) pairs <- pairs[1:n_pairs, ]
-          
-          coords <- norm_msi_matrix[, c("x", "y")]
-          space_distance <- sqrt(
-            rowSums(
-              (coords[pairs$i, , drop = FALSE] -
-                coords[pairs$j, , drop = FALSE])^2
-            )
-          )
-          
-          intens <- norm_msi_matrix[, -c(1:2), drop = FALSE]
-          cosine_distance <- function(a, b) {
-            norm_a <- sqrt(sum(a^2, na.rm = TRUE))
-            norm_b <- sqrt(sum(b^2, na.rm = TRUE))
-            if (!is.finite(norm_a) || !is.finite(norm_b) || norm_a == 0 || norm_b == 0) {
-              return(NA_real_)
-            }
-            sim <- sum(a * b, na.rm = TRUE) / (norm_a * norm_b)
-            1 - sim
+        intens <- norm_msi_matrix[, -c(1:2), drop = FALSE]
+        cosine_distance <- function(a, b) {
+          norm_a <- sqrt(sum(a^2, na.rm = TRUE))
+          norm_b <- sqrt(sum(b^2, na.rm = TRUE))
+          if (!is.finite(norm_a) || !is.finite(norm_b) || norm_a == 0 || norm_b == 0) {
+            return(NA_real_)
           }
-          
-          intensity_distance <- mapply(
-            function(i, j) cosine_distance(intens[i, ], intens[j, ]),
-            pairs$i, pairs$j
+          sim <- sum(a * b, na.rm = TRUE) / (norm_a * norm_b)
+          1 - sim
+        }
+        
+        intensity_distance <- mapply(
+          function(i, j) cosine_distance(intens[i, ], intens[j, ]),
+          pairs$i, pairs$j
+        )
+        
+        df_dist <- data.frame(
+          space_distance = space_distance,
+          intensity_distance = intensity_distance
+        )
+        
+        # Binned plot
+        nbins <- 50
+        df_binned <- df_dist %>%
+          mutate(bin = cut(space_distance, breaks = nbins)) %>%
+          group_by(bin) %>%
+          summarise(
+            space_mid = mean(space_distance, na.rm = TRUE),
+            int_median = median(intensity_distance, na.rm = TRUE),
+            int_q25 = quantile(intensity_distance, 0.25, na.rm = TRUE),
+            int_q75 = quantile(intensity_distance, 0.75, na.rm = TRUE),
+            .groups = "drop"
           )
-          
-          df_dist <- data.frame(
-            space_distance = space_distance,
-            intensity_distance = intensity_distance
+        
+        p_binned <- ggplot(df_binned, aes(x = space_mid, y = int_median)) +
+          geom_line() +
+          geom_ribbon(aes(ymin = int_q25, ymax = int_q75), alpha = 0.2) +
+          theme_bw() +
+          labs(
+            x = "Euclidean distance between pixels",
+            y = "Cosine distance (median, 25–75% interval)",
+            title = "Spatial vs Intensity Distance (binned)"
           )
-          
-          # Binned plot
-          nbins <- 50
-          df_binned <- df_dist %>%
-            mutate(bin = cut(space_distance, breaks = nbins)) %>%
-            group_by(bin) %>%
-            summarise(
-              space_mid = mean(space_distance, na.rm = TRUE),
-              int_median = median(intensity_distance, na.rm = TRUE),
-              int_q25 = quantile(intensity_distance, 0.25, na.rm = TRUE),
-              int_q75 = quantile(intensity_distance, 0.75, na.rm = TRUE),
-              .groups = "drop"
-            )
-          
-          p_binned <- ggplot(df_binned, aes(x = space_mid, y = int_median)) +
-            geom_line() +
-            geom_ribbon(aes(ymin = int_q25, ymax = int_q75), alpha = 0.2) +
-            theme_bw() +
-            labs(
-              x = "Euclidean distance between pixels",
-              y = "Cosine distance (median, 25–75% interval)",
-              title = "Spatial vs Intensity Distance (binned)"
-            )
-          plot_distance_binned(p_binned)
-          
-          # Scatter plot
-          p_scatter <- ggplot(df_dist, aes(x = space_distance, y = intensity_distance)) +
-            geom_point(alpha = 0.2, size = 1) +
-            theme_bw() +
-            labs(
-              x = "Euclidean distance between pixels",
-              y = "Cosine distance in m/z-intensities",
-              title = "Spatial vs Intensity Distance (10,000 pixel pairs)"
-            )
-          plot_distance_scatter(p_scatter)
-          
-          add_log("✓ All plots generated")
+        plot_distance_binned(p_binned)
+        
+        # Scatter plot
+        p_scatter <- ggplot(df_dist, aes(x = space_distance, y = intensity_distance)) +
+          geom_point(alpha = 0.2, size = 1) +
+          theme_bw() +
+          labs(
+            x = "Euclidean distance between pixels",
+            y = "Cosine distance in m/z-intensities",
+            title = "Spatial vs Intensity Distance (10,000 pixel pairs)"
+          )
+        plot_distance_scatter(p_scatter)
+        
+        add_log("✓ All plots generated")
 
-          progress$set(value = 95, message = "Creating feature matrix...")
-          
-          # STEP 5: Create final dataframe (saved as RDS)
-          add_log("Creating feature matrix...")
-          msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
-          mz_names   <- paste0("mz_", mz(msi_data_binned))
-          pixel_coords <- coord(msi_data_binned)          # <-- renamed
-          run_name   <- runNames(msi_data_binned)
-          pixel_names <- rep(run_name, nrow(msi_matrix))
-
-          full_df <- data.frame(
-            runNames = pixel_names,
-            x = pixel_coords$x,                          # <-- updated
-            y = pixel_coords$y,                          # <-- updated
-            msi_matrix
+        progress$set(value = 95, message = "Creating feature matrix...")
+        
+        # STEP 5: Create final dataframe (saved as RDS)
+        add_log("Creating feature matrix...")
+        msi_matrix <- t(as.matrix(spectra(msi_data_binned)))
+        mz_names <- paste0("mz_", mz(msi_data_binned))
+        coords <- coord(msi_data_binned)
+        run_name <- runNames(msi_data_binned)
+        pixel_names <- rep(run_name, nrow(msi_matrix))
+        
+        full_df <- data.frame(
+          runNames = pixel_names,
+          x = coords$x,
+          y = coords$y,
+          msi_matrix
+        )
+        colnames(full_df) <- c("runNames", "x", "y", mz_names)
+        
+        # Final dataframe still uses old RDS method
+        save_stage_to_mongo(
+          full_df,
+          processing_run_id,
+          "binned_dataframe",
+          sample_name = sample_name,
+          params = list(
+            snr = as.numeric(input$snr),
+            tolerance = as.numeric(input$tolerance),
+            reference_name = mz_ref$name,
+            resolution = as.numeric(input$resolution),
+            num_features = ncol(full_df) - 3,
+            num_pixels = nrow(full_df)
+          ),
+          db_name = "MSI_database"
+        )
+        
+        add_log(sprintf("✓ Final dataframe: %d pixels × %d features", 
+                      nrow(full_df), sum(grepl("^mz_", names(full_df)))))
+        
+        progress$set(value = 100, message = "Complete!")
+        
+        add_log("=== PROCESSING COMPLETE ===")
+        add_log(sprintf("Run ID: %s", processing_run_id))
+        
+        output$pipeline_status <- renderUI({
+          div(class = "alert alert-success",
+              h4("✅ Processing Complete"),
+              p(sprintf("Sample: %s", sample_name)),
+              p(sprintf("Run ID: %s", processing_run_id)),
+              p(sprintf("Features: %d m/z bins", sum(grepl("^mz_", names(full_df))))),
+              p(sprintf("Pixels: %d", nrow(full_df))),
+              p(sprintf("Resolution: %d ppm", input$resolution)),
+              p(sprintf("SNR: %.1f", input$snr)),
+              p(sprintf("Tolerance: %.2f", input$tolerance)),
+              p(sprintf("Reference: %s", mz_ref$name))
           )
-          colnames(full_df) <- c("runNames", "x", "y", mz_names)
-          
-          # Final dataframe still uses old RDS method
-          save_stage_to_mongo(
-            full_df,
-            processing_run_id,
-            "binned_dataframe",
-            sample_name = sample_name,
-            params = list(
-              snr            = as.numeric(input$snr),
-              tolerance      = as.numeric(input$tolerance),
-              reference_name = mz_ref$name,
-              resolution     = as.numeric(input$resolution),
-              num_features   = sum(grepl("^mz_", names(full_df))),
-              num_pixels     = nrow(full_df)
-            ),
-            db_name = "MSI_database"
-          )
-          
-          add_log(sprintf("✓ Final dataframe: %d pixels × %d features", 
-                        nrow(full_df), sum(grepl("^mz_", names(full_df)))))
-          
-          progress$set(value = 100, message = "Complete!")
-          
-          add_log("=== PROCESSING COMPLETE ===")
-          add_log(sprintf("Run ID: %s", processing_run_id))
-          
-          output$pipeline_status <- renderUI({
-            div(class = "alert alert-success",
-                h4("✅ Processing Complete"),
-                p(sprintf("Sample: %s", sample_name)),
-                p(sprintf("Run ID: %s", processing_run_id)),
-                p(sprintf("Features: %d m/z bins", sum(grepl("^mz_", names(full_df))))),
-                p(sprintf("Pixels: %d", nrow(full_df))),
-                p(sprintf("Resolution: %d ppm", input$resolution)),
-                p(sprintf("SNR: %.1f", input$snr)),
-                p(sprintf("Tolerance: %.2f", input$tolerance)),
-                p(sprintf("Reference: %s", mz_ref$name))
-            )
-          })
-          
-          showNotification(
-            sprintf("✅ Processing complete!\nRun ID: %s\n%d features created",
-                  processing_run_id, sum(grepl("^mz_", names(full_df)))),
-            type = "message",
-            duration = 10
-          )
+        })
+        
+        showNotification(
+          sprintf("✅ Processing complete!\nRun ID: %s\n%d features created",
+                processing_run_id, sum(grepl("^mz_", names(full_df)))),
+          type = "message",
+          duration = 10
+        )
         
       }, error = function(e) {
         add_log(sprintf("❌ ERROR: %s", e$message))
@@ -878,5 +848,3 @@ processing_module_server <- function(id) {
     })
   })
 }
-
-
