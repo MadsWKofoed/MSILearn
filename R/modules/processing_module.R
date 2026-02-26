@@ -634,6 +634,13 @@ processing_module_server <- function(id) {
         y = coords_df$y,
         norm_msi_matrix
       )
+      
+        # Remove pixels with NA/NaN intensities (zero-TIC pixels)
+        valid_rows <- complete.cases(norm_msi_matrix)
+        norm_msi_matrix <- norm_msi_matrix[valid_rows, , drop = FALSE]
+        add_log(sprintf("Using %d/%d valid pixels for distance calculation",
+                        sum(valid_rows), length(valid_rows)))
+
         n_pairs <- 10000
         n <- nrow(norm_msi_matrix)
         
@@ -658,10 +665,13 @@ processing_module_server <- function(id) {
         
         intens <- norm_msi_matrix[, -c(1:2), drop = FALSE]
         cosine_distance <- function(a, b) {
-          denom <- sqrt(sum(a^2)) * sqrt(sum(b^2))
-          if (denom == 0) return(NA_real_)
-          sim <- sum(a * b) / denom
-          return(1 - sim)
+          norm_a <- sqrt(sum(a^2, na.rm = TRUE))
+          norm_b <- sqrt(sum(b^2, na.rm = TRUE))
+          if (!is.finite(norm_a) || !is.finite(norm_b) || norm_a == 0 || norm_b == 0) {
+            return(NA_real_)
+          }
+          sim <- sum(a * b, na.rm = TRUE) / (norm_a * norm_b)
+          1 - sim
         }
         
         intensity_distance <- mapply(
