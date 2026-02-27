@@ -402,22 +402,75 @@ processing_module_server <- function(id) {
         top3_mz      <- mz_vals[order(var_raw,  decreasing = TRUE)[1:3]]
         norm_top3_mz <- mz_vals[order(var_norm, decreasing = TRUE)[1:3]]
 
-        Cardinal::vizi_style("dark")
+        coords_df <- Cardinal::coord(msi_data_binned)
 
+        # Extract image data NOW while .ibd file still exists in work_dir
+        # Build pixel × mz matrices for the top 3 m/z only — tiny memory footprint
+        top3_idx      <- match(top3_mz,      mz_vals)
+        norm_top3_idx <- match(norm_top3_mz, mz_vals)
+
+        make_image_df <- function(idx, coords, mat) {
+          data.frame(
+            x     = coords$x,
+            y     = coords$y,
+            mz1   = mat[idx[1], ],
+            mz2   = mat[idx[2], ],
+            mz3   = mat[idx[3], ]
+          )
+        }
+
+        img_df_raw  <- make_image_df(top3_idx,      coords_df, spec_mat)
+        img_df_norm <- make_image_df(norm_top3_idx, coords_df, spec_mat_tic)
+
+        # Labels for legend
+        raw_labels  <- paste0("mz=", round(top3_mz,      2))
+        norm_labels <- paste0("mz=", round(norm_top3_mz, 2))
+
+        # Plot functions capture only plain data.frames — no Cardinal / .ibd dependency
         plot_top3_raw(local({
-          dat <- msi_data_binned; mz3 <- top3_mz
-          function() Cardinal::image(dat, mz = mz3, superpose = TRUE,
-                                     contrast.enhance = "suppress",
-                                     normalize.image  = "linear",
-                                     col = c("blue", "red", "green"))
+          df  <- img_df_raw
+          lbl <- raw_labels
+          function() {
+            par(bg = "black", col.axis = "white", col.lab = "white",
+                col.main = "white", fg = "white")
+            plot(df$x, df$y, col = "black", pch = 15, cex = 0.4,
+                 xlab = "x", ylab = "y", main = "Top 3 m/z (raw variance)",
+                 asp = 1)
+            cols <- c("blue", "red", "green")
+            for (i in 1:3) {
+              v <- df[[paste0("mz", i)]]
+              v[!is.finite(v)] <- 0
+              v <- (v - min(v)) / (max(v) - min(v) + 1e-9)
+              points(df$x, df$y,
+                     col = adjustcolor(cols[i], alpha.f = v * 0.8 + 0.1),
+                     pch = 15, cex = 0.4)
+            }
+            legend("topright", legend = lbl, col = cols, pch = 15,
+                   text.col = "white", bg = "black")
+          }
         }))
 
         plot_top3_norm(local({
-          dat <- msi_data_binned; mz3 <- norm_top3_mz
-          function() Cardinal::image(dat, mz = mz3, superpose = TRUE,
-                                     contrast.enhance = "suppress",
-                                     normalize.image  = "linear",
-                                     col = c("blue", "red", "green"))
+          df  <- img_df_norm
+          lbl <- norm_labels
+          function() {
+            par(bg = "black", col.axis = "white", col.lab = "white",
+                col.main = "white", fg = "white")
+            plot(df$x, df$y, col = "black", pch = 15, cex = 0.4,
+                 xlab = "x", ylab = "y", main = "Top 3 m/z (TIC-normalized variance)",
+                 asp = 1)
+            cols <- c("blue", "red", "green")
+            for (i in 1:3) {
+              v <- df[[paste0("mz", i)]]
+              v[!is.finite(v)] <- 0
+              v <- (v - min(v)) / (max(v) - min(v) + 1e-9)
+              points(df$x, df$y,
+                     col = adjustcolor(cols[i], alpha.f = v * 0.8 + 0.1),
+                     pch = 15, cex = 0.4)
+            }
+            legend("topright", legend = lbl, col = cols, pch = 15,
+                   text.col = "white", bg = "black")
+          }
         }))
 
         # ── STEP 6: Spatial distance plots ───────────────────────────────────
@@ -457,6 +510,12 @@ processing_module_server <- function(id) {
 
         df_dist <- data.frame(space_distance = space_dist,
                               intensity_distance = intens_dist)
+        
+        # Drop NA pairs before plotting
+        df_dist <- df_dist[is.finite(df_dist$space_distance) &
+                           is.finite(df_dist$intensity_distance), ]
+
+        add_log(sprintf("Distance pairs for scatter: %d", nrow(df_dist)))
 
         df_binned <- df_dist |>
           dplyr::mutate(bin = cut(space_distance, breaks = 50L)) |>
