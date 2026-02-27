@@ -753,3 +753,224 @@ load_clustering <- function(sample_name = NULL,
   assignment_id <- artifacts$assignment_id[1]
   load_clustering_by_id(assignment_id, db_name, mongo_url)
 }
+
+
+# benchmark_processing.R
+# Run this from the project root: source("benchmark_processing.R")
+
+library(Cardinal)
+library(BiocParallel)
+library(mongolite)
+library(jsonlite)
+library(dplyr)
+
+source("R/mongo_functions.R")
+
+# ── Config ────────────────────────────────────────────────────────────────────
+SAMPLE_NAME    <- "your_sample_name_here"   # <-- change this
+RESOLUTION     <- 10
+SNR            <- 3
+TOLERANCE      <- 0.5
+REFERENCE_NAME <- "your_reference_name"     # <-- change this
+DB_NAME        <- "MSI_database"
+MONGO_URL      <- "mongodb://localhost:27018"
+
+bp <- max(1L, parallel::detectCores() - 1L)
+Cardinal::setCardinalBPPARAM(
+  BiocParallel::MulticoreParam(workers = bp, progressbar = FALSE)
+)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+mongo_ref  <- mongolite::mongo("mz_references",  db = "msi_project", url = MONGO_URL)
+mongo_meta <- mongolite::mongo("processing_artifacts_metadata", db = DB_NAME, url = MONGO_URL)
+
+get_mz_ref <- function(reference_name) {
+  doc <- mongo_ref$find(
+    sprintf('{"reference_name": "%s"}', reference_name),
+    fields = '{"_id": 0, "mz_values": 1}'
+  )
+  if (nrow(doc) == 0) stop("Reference not found: ", reference_name)
+  as.numeric(unlist(doc$mz_values[[1]]))
+}
+
+timed <- function(label, expr) {
+  message("\n▶ ", label)
+  t0  <- proc.time()
+  val <- force(expr)
+  dt  <- proc.time() - t0
+  message(sprintf("  ✓ done in %.1f sec (elapsed)", dt["elapsed"]))
+  list(result = val, seconds = unname(dt["elapsed"]))
+}
+
+run_pipeline <- function(label, use_cached_mean) {
+  message("\n", strrep("=", 60))
+  message("APPROACH: ", label)
+  message(strrep("=", 60))
+  
+  timings <- list()
+  t_total <- proc.time()
+  
+  # Throw-away work dir
+  work_dir <- tempfile("bench_run_")
+  dir.create(work_dir)
+  on.exit(unlink(work_dir, recursive = TRUE), add = TRUE)
+  
+  # ── 1. Load raw ─────────────────────────────────────────────────────────────
+  r <- timed("Download + read raw imzML from MongoDB", {
+    load_raw_object_from_mongo(
+      sample_name = SAMPLE_NAME,
+      workdir     = work_dir,
+      db_name     = DB_NAME,
+      resolution  = RESOLUTION
+    )
+  })
+  msi_data <- r$result
+  timings[["raw_load"]] <- r$seconds
+  message(sprintf("  pixels=%d, features=%d", ncol(msi_data), nrow(msi_data)))
+  
+  # ── 2. Mean spectrum ─────────────────────────────────────────────────────────
+  if (use_cached_mean) {
+    # Try loading existing control_mean from MongoDB
+    mean_artifacts <- mongo_meta$find(
+      jsonlite::toJSON(list(
+        sample_name = SAMPLE_NAME,
+        stage_type  = "control_mean",
+        file_format = "imzML",
+        resolution  = as.numeric(RESOLUTION)
+      ), auto_unbox = TRUE)
+    )
+    
+    if (nrow(mean_artifacts) > 0) {
+      r <- timed("Load existing mean spectrum from MongoDB", {
+        load_msi_stage_from_mongo(
+          sample_name = SAMPLE_NAME,
+          stage_type  = "control_mean",
+          resolution  = RESOLUTION,
+          db_name     = DB_NAME,
+          workdir     = work_dir,
+          verbose     = FALSE
+        )
+      })
+      timings[["mean_spectrum"]] <- r$seconds
+      control_mean <- r$result
+    } else {
+      message("  ⚠ No cached mean found — computing fresh")
+      r <- timed("Compute mean spectrum (no cache available)", {
+        Cardinal::summarizeFeatures(msi_data, "mean")
+      })
+      timings[["mean_spectrum"]] <- r$seconds
+      control_mean <- r$result
+    }
+  } else {
+    r <- timed("Compute mean spectrum (fresh, no cache)", {
+      Cardinal::summarizeFeatures(msi_data, "mean")
+    })
+    timings[["mean_spectrum"]] <- r$seconds
+    control_mean <- r$result
+  }
+  
+  # ── 3. Peak pick ─────────────────────────────────────────────────────────────
+  r <- timed(sprintf("peakPick(SNR=%.1f)", SNR), {
+    Cardinal::peakPick(control_mean, SNR = SNR)
+  })
+  timings[["peak_pick"]] <- r$seconds
+  control_SNR_ref <- r$result
+  
+  # ── 4. Align ──────────────────────────────────────────────────────────────────
+  mz_ref <- get_mz_ref(REFERENCE_NAME)
+  r <- timed(sprintf("peakAlign + subsetFeatures + process (tol=%.2f)", TOLERANCE), {
+    control_SNR_ref |>
+      Cardinal::peakAlign(ref = mz_ref, tolerance = TOLERANCE, units = "mz") |>
+      Cardinal::subsetFeatures() |>
+      Cardinal::process()
+  })
+  timings[["align"]] <- r$seconds
+  control_MSI_ref <- r$result
+  message(sprintf("  aligned m/z bins: %d", nrow(control_MSI_ref)))
+  
+  # ── 5. Bin ────────────────────────────────────────────────────────────────────
+  r <- timed("bin() + process() full dataset", {
+    Cardinal::bin(
+      msi_data,
+      ref       = Cardinal::mz(control_MSI_ref),
+      tolerance = TOLERANCE,
+      units     = "mz",
+      BPPARAM   = BiocParallel::bpparam()
+    ) |> Cardinal::process()
+  })
+  timings[["bin"]] <- r$seconds
+  msi_data_binned <- r$result
+  
+  # ── 6. Build feature matrix ───────────────────────────────────────────────────
+  r <- timed("Build feature matrix (t(spectra(...)))", {
+    msi_matrix  <- t(as.matrix(Cardinal::spectra(msi_data_binned)))
+    mz_names    <- paste0("mz_", Cardinal::mz(msi_data_binned))
+    pixel_coords <- Cardinal::coord(msi_data_binned)
+    pixel_names  <- rep(Cardinal::runNames(msi_data_binned), nrow(msi_matrix))
+    
+    full_df <- data.frame(
+      runNames = pixel_names,
+      x        = pixel_coords$x,
+      y        = pixel_coords$y,
+      msi_matrix
+    )
+    colnames(full_df) <- c("runNames", "x", "y", mz_names)
+    full_df
+  })
+  timings[["build_df"]] <- r$seconds
+  
+  # ── 7. Cleanup ────────────────────────────────────────────────────────────────
+  rm(msi_data, control_mean, control_SNR_ref, control_MSI_ref, msi_data_binned)
+  gc()
+  
+  total_elapsed <- unname((proc.time() - t_total)["elapsed"])
+  timings[["TOTAL"]] <- total_elapsed
+  
+  list(label = label, timings = timings)
+}
+
+# ── Run both approaches ───────────────────────────────────────────────────────
+results <- list(
+  run_pipeline("With cached mean spectrum (from MongoDB)",  use_cached_mean = TRUE),
+  run_pipeline("Full recompute (no intermediate cache)",    use_cached_mean = FALSE)
+)
+
+# ── Summary table ─────────────────────────────────────────────────────────────
+message("\n", strrep("=", 60))
+message("BENCHMARK SUMMARY")
+message(strrep("=", 60))
+
+steps <- c("raw_load", "mean_spectrum", "peak_pick", "align", "bin", "build_df", "TOTAL")
+labels <- c("Raw download + read", "Mean spectrum", "Peak pick",
+            "Align + process", "Bin + process", "Build data.frame", "── TOTAL")
+
+summary_df <- do.call(rbind, lapply(results, function(res) {
+  row <- sapply(steps, function(s) {
+    v <- res$timings[[s]]
+    if (is.null(v)) NA_real_ else round(v, 1)
+  })
+  data.frame(approach = res$label, t(row), check.names = FALSE)
+}))
+
+colnames(summary_df) <- c("Approach", labels)
+
+# Print aligned table
+col_w <- max(nchar(labels)) + 2
+cat(sprintf("\n%-45s", "Approach"))
+cat(sprintf(paste0("%-", col_w, "s"), labels), "\n")
+cat(strrep("-", 45 + col_w * length(labels)), "\n")
+
+for (i in seq_len(nrow(summary_df))) {
+  cat(sprintf("%-45s", substr(summary_df$Approach[i], 1, 44)))
+  for (lbl in labels) {
+    v <- summary_df[[lbl]][i]
+    cat(sprintf(paste0("%-", col_w, "s"), if (is.na(v)) "N/A" else paste0(v, "s")))
+  }
+  cat("\n")
+}
+
+message("\nAll times in seconds (elapsed wall time)")
+message(sprintf("System: %d cores available, %d workers used", 
+                parallel::detectCores(), bp))
+message(sprintf("Sample: %s | Resolution: %d ppm | SNR: %.1f | Tolerance: %.2f",
+                SAMPLE_NAME, RESOLUTION, SNR, TOLERANCE))
