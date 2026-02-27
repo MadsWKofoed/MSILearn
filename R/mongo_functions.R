@@ -755,23 +755,115 @@ load_clustering <- function(sample_name = NULL,
 }
 
 
+
+
+
+# ======== Script to test most efficient mongo connection ========#
+
+
+load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
+                                  db_name = "MSI_database",
+                                  mongo_url = "mongodb://localhost:27018") {
+  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
+
+  query_list <- list(sample_name = sample_name, stage_type = stage_type)
+  if (!is.null(run_id)) query_list$run_id <- run_id
+
+  artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
+  if (nrow(artifacts) == 0)
+    stop("No artifact found for sample=", sample_name, ", stage=", stage_type)
+
+  if (nrow(artifacts) > 1) message("Multiple artifacts found, using most recent")
+  row <- artifacts[nrow(artifacts), , drop = FALSE]
+
+  grid  <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  fname <- as.character(row$filename[1])
+
+  # Always download fresh — no stale cache
+  temp_path <- tempfile(fileext = ".rds")
+  on.exit(unlink(temp_path), add = TRUE)
+
+  message("Downloading ", fname, "...")
+  grid$download(fname, temp_path)
+  if (!file.exists(temp_path)) stop("Download failed: ", fname)
+
+  obj <- readRDS(temp_path)
+  # temp_path deleted by on.exit
+  message("✓ Loaded stage: ", stage_type)
+  obj
+}
+
+# ...existing code...
+
+load_artifact_by_id <- function(gridfs_id,
+                                db_name = "MSI_database",
+                                mongo_url = "mongodb://localhost:27018") {
+  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+
+  query     <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
+  file_info <- grid$find(query)
+  if (nrow(file_info) == 0) stop("GridFS file not found: ", gridfs_id)
+
+  filename  <- file_info$name[1]
+  temp_path <- tempfile(fileext = ".rds")
+  on.exit(unlink(temp_path), add = TRUE)
+
+  grid$download(filename, temp_path)
+  obj <- readRDS(temp_path)
+  message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
+  obj
+}
+
+# ...existing code...
+
+load_clustering_by_id <- function(assignment_id,
+                                  db_name = "MSI_database",
+                                  mongo_url = "mongodb://localhost:27018") {
+  artifacts <- query_clustering_artifacts(
+    assignment_id = assignment_id,
+    db_name = db_name, mongo_url = mongo_url
+  )
+  if (nrow(artifacts) == 0)
+    stop("No clustering found with assignment_id: ", assignment_id)
+
+  gridfs_id <- artifacts$gridfs_id[1]
+  grid      <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+
+  query     <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
+  file_info <- grid$find(query)
+  if (nrow(file_info) == 0) stop("GridFS file not found: ", gridfs_id)
+
+  filename  <- file_info$name[1]
+  temp_path <- tempfile(fileext = ".rds")
+  on.exit(unlink(temp_path), add = TRUE)
+
+  grid$download(filename, temp_path)
+  df <- readRDS(temp_path)
+
+  message("Loaded clustering (assignment_id: ", assignment_id, ")")
+  message("  Sample: ",     artifacts$sample_name[1])
+  message("  Method: ",     artifacts$clustering_method[1])
+  message("  Dimensions: ", nrow(df), " pixels × ", ncol(df), " columns")
+  df
+}
+
+
 # benchmark_processing.R
-# Run this from the project root: source("benchmark_processing.R")
+# Run from project root: source("benchmark_processing.R")
 
 library(Cardinal)
 library(BiocParallel)
 library(mongolite)
 library(jsonlite)
-library(dplyr)
 
 source("R/mongo_functions.R")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SAMPLE_NAME    <- "your_sample_name_here"   # <-- change this
+SAMPLE_NAME    <- "your_sample_name_here"   # <-- change
 RESOLUTION     <- 10
 SNR            <- 3
 TOLERANCE      <- 0.5
-REFERENCE_NAME <- "your_reference_name"     # <-- change this
+REFERENCE_NAME <- "your_reference_name"     # <-- change
 DB_NAME        <- "MSI_database"
 MONGO_URL      <- "mongodb://localhost:27018"
 
@@ -780,10 +872,12 @@ Cardinal::setCardinalBPPARAM(
   BiocParallel::MulticoreParam(workers = bp, progressbar = FALSE)
 )
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-mongo_ref  <- mongolite::mongo("mz_references",  db = "msi_project", url = MONGO_URL)
-mongo_meta <- mongolite::mongo("processing_artifacts_metadata", db = DB_NAME, url = MONGO_URL)
+# ── Mongo connections ─────────────────────────────────────────────────────────
+mongo_ref  <- mongolite::mongo("mz_references", db = "msi_project", url = MONGO_URL)
+mongo_meta <- mongolite::mongo("processing_artifacts_metadata", db = DB_NAME,
+                               url = MONGO_URL)
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 get_mz_ref <- function(reference_name) {
   doc <- mongo_ref$find(
     sprintf('{"reference_name": "%s"}', reference_name),
@@ -794,90 +888,23 @@ get_mz_ref <- function(reference_name) {
 }
 
 timed <- function(label, expr) {
-  message("\n▶ ", label)
+  message("\n  ▶ ", label)
   t0  <- proc.time()
   val <- force(expr)
-  dt  <- proc.time() - t0
-  message(sprintf("  ✓ done in %.1f sec (elapsed)", dt["elapsed"]))
-  list(result = val, seconds = unname(dt["elapsed"]))
+  dt  <- unname((proc.time() - t0)["elapsed"])
+  message(sprintf("    ✓ %.1f sec", dt))
+  list(result = val, seconds = dt)
 }
 
-run_pipeline <- function(label, use_cached_mean) {
-  message("\n", strrep("=", 60))
-  message("APPROACH: ", label)
-  message(strrep("=", 60))
-  
-  timings <- list()
-  t_total <- proc.time()
-  
-  # Throw-away work dir
-  work_dir <- tempfile("bench_run_")
-  dir.create(work_dir)
-  on.exit(unlink(work_dir, recursive = TRUE), add = TRUE)
-  
-  # ── 1. Load raw ─────────────────────────────────────────────────────────────
-  r <- timed("Download + read raw imzML from MongoDB", {
-    load_raw_object_from_mongo(
-      sample_name = SAMPLE_NAME,
-      workdir     = work_dir,
-      db_name     = DB_NAME,
-      resolution  = RESOLUTION
-    )
-  })
-  msi_data <- r$result
-  timings[["raw_load"]] <- r$seconds
-  message(sprintf("  pixels=%d, features=%d", ncol(msi_data), nrow(msi_data)))
-  
-  # ── 2. Mean spectrum ─────────────────────────────────────────────────────────
-  if (use_cached_mean) {
-    # Try loading existing control_mean from MongoDB
-    mean_artifacts <- mongo_meta$find(
-      jsonlite::toJSON(list(
-        sample_name = SAMPLE_NAME,
-        stage_type  = "control_mean",
-        file_format = "imzML",
-        resolution  = as.numeric(RESOLUTION)
-      ), auto_unbox = TRUE)
-    )
-    
-    if (nrow(mean_artifacts) > 0) {
-      r <- timed("Load existing mean spectrum from MongoDB", {
-        load_msi_stage_from_mongo(
-          sample_name = SAMPLE_NAME,
-          stage_type  = "control_mean",
-          resolution  = RESOLUTION,
-          db_name     = DB_NAME,
-          workdir     = work_dir,
-          verbose     = FALSE
-        )
-      })
-      timings[["mean_spectrum"]] <- r$seconds
-      control_mean <- r$result
-    } else {
-      message("  ⚠ No cached mean found — computing fresh")
-      r <- timed("Compute mean spectrum (no cache available)", {
-        Cardinal::summarizeFeatures(msi_data, "mean")
-      })
-      timings[["mean_spectrum"]] <- r$seconds
-      control_mean <- r$result
-    }
-  } else {
-    r <- timed("Compute mean spectrum (fresh, no cache)", {
-      Cardinal::summarizeFeatures(msi_data, "mean")
-    })
-    timings[["mean_spectrum"]] <- r$seconds
-    control_mean <- r$result
-  }
-  
-  # ── 3. Peak pick ─────────────────────────────────────────────────────────────
+# ── Shared steps: peak pick → align → bin → matrix ───────────────────────────
+run_downstream <- function(control_mean, msi_data, mz_ref, timings) {
+
   r <- timed(sprintf("peakPick(SNR=%.1f)", SNR), {
     Cardinal::peakPick(control_mean, SNR = SNR)
   })
   timings[["peak_pick"]] <- r$seconds
   control_SNR_ref <- r$result
-  
-  # ── 4. Align ──────────────────────────────────────────────────────────────────
-  mz_ref <- get_mz_ref(REFERENCE_NAME)
+
   r <- timed(sprintf("peakAlign + subsetFeatures + process (tol=%.2f)", TOLERANCE), {
     control_SNR_ref |>
       Cardinal::peakAlign(ref = mz_ref, tolerance = TOLERANCE, units = "mz") |>
@@ -886,9 +913,8 @@ run_pipeline <- function(label, use_cached_mean) {
   })
   timings[["align"]] <- r$seconds
   control_MSI_ref <- r$result
-  message(sprintf("  aligned m/z bins: %d", nrow(control_MSI_ref)))
-  
-  # ── 5. Bin ────────────────────────────────────────────────────────────────────
+  message(sprintf("    aligned m/z bins: %d", nrow(control_MSI_ref)))
+
   r <- timed("bin() + process() full dataset", {
     Cardinal::bin(
       msi_data,
@@ -900,77 +926,224 @@ run_pipeline <- function(label, use_cached_mean) {
   })
   timings[["bin"]] <- r$seconds
   msi_data_binned <- r$result
-  
-  # ── 6. Build feature matrix ───────────────────────────────────────────────────
-  r <- timed("Build feature matrix (t(spectra(...)))", {
-    msi_matrix  <- t(as.matrix(Cardinal::spectra(msi_data_binned)))
-    mz_names    <- paste0("mz_", Cardinal::mz(msi_data_binned))
+
+  r <- timed("Build feature matrix", {
+    msi_matrix   <- t(as.matrix(Cardinal::spectra(msi_data_binned)))
+    mz_names     <- paste0("mz_", Cardinal::mz(msi_data_binned))
     pixel_coords <- Cardinal::coord(msi_data_binned)
     pixel_names  <- rep(Cardinal::runNames(msi_data_binned), nrow(msi_matrix))
-    
-    full_df <- data.frame(
-      runNames = pixel_names,
-      x        = pixel_coords$x,
-      y        = pixel_coords$y,
-      msi_matrix
-    )
+    full_df <- data.frame(runNames = pixel_names,
+                          x = pixel_coords$x,
+                          y = pixel_coords$y,
+                          msi_matrix)
     colnames(full_df) <- c("runNames", "x", "y", mz_names)
     full_df
   })
   timings[["build_df"]] <- r$seconds
-  
-  # ── 7. Cleanup ────────────────────────────────────────────────────────────────
-  rm(msi_data, control_mean, control_SNR_ref, control_MSI_ref, msi_data_binned)
-  gc()
-  
-  total_elapsed <- unname((proc.time() - t_total)["elapsed"])
-  timings[["TOTAL"]] <- total_elapsed
-  
+
+  list(timings = timings)
+}
+
+# ── Ensure RDS control_mean exists in MongoDB ─────────────────────────────────
+# Runs once before benchmark. Computes and saves if not already present.
+ensure_rds_control_mean <- function() {
+  existing <- mongo_meta$find(
+    jsonlite::toJSON(list(
+      sample_name = SAMPLE_NAME,
+      stage_type  = "control_mean",
+      resolution  = as.numeric(RESOLUTION)
+    ), auto_unbox = TRUE)
+  )
+
+  rds_exists <- if (nrow(existing) > 0 && "file_format" %in% names(existing)) {
+    any(existing$file_format == "rds", na.rm = TRUE)
+  } else {
+    FALSE
+  }
+
+  if (rds_exists) {
+    message("✓ RDS control_mean already in MongoDB")
+    return(invisible(NULL))
+  }
+
+  message("Pre-computing control_mean for RDS benchmark...")
+  work_dir <- tempfile("bench_setup_")
+  dir.create(work_dir)
+  on.exit(unlink(work_dir, recursive = TRUE), add = TRUE)
+
+  msi_data     <- load_raw_object_from_mongo(SAMPLE_NAME, work_dir, DB_NAME,
+                                             MONGO_URL, resolution = RESOLUTION)
+  control_mean <- Cardinal::summarizeFeatures(msi_data, "mean")
+
+  run_id <- paste0("bench_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+  save_stage_to_mongo(
+    control_mean, run_id, "control_mean",
+    sample_name = SAMPLE_NAME,
+    params      = list(resolution  = as.numeric(RESOLUTION),
+                       file_format = "rds"),
+    db_name     = DB_NAME,
+    mongo_url   = MONGO_URL
+  )
+  message("✓ RDS control_mean saved")
+  rm(msi_data, control_mean); gc()
+}
+
+# ── Pipeline runner ───────────────────────────────────────────────────────────
+run_pipeline <- function(label,
+                         mean_source = c("fresh", "imzml_cache", "rds_cache")) {
+  mean_source <- match.arg(mean_source)
+
+  message("\n", strrep("=", 60))
+  message("APPROACH: ", label)
+  message(strrep("=", 60))
+
+  timings <- list()
+  t_total <- proc.time()
+  mz_ref  <- get_mz_ref(REFERENCE_NAME)
+
+  # Throw-away working dir — deleted on exit regardless of success/error
+  work_dir <- tempfile("bench_run_")
+  dir.create(work_dir)
+  on.exit(
+    tryCatch(unlink(work_dir, recursive = TRUE), error = function(e) NULL),
+    add = TRUE
+  )
+
+  # ── 1. Raw ──────────────────────────────────────────────────────────────────
+  r <- timed("Download + read raw imzML from MongoDB", {
+    load_raw_object_from_mongo(
+      sample_name = SAMPLE_NAME,
+      workdir     = work_dir,
+      db_name     = DB_NAME,
+      resolution  = RESOLUTION
+    )
+  })
+  msi_data <- r$result
+  timings[["raw_load"]] <- r$seconds
+  message(sprintf("    pixels=%d, features=%d", ncol(msi_data), nrow(msi_data)))
+
+  # ── 2. Mean spectrum ─────────────────────────────────────────────────────────
+  if (mean_source == "fresh") {
+
+    r <- timed("Compute mean spectrum (no cache)", {
+      Cardinal::summarizeFeatures(msi_data, "mean")
+    })
+    timings[["mean_spectrum"]] <- r$seconds
+    control_mean <- r$result
+
+  } else if (mean_source == "imzml_cache") {
+
+    # load_msi_stage_from_mongo downloads imzML + ibd, calls readMSIData()
+    # work_dir is throw-away so downloaded files are cleaned up on exit
+    artifacts <- mongo_meta$find(
+      jsonlite::toJSON(list(
+        sample_name = SAMPLE_NAME,
+        stage_type  = "control_mean",
+        file_format = "imzML",
+        resolution  = as.numeric(RESOLUTION)
+      ), auto_unbox = TRUE)
+    )
+
+    if (nrow(artifacts) == 0) {
+      message("  ⚠ No imzML control_mean in MongoDB — falling back to fresh compute")
+      r <- timed("Compute mean spectrum (imzML cache miss — fresh fallback)", {
+        Cardinal::summarizeFeatures(msi_data, "mean")
+      })
+    } else {
+      r <- timed("Load mean spectrum from MongoDB (imzML → readMSIData)", {
+        load_msi_stage_from_mongo(
+          sample_name = SAMPLE_NAME,
+          stage_type  = "control_mean",
+          resolution  = RESOLUTION,
+          db_name     = DB_NAME,
+          workdir     = work_dir,   # files land in throw-away dir
+          verbose     = FALSE
+        )
+      })
+    }
+    timings[["mean_spectrum"]] <- r$seconds
+    control_mean <- r$result
+
+  } else if (mean_source == "rds_cache") {
+
+    # load_stage_from_mongo now uses on.exit(unlink()) — no file left behind
+    artifacts <- mongo_meta$find(
+      jsonlite::toJSON(list(
+        sample_name = SAMPLE_NAME,
+        stage_type  = "control_mean",
+        file_format = "rds",
+        resolution  = as.numeric(RESOLUTION)
+      ), auto_unbox = TRUE)
+    )
+
+    if (nrow(artifacts) == 0) {
+      message("  ⚠ No RDS control_mean in MongoDB — falling back to fresh compute")
+      r <- timed("Compute mean spectrum (RDS cache miss — fresh fallback)", {
+        Cardinal::summarizeFeatures(msi_data, "mean")
+      })
+    } else {
+      r <- timed("Load mean spectrum from MongoDB (RDS → readRDS)", {
+        load_stage_from_mongo(
+          sample_name = SAMPLE_NAME,
+          stage_type  = "control_mean",
+          db_name     = DB_NAME,
+          mongo_url   = MONGO_URL
+        )
+      })
+    }
+    timings[["mean_spectrum"]] <- r$seconds
+    control_mean <- r$result
+  }
+
+  # ── 3–6. Shared downstream steps ────────────────────────────────────────────
+  result  <- run_downstream(control_mean, msi_data, mz_ref, timings)
+  timings <- result$timings
+
+  rm(msi_data, control_mean); gc()
+
+  timings[["TOTAL"]] <- unname((proc.time() - t_total)["elapsed"])
   list(label = label, timings = timings)
 }
 
-# ── Run both approaches ───────────────────────────────────────────────────────
+# ── Setup: ensure RDS artifact exists before benchmarking ────────────────────
+ensure_rds_control_mean()
+
+# ── Run all three approaches ──────────────────────────────────────────────────
 results <- list(
-  run_pipeline("With cached mean spectrum (from MongoDB)",  use_cached_mean = TRUE),
-  run_pipeline("Full recompute (no intermediate cache)",    use_cached_mean = FALSE)
+  run_pipeline("1. Full recompute (no cache)",              mean_source = "fresh"),
+  run_pipeline("2. mean spectrum: imzML cache from MongoDB", mean_source = "imzml_cache"),
+  run_pipeline("3. mean spectrum: RDS cache from MongoDB",   mean_source = "rds_cache")
 )
 
 # ── Summary table ─────────────────────────────────────────────────────────────
+steps  <- c("raw_load", "mean_spectrum", "peak_pick", "align",
+            "bin", "build_df", "TOTAL")
+labels <- c("Raw load", "Mean spectrum", "Peak pick",
+            "Align+proc", "Bin+proc", "Build df", "TOTAL")
+
+col_w <- 14L
+header_w <- 46L
+
 message("\n", strrep("=", 60))
-message("BENCHMARK SUMMARY")
+message("BENCHMARK SUMMARY (seconds elapsed)")
 message(strrep("=", 60))
-
-steps <- c("raw_load", "mean_spectrum", "peak_pick", "align", "bin", "build_df", "TOTAL")
-labels <- c("Raw download + read", "Mean spectrum", "Peak pick",
-            "Align + process", "Bin + process", "Build data.frame", "── TOTAL")
-
-summary_df <- do.call(rbind, lapply(results, function(res) {
-  row <- sapply(steps, function(s) {
-    v <- res$timings[[s]]
-    if (is.null(v)) NA_real_ else round(v, 1)
-  })
-  data.frame(approach = res$label, t(row), check.names = FALSE)
-}))
-
-colnames(summary_df) <- c("Approach", labels)
-
-# Print aligned table
-col_w <- max(nchar(labels)) + 2
-cat(sprintf("\n%-45s", "Approach"))
+cat(sprintf(paste0("\n%-", header_w, "s"), "Approach"))
 cat(sprintf(paste0("%-", col_w, "s"), labels), "\n")
-cat(strrep("-", 45 + col_w * length(labels)), "\n")
+cat(strrep("-", header_w + col_w * length(labels)), "\n")
 
-for (i in seq_len(nrow(summary_df))) {
-  cat(sprintf("%-45s", substr(summary_df$Approach[i], 1, 44)))
-  for (lbl in labels) {
-    v <- summary_df[[lbl]][i]
-    cat(sprintf(paste0("%-", col_w, "s"), if (is.na(v)) "N/A" else paste0(v, "s")))
+for (res in results) {
+  cat(sprintf(paste0("%-", header_w, "s"), substr(res$label, 1, header_w - 1)))
+  for (s in steps) {
+    v <- res$timings[[s]]
+    cat(sprintf(paste0("%-", col_w, "s"),
+                if (is.null(v) || is.na(v)) "N/A"
+                else paste0(round(v, 1), "s")))
   }
   cat("\n")
 }
 
-message("\nAll times in seconds (elapsed wall time)")
-message(sprintf("System: %d cores available, %d workers used", 
-                parallel::detectCores(), bp))
-message(sprintf("Sample: %s | Resolution: %d ppm | SNR: %.1f | Tolerance: %.2f",
-                SAMPLE_NAME, RESOLUTION, SNR, TOLERANCE))
+message(strrep("-", header_w + col_w * length(labels)))
+message(sprintf("\nCores: %d available, %d workers used", parallel::detectCores(), bp))
+message(sprintf("Sample:    %s", SAMPLE_NAME))
+message(sprintf("Res:       %d ppm | SNR: %.1f | Tol: %.2f | Ref: %s",
+                RESOLUTION, SNR, TOLERANCE, REFERENCE_NAME))
