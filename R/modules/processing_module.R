@@ -217,7 +217,7 @@ processing_module_server <- function(id) {
         showNotification(paste0("\u2713 Study created: ", sid), type = "message")
         # Refresh the 'existing' dropdown so it is immediately available
         studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
-        if (nrow(studies_df) > 0) {
+        if (nrow(studies_df) > 0 && "_id" %in% names(studies_df)) {
           ch <- setNames(studies_df[["_id"]],
                          paste0(studies_df$name, " [", studies_df[["_id"]], "]"))
           updateSelectInput(session, "existing_study_id", choices = ch)

@@ -201,10 +201,17 @@ get_sample_id <- function(study_id, sample_name) {
 }
 
 list_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
-  .con("samples", db, url)$find(
-    sprintf('{"study_id": "%s"}', study_id),
-    fields = '{"sample_name":1,"study_id":1,"created_at":1}'
+  df <- tryCatch(
+    .con("samples", db, url)$find(
+      sprintf('{"study_id": "%s"}', study_id),
+      fields = '{"sample_name":1,"study_id":1,"created_at":1}'
+    ),
+    error = function(e) data.frame()
   )
+  if (!("_id" %in% names(df))) return(data.frame(`_id` = character(), sample_name = character(),
+                                                    study_id = character(), created_at = character(),
+                                                    stringsAsFactors = FALSE, check.names = FALSE))
+  df
 }
 
 
@@ -394,7 +401,11 @@ list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
 
 #' Return all study documents as a data.frame.
 get_studies <- function(db = DB_NAME, url = MONGO_URL) {
-  .con("studies", db, url)$find("{}")
+  df <- tryCatch(.con("studies", db, url)$find("{}"), error = function(e) data.frame())
+  if (!("_id" %in% names(df))) return(data.frame(`_id` = character(), name = character(),
+                                                   created_at = character(),
+                                                   stringsAsFactors = FALSE, check.names = FALSE))
+  df
 }
 
 #' Create a new study and return its _id.
@@ -411,7 +422,7 @@ create_study <- function(name, description = "",
 
 #' Return all sample documents for a study as a data.frame.
 get_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
-  list_samples(study_id, db, url)
+  list_samples(study_id, db, url)  # already returns a well-formed data.frame
 }
 
 #' Create (or idempotently retrieve) a sample and return its _id.
