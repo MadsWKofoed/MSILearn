@@ -49,6 +49,12 @@ sanitize_name <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
   mongolite::gridfs(db = db, prefix = prefix, url = url)
 }
 
+# Insert a document into a mongolite collection, auto-unboxing all scalars so
+# that character(1) / numeric(1) / logical(1) become JSON scalars, not arrays.
+.insert <- function(col, doc) {
+  col$insert(jsonlite::toJSON(doc, auto_unbox = TRUE, null = "null", na = "null"))
+}
+
 # Upload an in-memory R object (serialised as RDS) to GridFS.
 .upload_rds <- function(obj, filename, db = DB_NAME, url = MONGO_URL) {
   tmp <- tempfile(fileext = ".rds")
@@ -101,7 +107,7 @@ upsert_pipeline <- function(type, name, params,
 
   col <- .con("pipelines", db, url)
   if (col$count(sprintf('{"_id": "%s"}', pipeline_id)) == 0) {
-    col$insert(list(
+    .insert(col, list(
       `_id`        = pipeline_id,
       type         = type,
       name         = name,
@@ -137,7 +143,7 @@ upsert_study <- function(study_id, name, description = "",
                          db = DB_NAME, url = MONGO_URL) {
   col <- .con("studies", db, url)
   if (col$count(sprintf('{"_id": "%s"}', study_id)) == 0) {
-    col$insert(list(
+    .insert(col, list(
       `_id`       = study_id,
       name        = name,
       description = description,
@@ -173,7 +179,7 @@ upsert_sample <- function(study_id, sample_name,
 
   col <- .con("samples", db, url)
   if (col$count(sprintf('{"_id": "%s"}', sample_id)) == 0) {
-    col$insert(list(
+    .insert(col, list(
       `_id`            = sample_id,
       study_id         = study_id,
       sample_name      = sample_name,
@@ -242,7 +248,7 @@ save_artifact <- function(obj, study_id, sample_id, pipeline_id, stage_type,
   filename <- paste0(artifact_id, "_", stage_type, ".rds")
   .upload_rds(obj, filename, db, url)
 
-  col$insert(c(
+  .insert(col, c(
     list(
       `_id`       = artifact_id,
       study_id    = study_id,
@@ -314,7 +320,7 @@ upsert_annotation_set <- function(study_id, name, label_schema,
   )
   col <- .con("annotation_sets", db, url)
   if (col$count(sprintf('{"_id": "%s"}', ann_id)) == 0) {
-    col$insert(list(
+    .insert(col, list(
       `_id`        = ann_id,
       study_id     = study_id,
       name         = name,
@@ -349,7 +355,7 @@ save_annotation <- function(annotation_df, sample_id, annotation_set_id,
   filename <- paste0(ann_doc_id, "_annotation.rds")
   .upload_rds(annotation_df, filename, db, url)
 
-  col$insert(list(
+  .insert(col, list(
     `_id`             = ann_doc_id,
     sample_id         = sample_id,
     annotation_set_id = annotation_set_id,
@@ -576,7 +582,7 @@ create_dataset <- function(study_id,
     return(dataset_id)
   }
 
-  ds_col$insert(list(
+  .insert(ds_col, list(
     `_id`             = dataset_id,
     study_id          = study_id,
     name              = name,
@@ -713,7 +719,7 @@ save_model_run <- function(dataset_id, model_type, hyperparams, metrics,
   filename <- paste0(run_id, "_model.rds")
   .upload_rds(model_obj, filename, db, url)
 
-  .con("model_runs", db, url)$insert(list(
+  .insert(.con("model_runs", db, url), list(
     `_id`        = run_id,
     dataset_id   = dataset_id,
     model_type   = model_type,
@@ -770,10 +776,10 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
   message("Uploading ibd to GridFS...")
   ibd_id <- unname(grid$upload(ibd_path, name = ibd_name))
 
-  meta$insert(list(
+  .insert(meta, list(
     sample_name       = sample_name,
     stage_type        = "raw_files",
-    created_at        = Sys.time(),
+    created_at        = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     imzml_gridfs_id   = as.character(imz_id),
     imzml_gridfs_name = imz_name,
     ibd_gridfs_id     = as.character(ibd_id),
@@ -832,14 +838,14 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
   grid_id  <- as.character(grid_res$id)
 
   meta <- .con("processing_artifacts_metadata", db_name, mongo_url)
-  meta$insert(c(
+  .insert(meta, c(
     list(
       gridfs_id   = grid_id,
       filename    = filename,
       run_id      = run_id,
       sample_name = sample_name,
       stage_type  = stage_type,
-      created_at  = Sys.time()
+      created_at  = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
     ),
     params
   ))
