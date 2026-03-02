@@ -191,7 +191,8 @@ processing_module_server <- function(id) {
       input$refresh_studies
       input$study_mode          # also re-fetch when switching to 'existing'
       studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
-      if (nrow(studies_df) == 0) {
+      has_ids <- nrow(studies_df) > 0 && "_id" %in% names(studies_df)
+      if (!has_ids) {
         updateSelectInput(session, "existing_study_id",
                           choices = c("No studies found" = ""))
       } else {
@@ -244,7 +245,7 @@ processing_module_server <- function(id) {
       sid <- active_study_id()
       if (is.null(sid)) return(tags$small("Select a study first."))
       samp_df <- tryCatch(get_samples(sid), error = function(e) data.frame())
-      if (nrow(samp_df) == 0)
+      if (nrow(samp_df) == 0 || !("_id" %in% names(samp_df)))
         return(tags$small("No samples in this study yet."))
       selectInput(ns("existing_sample"),  "Select sample:",
                   choices = setNames(samp_df[["_id"]], samp_df$sample_name),

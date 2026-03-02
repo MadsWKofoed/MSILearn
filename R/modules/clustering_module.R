@@ -243,14 +243,15 @@ clustering_module_server <- function(id) {
     load_studies <- function() {
       tryCatch({
         df <- get_studies()
-        if (is.null(df) || nrow(df) == 0) {
+        has_ids <- !is.null(df) && nrow(df) > 0 && "_id" %in% names(df)
+        if (!has_ids) {
           updateSelectInput(session, "study_select",
-                            choices = c("— no studies found —" = ""))
+                            choices = c("\u2014 no studies found \u2014" = ""))
           return()
         }
         choices <- setNames(df[["_id"]], df$name)
         updateSelectInput(session, "study_select",
-                          choices = c("— select —" = "", choices))
+                          choices = c("\u2014 select \u2014" = "", choices))
       }, error = function(e) {
         showNotification(paste("Error loading studies:", e$message), type = "error")
       })

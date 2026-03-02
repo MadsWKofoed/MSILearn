@@ -168,7 +168,7 @@ training_module_server <- function(id) {
 
     output$run_table <- renderTable({
       df <- runs_rv()
-      if (nrow(df) == 0) return(data.frame(message = "No runs yet for this dataset."))
+      if (nrow(df) == 0 || !("_id" %in% names(df))) return(data.frame(message = "No runs yet for this dataset."))
       out <- data.frame(
         run_id     = df[["_id"]],
         model_type = df$model_type,
