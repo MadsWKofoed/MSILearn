@@ -48,9 +48,8 @@ source("R/modules/training_module.R")
 
 # Global UI
 ui <- navbarPage(
-  title = "MSI Clustering & Prediction",
-  custom_css,
-  useShinyjs(),  
+  title  = "MSI Clustering & Prediction",
+  header = tagList(custom_css, useShinyjs()),
   tabPanel("Welcome",
            h3("Welcome to the MSI Clustering App"),
            p("Upload imzML + ibd files, perform clustering, and compare to histology.")
