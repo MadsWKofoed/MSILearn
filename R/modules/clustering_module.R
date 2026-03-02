@@ -52,6 +52,7 @@ make_raster_png <- function(plot_obj, width = 800, height = 600) {
 clustering_module_ui <- function(id) {
   ns <- NS(id)
 
+  tabPanel("Clustering",
   fluidPage(
     tags$head(tags$style(HTML("
       .section-header { font-weight: bold; margin-top: 8px; margin-bottom: 4px; }
@@ -201,11 +202,12 @@ clustering_module_ui <- function(id) {
         uiOutput(ns("cluster_layout"))
       )
     ) # end fluidRow
-  )
+  )  # end fluidPage
+  )  # end tabPanel
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
 # SERVER
 # ─────────────────────────────────────────────────────────────────────────────
 
