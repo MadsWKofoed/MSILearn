@@ -426,52 +426,24 @@ processing_module_server <- function(id) {
         raw_labels  <- paste0("mz=", round(top3_mz,      2))
         norm_labels <- paste0("mz=", round(norm_top3_mz, 2))
 
-        # Plot functions capture only plain data.frames — no Cardinal / .ibd dependency
-        plot_top3_raw(local({
-          df  <- img_df_raw
-          lbl <- raw_labels
-          function() {
-            par(bg = "black", col.axis = "white", col.lab = "white",
-                col.main = "white", fg = "white")
-            plot(df$x, df$y, col = "black", pch = 15, cex = 0.4,
-                 xlab = "x", ylab = "y", main = "Top 3 m/z (raw variance)",
-                 asp = 1)
-            cols <- c("blue", "red", "green")
-            for (i in 1:3) {
-              v <- df[[paste0("mz", i)]]
-              v[!is.finite(v)] <- 0
-              v <- (v - min(v)) / (max(v) - min(v) + 1e-9)
-              points(df$x, df$y,
-                     col = adjustcolor(cols[i], alpha.f = v * 0.8 + 0.1),
-                     pch = 15, cex = 0.4)
-            }
-            legend("topright", legend = lbl, col = cols, pch = 15,
-                   text.col = "white", bg = "black")
+        make_overlay_plot <- function(df, lbl, title) {
+          scale01 <- function(v) {
+            v[!is.finite(v)] <- 0
+            lo <- min(v); hi <- max(v)
+            if (hi == lo) return(rep(0, length(v)))
+            (v - lo) / (hi - lo)
           }
-        }))
+          r <- scale01(df$mz1)
+          g <- scale01(df$mz2)
+          b <- scale01(df$mz3)
+          pixel_cols <- rgb(r, g, b,
+                            alpha        = pmax(r, g, b) * 0.9 + 0.1,
+                            maxColorValue = 1)
+          list(x = df$x, y = df$y, cols = pixel_cols, lbl = lbl, title = title)
+        }
 
-        plot_top3_norm(local({
-          df  <- img_df_norm
-          lbl <- norm_labels
-          function() {
-            par(bg = "black", col.axis = "white", col.lab = "white",
-                col.main = "white", fg = "white")
-            plot(df$x, df$y, col = "black", pch = 15, cex = 0.4,
-                 xlab = "x", ylab = "y", main = "Top 3 m/z (TIC-normalized variance)",
-                 asp = 1)
-            cols <- c("blue", "red", "green")
-            for (i in 1:3) {
-              v <- df[[paste0("mz", i)]]
-              v[!is.finite(v)] <- 0
-              v <- (v - min(v)) / (max(v) - min(v) + 1e-9)
-              points(df$x, df$y,
-                     col = adjustcolor(cols[i], alpha.f = v * 0.8 + 0.1),
-                     pch = 15, cex = 0.4)
-            }
-            legend("topright", legend = lbl, col = cols, pch = 15,
-                   text.col = "white", bg = "black")
-          }
-        }))
+        plot_top3_raw(make_overlay_plot(img_df_raw,  raw_labels,  "Top 3 m/z (raw variance)"))
+        plot_top3_norm(make_overlay_plot(img_df_norm, norm_labels, "Top 3 m/z (TIC-normalized variance)"))
 
         # ── STEP 6: Spatial distance plots ───────────────────────────────────
         add_log("Calculating spatial vs intensity distances...")
@@ -552,9 +524,9 @@ processing_module_server <- function(id) {
         progress$set(value = 92, message = "Building feature matrix...")
         add_log("Building feature matrix...")
 
-        msi_matrix  <- t(as.matrix(Cardinal::spectra(msi_data_binned)))
-        mz_names    <- paste0("mz_", Cardinal::mz(msi_data_binned))
-        coords2     <- Cardinal::coord(msi_data_binned)
+        msi_matrix  <- t(spec_mat)   # reuse already-materialized matrix
+        mz_names    <- paste0("mz_", mz_vals)   # reuse already-fetched mz_vals
+        coords2     <- as.data.frame(coords_df)  # reuse already-fetched coords
         pixel_names <- rep(Cardinal::runNames(msi_data_binned), nrow(msi_matrix))
 
         full_df <- data.frame(
@@ -630,14 +602,30 @@ processing_module_server <- function(id) {
 
     output$top3_raw_plot <- renderPlot({
       req(plot_top3_raw())
-      Cardinal::vizi_style("dark")
-      plot_top3_raw()()
+      p <- plot_top3_raw()
+      par(bg = "black", col.axis = "white", col.lab = "white",
+          col.main = "white", fg = "white", mar = c(3, 3, 2, 1))
+      plot(p$x, p$y, col = p$cols, pch = 15, cex = 0.5,
+           xlab = "x", ylab = "y", main = p$title, asp = 1, axes = FALSE)
+      axis(1, col = "white", col.ticks = "white", col.axis = "white")
+      axis(2, col = "white", col.ticks = "white", col.axis = "white")
+      legend("topright", legend = p$lbl, col = c("red", "green", "blue"),
+             pch = 15, pt.cex = 1.5, text.col = "white",
+             bg = adjustcolor("black", alpha.f = 0.6), box.col = "white")
     })
 
     output$top3_norm_plot <- renderPlot({
       req(plot_top3_norm())
-      Cardinal::vizi_style("dark")
-      plot_top3_norm()()
+      p <- plot_top3_norm()
+      par(bg = "black", col.axis = "white", col.lab = "white",
+          col.main = "white", fg = "white", mar = c(3, 3, 2, 1))
+      plot(p$x, p$y, col = p$cols, pch = 15, cex = 0.5,
+           xlab = "x", ylab = "y", main = p$title, asp = 1, axes = FALSE)
+      axis(1, col = "white", col.ticks = "white", col.axis = "white")
+      axis(2, col = "white", col.ticks = "white", col.axis = "white")
+      legend("topright", legend = p$lbl, col = c("red", "green", "blue"),
+             pch = 15, pt.cex = 1.5, text.col = "white",
+             bg = adjustcolor("black", alpha.f = 0.6), box.col = "white")
     })
 
     output$distance_binned_plot <- renderPlot({
