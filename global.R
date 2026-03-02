@@ -28,10 +28,17 @@ custom_css <- tags$head(
 )
 
 # Source function files
+source("R/mongo_schema.R")        # schema initialisation (indexes)
+source("R/mongo_functions.R")     # all DB helpers (provenance API + legacy)
 source("R/clustering_functions.R")
 source("R/processing_functions.R")
-source("R/mongo_functions.R")
 source("R/training_functions.R")
+
+# Enforce schema indexes on startup (idempotent)
+tryCatch(
+  initialise_schema(),
+  error = function(e) warning("Schema initialisation failed: ", conditionMessage(e))
+)
 
 # Source modules
 source("R/modules/clustering_module.R")

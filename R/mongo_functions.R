@@ -1,4 +1,29 @@
 # R/mongo_functions.R
+# All MongoDB helper functions.
+#
+# The file is split into three layers:
+#   A. Low-level utilities (sanitisation, GridFS read/write)
+#   B. New provenance-aware API  (studies / samples / pipelines /
+#      artifacts / annotation_sets / annotations / datasets / model_runs)
+#   C. Legacy processing helpers kept for backwards compatibility
+#      with processing_module.R and clustering_module.R.
+#      These continue to write into "processing_artifacts_metadata" /
+#      "clustering_metadata" but callers must now supply explicit IDs;
+#      the "most recent" fallback has been removed.
+
+library(digest)
+library(jsonlite)
+library(mongolite)
+
+DB_NAME   <- "MSI_database"
+MONGO_URL <- "mongodb://localhost:27018"
+
+# Null-coalescing operator used throughout
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# ============================================================================
+# A.  LOW-LEVEL UTILITIES
+# ============================================================================
 
 sanitize_colnames <- function(nms) {
   nms <- gsub("\\.", "_", nms, perl = TRUE)
@@ -9,749 +34,816 @@ sanitize_colnames <- function(nms) {
 normalize_for_mongo <- function(df) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
   for (col in names(df)) {
-    if (is.factor(df[[col]])) {
-      df[[col]] <- as.character(df[[col]])
-    }
+    if (is.factor(df[[col]])) df[[col]] <- as.character(df[[col]])
   }
   df
 }
 
-# ADD THIS - from fixing.R
 sanitize_name <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
 
-# ===== RAW FILE STORAGE =====
+.con <- function(collection, db = DB_NAME, url = MONGO_URL) {
+  mongolite::mongo(collection = collection, db = db, url = url)
+}
+
+.gridfs <- function(db = DB_NAME, url = MONGO_URL, prefix = "fs") {
+  mongolite::gridfs(db = db, prefix = prefix, url = url)
+}
+
+# Upload an in-memory R object (serialised as RDS) to GridFS.
+.upload_rds <- function(obj, filename, db = DB_NAME, url = MONGO_URL) {
+  tmp <- tempfile(fileext = ".rds")
+  on.exit(unlink(tmp))
+  saveRDS(obj, tmp)
+  .gridfs(db, url)$upload(tmp, name = filename)
+  filename
+}
+
+# Download an RDS file from GridFS by filename and return the object.
+.download_rds <- function(filename, db = DB_NAME, url = MONGO_URL) {
+  tmp <- tempfile(fileext = ".rds")
+  on.exit(unlink(tmp))
+  .gridfs(db, url)$download(filename, tmp)
+  readRDS(tmp)
+}
+
+
+# ============================================================================
+# B.  PROVENANCE-AWARE API
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# B1.  PIPELINE  (deterministic _id via digest)
+# ----------------------------------------------------------------------------
+
+#' Generate or retrieve a deterministic pipeline document.
+#'
+#' The pipeline _id is SHA-256( type || sorted(params) || code_version ).
+#' Two calls with identical arguments always return the same _id.
+#'
+#' @param type         One of "processing", "features", "clustering".
+#' @param name         Human-readable label.
+#' @param params       Named list of all parameter values.
+#' @param code_version Character. E.g. paste(git_hash, app_version, sep="-").
+#'
+#' @return pipeline_id (character).
+upsert_pipeline <- function(type, name, params,
+                            code_version = "dev",
+                            db = DB_NAME, url = MONGO_URL) {
+
+  stopifnot(is.character(type), length(type) == 1, is.list(params))
+
+  canonical <- list(
+    type         = type,
+    params       = params[order(names(params))],
+    code_version = code_version
+  )
+  pipeline_id <- digest::digest(canonical, algo = "sha256", serialize = TRUE)
+
+  col <- .con("pipelines", db, url)
+  if (col$count(sprintf('{"_id": "%s"}', pipeline_id)) == 0) {
+    col$insert(list(
+      `_id`        = pipeline_id,
+      type         = type,
+      name         = name,
+      params       = params,
+      params_hash  = pipeline_id,
+      code_version = code_version,
+      created_at   = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    ))
+    message("✓ Pipeline registered: ", pipeline_id, " (", name, ")")
+  }
+  pipeline_id
+}
+
+#' Retrieve a pipeline document by _id.
+get_pipeline <- function(pipeline_id, db = DB_NAME, url = MONGO_URL) {
+  res <- .con("pipelines", db, url)$find(sprintf('{"_id": "%s"}', pipeline_id))
+  if (nrow(res) == 0) stop("Pipeline not found: ", pipeline_id)
+  res
+}
+
+list_pipelines <- function(type = NULL, db = DB_NAME, url = MONGO_URL) {
+  q <- if (is.null(type)) "{}" else sprintf('{"type": "%s"}', type)
+  .con("pipelines", db, url)$find(q, fields = '{"name":1,"type":1,"code_version":1,"created_at":1}')
+}
+
+
+# ----------------------------------------------------------------------------
+# B2.  STUDY
+# ----------------------------------------------------------------------------
+
+#' Insert a study (idempotent). _id must be a stable, meaningful string.
+upsert_study <- function(study_id, name, description = "",
+                         db = DB_NAME, url = MONGO_URL) {
+  col <- .con("studies", db, url)
+  if (col$count(sprintf('{"_id": "%s"}', study_id)) == 0) {
+    col$insert(list(
+      `_id`       = study_id,
+      name        = name,
+      description = description,
+      created_at  = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    ))
+    message("✓ Study inserted: ", study_id)
+  }
+  study_id
+}
+
+list_studies <- function(db = DB_NAME, url = MONGO_URL) {
+  .con("studies", db, url)$find("{}", fields = '{"description":0}')
+}
+
+
+# ----------------------------------------------------------------------------
+# B3.  SAMPLE
+# ----------------------------------------------------------------------------
+
+#' Insert or retrieve a sample; returns its _id.
+#'
+#' sample _id is deterministic: digest(study_id, sample_name).
+#' Use sample_name only as a label; never as a primary key.
+upsert_sample <- function(study_id, sample_name,
+                          raw_ref          = list(),
+                          acquisition_meta = list(),
+                          db = DB_NAME, url = MONGO_URL) {
+
+  sample_id <- digest::digest(
+    list(study_id = study_id, sample_name = sample_name),
+    algo = "sha256", serialize = TRUE
+  )
+
+  col <- .con("samples", db, url)
+  if (col$count(sprintf('{"_id": "%s"}', sample_id)) == 0) {
+    col$insert(list(
+      `_id`            = sample_id,
+      study_id         = study_id,
+      sample_name      = sample_name,
+      raw_ref          = raw_ref,
+      acquisition_meta = acquisition_meta,
+      created_at       = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    ))
+    message("✓ Sample registered: ", sample_id, " (", sample_name, ")")
+  }
+  sample_id
+}
+
+#' Compute sample_id without touching the database.
+get_sample_id <- function(study_id, sample_name) {
+  digest::digest(
+    list(study_id = study_id, sample_name = sample_name),
+    algo = "sha256", serialize = TRUE
+  )
+}
+
+list_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
+  .con("samples", db, url)$find(
+    sprintf('{"study_id": "%s"}', study_id),
+    fields = '{"sample_name":1,"study_id":1,"created_at":1}'
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# B4.  ARTIFACTS
+# ----------------------------------------------------------------------------
+
+#' Save a processed R object as a versioned artifact.
+#'
+#' Enforces the unique index (sample_id, stage_type, pipeline_id).
+#' Errors immediately if a duplicate would be created.
+#'
+#' @param obj         R object to serialise.
+#' @param study_id    study _id.
+#' @param sample_id   sample _id (from upsert_sample / get_sample_id).
+#' @param pipeline_id pipeline _id (from upsert_pipeline).
+#' @param stage_type  character, e.g. "binned_dataframe".
+#'
+#' @return artifact_id (character).
+save_artifact <- function(obj, study_id, sample_id, pipeline_id, stage_type,
+                          extra_meta = list(),
+                          db = DB_NAME, url = MONGO_URL) {
+
+  col   <- .con("artifacts", db, url)
+  dup_q <- jsonlite::toJSON(
+    list(sample_id = sample_id, stage_type = stage_type, pipeline_id = pipeline_id),
+    auto_unbox = TRUE
+  )
+  if (col$count(dup_q) > 0) {
+    stop(
+      "Artifact already exists for sample_id=", sample_id,
+      ", stage_type=", stage_type, ", pipeline_id=", pipeline_id,
+      ". Use load_artifact_by_pipeline() to retrieve it."
+    )
+  }
+
+  artifact_id <- digest::digest(
+    list(sample_id = sample_id, stage_type = stage_type, pipeline_id = pipeline_id),
+    algo = "sha256", serialize = TRUE
+  )
+  filename <- paste0(artifact_id, "_", stage_type, ".rds")
+  .upload_rds(obj, filename, db, url)
+
+  col$insert(c(
+    list(
+      `_id`       = artifact_id,
+      study_id    = study_id,
+      sample_id   = sample_id,
+      pipeline_id = pipeline_id,
+      stage_type  = stage_type,
+      gridfs_name = filename,
+      created_at  = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    ),
+    extra_meta
+  ))
+
+  message("✓ Artifact saved: ", artifact_id,
+          " (", stage_type, " | sample: ", sample_id, ")")
+  invisible(artifact_id)
+}
+
+#' Load an artifact strictly by (sample_id, stage_type, pipeline_id).
+#' Never falls back to "most recent". Errors if not found.
+load_artifact_by_pipeline <- function(sample_id, stage_type, pipeline_id,
+                                      db = DB_NAME, url = MONGO_URL) {
+  col <- .con("artifacts", db, url)
+  q   <- jsonlite::toJSON(
+    list(sample_id = sample_id, stage_type = stage_type, pipeline_id = pipeline_id),
+    auto_unbox = TRUE
+  )
+  res <- col$find(q)
+  if (nrow(res) == 0) {
+    stop("No artifact for sample_id=", sample_id,
+         ", stage_type=", stage_type, ", pipeline_id=", pipeline_id)
+  }
+  if (nrow(res) > 1) {
+    stop("Integrity error: multiple artifacts match. Check unique index.")
+  }
+  .download_rds(res$gridfs_name[1], db, url)
+}
+
+#' Load an artifact by its _id.
+load_artifact_by_id <- function(artifact_id, db = DB_NAME, url = MONGO_URL) {
+  res <- .con("artifacts", db, url)$find(sprintf('{"_id": "%s"}', artifact_id))
+  if (nrow(res) == 0) stop("Artifact not found: ", artifact_id)
+  .download_rds(res$gridfs_name[1], db, url)
+}
+
+#' Query artifact metadata (returns data.frame of metadata rows, not the data).
+query_artifacts <- function(study_id = NULL, sample_id = NULL,
+                            stage_type = NULL, pipeline_id = NULL,
+                            db = DB_NAME, url = MONGO_URL) {
+  parts <- list()
+  if (!is.null(study_id))    parts$study_id    <- study_id
+  if (!is.null(sample_id))   parts$sample_id   <- sample_id
+  if (!is.null(stage_type))  parts$stage_type  <- stage_type
+  if (!is.null(pipeline_id)) parts$pipeline_id <- pipeline_id
+  q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
+  .con("artifacts", db, url)$find(q)
+}
+
+
+# ----------------------------------------------------------------------------
+# B5.  ANNOTATION SETS & ANNOTATIONS
+# ----------------------------------------------------------------------------
+
+#' Create a versioned annotation set (idempotent by study_id + name).
+upsert_annotation_set <- function(study_id, name, label_schema,
+                                  db = DB_NAME, url = MONGO_URL) {
+  ann_id <- digest::digest(
+    list(study_id = study_id, name = name),
+    algo = "sha256", serialize = TRUE
+  )
+  col <- .con("annotation_sets", db, url)
+  if (col$count(sprintf('{"_id": "%s"}', ann_id)) == 0) {
+    col$insert(list(
+      `_id`        = ann_id,
+      study_id     = study_id,
+      name         = name,
+      label_schema = as.list(label_schema),
+      created_at   = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    ))
+    message("✓ Annotation set registered: ", ann_id, " (", name, ")")
+  }
+  ann_id
+}
+
+#' Save pixel-level annotations for one sample.
+#' annotation_df must contain at least columns: x, y, Class.
+save_annotation <- function(annotation_df, sample_id, annotation_set_id,
+                            format = "dataframe_rds",
+                            db = DB_NAME, url = MONGO_URL) {
+  col   <- .con("annotations", db, url)
+  dup_q <- jsonlite::toJSON(
+    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
+    auto_unbox = TRUE
+  )
+  if (col$count(dup_q) > 0) {
+    stop("Annotation already exists for sample_id=", sample_id,
+         ", annotation_set_id=", annotation_set_id,
+         ". Delete the existing entry first.")
+  }
+
+  ann_doc_id <- digest::digest(
+    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
+    algo = "sha256", serialize = TRUE
+  )
+  filename <- paste0(ann_doc_id, "_annotation.rds")
+  .upload_rds(annotation_df, filename, db, url)
+
+  col$insert(list(
+    `_id`             = ann_doc_id,
+    sample_id         = sample_id,
+    annotation_set_id = annotation_set_id,
+    format            = format,
+    gridfs_name       = filename,
+    created_at        = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  ))
+  message("✓ Annotation saved: ", ann_doc_id)
+  invisible(ann_doc_id)
+}
+
+#' Load annotation data.frame by (sample_id, annotation_set_id). No fallback.
+load_annotation <- function(sample_id, annotation_set_id,
+                            db = DB_NAME, url = MONGO_URL) {
+  col <- .con("annotations", db, url)
+  q   <- jsonlite::toJSON(
+    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
+    auto_unbox = TRUE
+  )
+  res <- col$find(q)
+  if (nrow(res) == 0) {
+    stop("No annotation for sample_id=", sample_id,
+         ", annotation_set_id=", annotation_set_id)
+  }
+  .download_rds(res$gridfs_name[1], db, url)
+}
+
+list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
+  .con("annotation_sets", db, url)$find(sprintf('{"study_id": "%s"}', study_id))
+}
+
+
+# ----------------------------------------------------------------------------
+# B6.  DATASETS  (frozen snapshots – critical for reproducible ML)
+# ----------------------------------------------------------------------------
+
+#' Create a frozen dataset snapshot.
+#'
+#' Pins exactly which samples, pipeline, annotation set, and split seed
+#' will be used for training.  Cannot be mutated after creation.
+#'
+#' @param study_id          All sample_ids must belong to this study.
+#' @param sample_ids        Character vector of sample _ids.
+#' @param pipeline_id       Determines which features to use.
+#' @param annotation_set_id Determines which labels to use.
+#' @param stage_type        Artifact stage_type to pull features from.
+#' @param feature_spec      list(type, version) describing feature extraction.
+#' @param split             list(strategy, seed, train_frac).
+#' @param name              Human-readable label.
+#'
+#' @return dataset_id (character).
+create_dataset <- function(study_id,
+                           sample_ids,
+                           pipeline_id,
+                           annotation_set_id,
+                           stage_type    = "binned_dataframe",
+                           feature_spec  = list(type = "mz_bins", version = "1.0"),
+                           split         = list(strategy   = "random",
+                                                seed       = 42L,
+                                                train_frac = 0.8),
+                           name          = "",
+                           db = DB_NAME, url = MONGO_URL) {
+
+  stopifnot(length(sample_ids) > 0)
+
+  # --- validate: all samples belong to the declared study ---
+  samples_col <- .con("samples", db, url)
+  found <- samples_col$find(
+    jsonlite::toJSON(list(`_id` = list(`$in` = as.list(sample_ids))),
+                     auto_unbox = TRUE),
+    fields = '{"_id":1,"study_id":1}'
+  )
+  missing_ids <- setdiff(sample_ids, found[["_id"]])
+  if (length(missing_ids) > 0) {
+    stop("Samples not found in database: ", paste(missing_ids, collapse = ", "))
+  }
+  wrong_study <- found$study_id[found$study_id != study_id]
+  if (length(wrong_study) > 0) {
+    stop("Cross-study mixing detected. Samples from study(ies) ",
+         paste(unique(wrong_study), collapse = ", "),
+         " cannot be mixed with study_id=", study_id)
+  }
+
+  # --- validate: artifact exists for every sample ---
+  arts_col <- .con("artifacts", db, url)
+  for (sid in sample_ids) {
+    q <- jsonlite::toJSON(
+      list(sample_id = sid, stage_type = stage_type, pipeline_id = pipeline_id),
+      auto_unbox = TRUE
+    )
+    if (arts_col$count(q) == 0) {
+      stop("Missing artifact (", stage_type, ") for sample_id=", sid,
+           " with pipeline_id=", pipeline_id)
+    }
+  }
+
+  # --- validate: annotation exists for every sample ---
+  ann_col <- .con("annotations", db, url)
+  for (sid in sample_ids) {
+    q <- jsonlite::toJSON(
+      list(sample_id = sid, annotation_set_id = annotation_set_id),
+      auto_unbox = TRUE
+    )
+    if (ann_col$count(q) == 0) {
+      stop("Missing annotation for sample_id=", sid,
+           " with annotation_set_id=", annotation_set_id)
+    }
+  }
+
+  # --- deterministic dataset _id ---
+  dataset_id <- digest::digest(
+    list(
+      study_id          = study_id,
+      sample_ids        = sort(sample_ids),
+      pipeline_id       = pipeline_id,
+      annotation_set_id = annotation_set_id,
+      stage_type        = stage_type,
+      feature_spec      = feature_spec,
+      split             = split
+    ),
+    algo = "sha256", serialize = TRUE
+  )
+
+  ds_col <- .con("datasets", db, url)
+  if (ds_col$count(sprintf('{"_id": "%s"}', dataset_id)) > 0) {
+    message("Dataset already exists: ", dataset_id)
+    return(dataset_id)
+  }
+
+  ds_col$insert(list(
+    `_id`             = dataset_id,
+    study_id          = study_id,
+    name              = name,
+    sample_ids        = as.list(sample_ids),
+    pipeline_id       = pipeline_id,
+    annotation_set_id = annotation_set_id,
+    stage_type        = stage_type,
+    feature_spec      = feature_spec,
+    split             = split,
+    created_at        = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  ))
+
+  message("✓ Dataset created: ", dataset_id,
+          " (", length(sample_ids), " samples, study: ", study_id, ")")
+  dataset_id
+}
+
+#' Retrieve a dataset document by _id.
+get_dataset <- function(dataset_id, db = DB_NAME, url = MONGO_URL) {
+  res <- .con("datasets", db, url)$find(sprintf('{"_id": "%s"}', dataset_id))
+  if (nrow(res) == 0) stop("Dataset not found: ", dataset_id)
+  res
+}
+
+#' List all datasets (summary view, no heavy data).
+list_datasets <- function(study_id = NULL, db = DB_NAME, url = MONGO_URL) {
+  q <- if (is.null(study_id)) "{}" else sprintf('{"study_id": "%s"}', study_id)
+  .con("datasets", db, url)$find(
+    q,
+    fields = '{"name":1,"study_id":1,"pipeline_id":1,
+               "annotation_set_id":1,"stage_type":1,"created_at":1}'
+  )
+}
+
+#' Materialise a dataset: load features + labels, apply the frozen split.
+#'
+#' This is the ONLY authorised entry point for assembling training data.
+#' All lookups are by exact pipeline_id; no "most recent" fallback exists.
+#'
+#' @return Named list: train_X, train_y, test_X, test_y,
+#'         split_info, dataset_meta, pipeline_meta.
+load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL) {
+
+  ds                <- get_dataset(dataset_id, db, url)
+  sample_ids        <- unlist(ds$sample_ids)
+  pipeline_id       <- ds$pipeline_id
+  annotation_set_id <- ds$annotation_set_id
+  stage_type        <- ds$stage_type
+
+  # split params may arrive as a list or as a single-row data.frame
+  sp             <- if (is.data.frame(ds$split)) as.list(ds$split[1, ]) else ds$split[[1]]
+  split_strategy <- sp$strategy  %||% "random"
+  split_seed     <- as.integer(sp$seed %||% 42L)
+  split_frac     <- as.numeric(sp$train_frac %||% 0.8)
+
+  message("[dataset] Materialising dataset ", dataset_id,
+          " (", length(sample_ids), " samples)")
+
+  all_features <- vector("list", length(sample_ids))
+  all_labels   <- vector("list", length(sample_ids))
+
+  for (i in seq_along(sample_ids)) {
+    sid <- sample_ids[i]
+    message("[dataset]  [", i, "/", length(sample_ids), "] sample_id: ", sid)
+
+    feat_df <- load_artifact_by_pipeline(sid, stage_type, pipeline_id, db, url)
+    mz_cols <- grep("^mz_", colnames(feat_df), value = TRUE)
+    if (length(mz_cols) == 0) stop("No mz_ columns in artifact for sample_id=", sid)
+
+    ann_df <- load_annotation(sid, annotation_set_id, db, url)
+
+    merged <- merge(
+      feat_df[, c("x", "y", mz_cols)],
+      ann_df[,  c("x", "y", "Class")],
+      by  = c("x", "y"),
+      all = FALSE
+    )
+    if (nrow(merged) == 0) {
+      stop("No pixel overlap after joining features and annotations for sample_id=", sid)
+    }
+
+    all_features[[i]] <- as.matrix(merged[, mz_cols, drop = FALSE])
+    all_labels[[i]]   <- merged$Class
+  }
+
+  X <- do.call(rbind, all_features)
+  y <- as.factor(do.call(c, all_labels))
+
+  set.seed(split_seed)
+  idx     <- sample(nrow(X))
+  n_train <- ceiling(nrow(X) * split_frac)
+  tr_idx  <- idx[seq_len(n_train)]
+  te_idx  <- idx[(n_train + 1):length(idx)]
+
+  list(
+    train_X      = X[tr_idx, , drop = FALSE],
+    train_y      = y[tr_idx],
+    test_X       = X[te_idx, , drop = FALSE],
+    test_y       = y[te_idx],
+    split_info   = list(
+      strategy   = split_strategy,
+      seed       = split_seed,
+      train_frac = split_frac,
+      n_train    = length(tr_idx),
+      n_test     = length(te_idx)
+    ),
+    dataset_meta  = ds,
+    pipeline_meta = get_pipeline(pipeline_id, db, url)
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# B7.  MODEL RUNS
+# ----------------------------------------------------------------------------
+
+#' Save the result of a training run.
+#'
+#' @param dataset_id   Dataset _id (validated before save).
+#' @param model_type   Character, e.g. "ranger".
+#' @param hyperparams  Named list of all hyperparameters used.
+#' @param metrics      Named list of evaluation metrics.
+#' @param model_obj    Fitted model object (serialised to GridFS).
+#'
+#' @return model_run_id (character).
+save_model_run <- function(dataset_id, model_type, hyperparams, metrics,
+                           model_obj,
+                           db = DB_NAME, url = MONGO_URL) {
+  get_dataset(dataset_id, db, url)   # validate; errors if not found
+
+  run_id   <- paste0("run_",
+                     format(Sys.time(), "%Y%m%d_%H%M%S_"),
+                     substr(digest::digest(runif(1), algo = "sha256"), 1, 8))
+  filename <- paste0(run_id, "_model.rds")
+  .upload_rds(model_obj, filename, db, url)
+
+  .con("model_runs", db, url)$insert(list(
+    `_id`        = run_id,
+    dataset_id   = dataset_id,
+    model_type   = model_type,
+    hyperparams  = hyperparams,
+    metrics      = metrics,
+    model_gridfs = filename,
+    created_at   = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  ))
+
+  message("✓ Model run saved: ", run_id,
+          " | dataset: ", dataset_id, " | type: ", model_type)
+  invisible(run_id)
+}
+
+#' Load a fitted model object by model_run_id.
+load_model_run <- function(run_id, db = DB_NAME, url = MONGO_URL) {
+  res <- .con("model_runs", db, url)$find(sprintf('{"_id": "%s"}', run_id))
+  if (nrow(res) == 0) stop("Model run not found: ", run_id)
+  .download_rds(res$model_gridfs[1], db, url)
+}
+
+#' List all model runs trained on a dataset.
+list_model_runs <- function(dataset_id, db = DB_NAME, url = MONGO_URL) {
+  .con("model_runs", db, url)$find(
+    sprintf('{"dataset_id": "%s"}', dataset_id),
+    fields = '{"model_type":1,"metrics":1,"hyperparams":1,"created_at":1}'
+  )
+}
+
+
+# ============================================================================
+# C.  LEGACY PROCESSING HELPERS
+# (backwards-compatible with processing_module.R and clustering_module.R)
+# These still write to "processing_artifacts_metadata" / "clustering_metadata".
+# The "most recent" fallback has been REMOVED from all loaders.
+# ============================================================================
+
 save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
-                                   db_name = "MSI_database",
-                                   mongo_url = "mongodb://localhost:27018",
-                                   bucket = "fs") {
+                                   db_name   = DB_NAME,
+                                   mongo_url = MONGO_URL,
+                                   bucket    = "fs") {
   stopifnot(file.exists(imzml_path), file.exists(ibd_path))
-  
-  grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
-  meta <- mongo(collection = "processing_artifacts_metadata", 
-                db = db_name, url = mongo_url)
-  
-  base <- tools::file_path_sans_ext(basename(sample_name))
-  ts   <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+  grid <- mongolite::gridfs(db = db_name, prefix = bucket, url = mongo_url)
+  meta <- .con("processing_artifacts_metadata", db_name, mongo_url)
+
+  base     <- tools::file_path_sans_ext(basename(sample_name))
+  ts       <- format(Sys.time(), "%Y%m%d_%H%M%S")
   imz_name <- sanitize_name(sprintf("%s__%s.imzML", base, ts))
-  ibd_name <- sanitize_name(sprintf("%s__%s.ibd", base, ts))
-  
+  ibd_name <- sanitize_name(sprintf("%s__%s.ibd",   base, ts))
+
   message("Uploading imzML to GridFS...")
   imz_id <- unname(grid$upload(imzml_path, name = imz_name))
-  
   message("Uploading ibd to GridFS...")
   ibd_id <- unname(grid$upload(ibd_path, name = ibd_name))
-  
+
   meta$insert(list(
-    sample_name         = sample_name,
-    stage_type          = "raw_files",
-    created_at          = Sys.time(),
-    imzml_gridfs_id     = as.character(imz_id),
-    imzml_gridfs_name   = imz_name,
-    ibd_gridfs_id       = as.character(ibd_id),
-    ibd_gridfs_name     = ibd_name
+    sample_name       = sample_name,
+    stage_type        = "raw_files",
+    created_at        = Sys.time(),
+    imzml_gridfs_id   = as.character(imz_id),
+    imzml_gridfs_name = imz_name,
+    ibd_gridfs_id     = as.character(ibd_id),
+    ibd_gridfs_name   = ibd_name
   ))
-  
+
   message("✓ Raw files saved to MongoDB")
   invisible(list(imzml_id = as.character(imz_id), ibd_id = as.character(ibd_id)))
 }
 
 fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
-                                      db_name = "MSI_database",
-                                      mongo_url = "mongodb://localhost:27018",
-                                      bucket = "fs") {
-  grid <- gridfs(db = db_name, prefix = bucket, url = mongo_url)
-  meta <- mongo(collection = "processing_artifacts_metadata", 
-                db = db_name, url = mongo_url)
-  
-  query <- jsonlite::toJSON(
-    list(sample_name = sample_name, stage_type = "raw_files"),
-    auto_unbox = TRUE
-  )
-  
-  artifacts <- meta$find(query)
-  
-  if (nrow(artifacts) == 0) {
-    stop("No raw_files artifact for sample_name = ", sample_name)
-  }
-  
+                                      db_name   = DB_NAME,
+                                      mongo_url = MONGO_URL,
+                                      bucket    = "fs") {
+  grid      <- mongolite::gridfs(db = db_name, prefix = bucket, url = mongo_url)
+  meta      <- .con("processing_artifacts_metadata", db_name, mongo_url)
+  artifacts <- meta$find(jsonlite::toJSON(
+    list(sample_name = sample_name, stage_type = "raw_files"), auto_unbox = TRUE
+  ))
+  if (nrow(artifacts) == 0) stop("No raw_files for sample: ", sample_name)
   row <- artifacts[nrow(artifacts), , drop = FALSE]
-  
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
-  
   base <- tools::file_path_sans_ext(basename(sample_name))
-  final_imzml <- file.path(dest_dir, paste0(base, ".imzML"))
-  final_ibd   <- file.path(dest_dir, paste0(base, ".ibd"))
-  
-  # Download imzML
-  imzml_name <- as.character(row$imzml_gridfs_name[1])
-  message("Downloading imzML: ", imzml_name)
-  grid$download(imzml_name, final_imzml)
-  
-  if (!file.exists(final_imzml)) {
-    stop("imzML download failed - file not found at: ", final_imzml)
-  }
-  message("✓ imzML: ", file.size(final_imzml), " bytes")
-  
-  # Download ibd
-  ibd_name <- as.character(row$ibd_gridfs_name[1])
-  message("Downloading ibd: ", ibd_name)
-  grid$download(ibd_name, final_ibd)
-  
-  if (!file.exists(final_ibd)) {
-    stop("ibd download failed - file not found at: ", final_ibd)
-  }
-  message("✓ ibd: ", file.size(final_ibd), " bytes")
-  
-  message("✓ Raw files ready at: ", dest_dir)
-  
-  list(imzml = final_imzml, ibd = final_ibd)
+  fi   <- file.path(dest_dir, paste0(base, ".imzML"))
+  fd   <- file.path(dest_dir, paste0(base, ".ibd"))
+  grid$download(as.character(row$imzml_gridfs_name[1]), fi)
+  if (!file.exists(fi)) stop("imzML download failed: ", fi)
+  grid$download(as.character(row$ibd_gridfs_name[1]), fd)
+  if (!file.exists(fd)) stop("ibd download failed: ", fd)
+  list(imzml = fi, ibd = fd)
 }
 
-load_raw_object_from_mongo <- function(sample_name, workdir,
-                                       db_name = "MSI_database",
-                                       mongo_url = "mongodb://localhost:27018",
-                                       bucket = "fs",
-                                       resolution = 10,
-                                       BPPARAM = BiocParallel::bpparam()) {
-  paths <- fetch_raw_pair_from_mongo(sample_name, workdir, db_name, mongo_url, bucket)
-  
-  message("Reading imzML with Cardinal...")
-  obj <- readMSIData(
-    paths$imzml, 
-    memory = FALSE, 
-    check = FALSE,
-    mass.range = NULL, 
-    resolution = resolution,
-    units = "ppm",
-    guess.max = 1000L, 
-    as = "auto", 
-    parse.only = FALSE,
-    verbose = getCardinalVerbose(), 
-    chunkopts = list(),
-    BPPARAM = BPPARAM
-  )
-  
-  message("✓ MSI object loaded")
-  obj
-}
-
-
-# ===== CARDINAL MSI OBJECT SAVE/LOAD (with .ibd handling) =====
-
-save_msi_stage_to_mongo <- function(msi_obj, run_id, stage_type, 
-                                    sample_name,
-                                    params = list(),
-                                    db_name = "MSI_database",
-                                    mongo_url = "mongodb://localhost:27018") {
-  
-  # Check for duplicates (control_mean and snr_reference only)
-  if (stage_type %in% c("control_mean", "snr_reference")) {
-    mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                        db = db_name, url = mongo_url)
-    
-    query_list <- list(
-      sample_name = sample_name,
-      stage_type = stage_type
-    )
-    
-    # Add resolution for control_mean
-    if (stage_type == "control_mean" && !is.null(params$resolution)) {
-      query_list$resolution <- params$resolution
-    }
-    
-    # Add SNR for snr_reference
-    if (stage_type == "snr_reference" && !is.null(params$snr)) {
-      query_list$snr <- params$snr
-    }
-    
-    existing <- mongo_meta$find(
-      query = jsonlite::toJSON(query_list, auto_unbox = TRUE)
-    )
-    
-    if (nrow(existing) > 0) {
-      message("⚠ ", stage_type, " already exists with these parameters. Skipping save.")
-      return(invisible(existing$run_id[1]))
-    }
-  }
-  
-  # Create temp directory for Cardinal files
-  tmp_dir <- tempfile("imzml_")
-  dir.create(tmp_dir)
-  on.exit(unlink(tmp_dir, recursive = TRUE))
-  
-  base_name <- paste0(run_id, "_", stage_type)
-  imzml_path <- file.path(tmp_dir, paste0(base_name, ".imzML"))
-  
-  # Write MSI object to imzML + ibd
-  message("Writing MSI stage to imzML format...")
-  writeMSIData(msi_obj, imzml_path, bundle = FALSE)
-  
-  # Upload both files to GridFS
-  fs <- gridfs(url = mongo_url, db = db_name, prefix = "fs")
-  
-  message("Uploading ", base_name, ".imzML to GridFS...")
-  imzml_result <- fs$upload(imzml_path, name = paste0(base_name, ".imzML"))
-  imzml_grid_id <- as.character(imzml_result$id)
-  
-  ibd_path <- file.path(tmp_dir, paste0(base_name, ".ibd"))
-  if (file.exists(ibd_path)) {
-    message("Uploading ", base_name, ".ibd to GridFS...")
-    ibd_result <- fs$upload(ibd_path, name = paste0(base_name, ".ibd"))
-    ibd_grid_id <- as.character(ibd_result$id)
-  } else {
-    warning("No .ibd file found for stage: ", stage_type)
-    ibd_grid_id <- NA_character_
-  }
-  
-  # Upload any .tsv files (feature/pixel metadata)
-  tsvs <- list.files(tmp_dir, pattern = "\\.tsv$", full.names = TRUE)
-  tsv_grid_ids <- list()
-  for (tsv_path in tsvs) {
-    tsv_name <- paste0(base_name, "_", basename(tsv_path))
-    message("Uploading ", tsv_name, " to GridFS...")
-    tsv_result <- fs$upload(tsv_path, name = tsv_name)
-    tsv_grid_ids[[basename(tsv_path)]] <- as.character(tsv_result$id)
-  }
-  
-  # Create metadata document
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                      db = db_name, url = mongo_url)
-  
-  metadata_row <- list(
-    gridfs_id = imzml_grid_id,
-    ibd_gridfs_id = ibd_grid_id,
-    filename = paste0(base_name, ".imzML"),
-    ibd_filename = paste0(base_name, ".ibd"),
-    run_id = run_id,
-    sample_name = sample_name,
-    stage_type = stage_type,
-    created_at = Sys.time(),
-    file_format = "imzML"
-  )
-  
-  # Add TSV GridFS IDs if present
-  if (length(tsv_grid_ids) > 0) {
-    metadata_row$tsv_gridfs_ids <- tsv_grid_ids
-  }
-  
-  metadata_row <- c(metadata_row, params)
-  
-  mongo_meta$insert(metadata_row)
-  
-  message("✓ Saved '", stage_type, "' (GridFS ID: ", imzml_grid_id, ")")
-  invisible(imzml_grid_id)
-}
-
-
-load_msi_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL, 
-                                      resolution = NULL,
-                                      db_name   = "MSI_database",
-                                      mongo_url = "mongodb://localhost:27018",
-                                      memory    = FALSE,
-                                      workdir   = NULL,
-                                      verbose   = TRUE) {
-  if (verbose) message("[load] sample='", sample_name, "', stage='", stage_type, "'")
-
-  meta <- mongolite::mongo(collection = "processing_artifacts_metadata",
-                           db = db_name, url = mongo_url)
-
-  query_list <- list(
-    sample_name = sample_name,
-    stage_type  = stage_type,
-    file_format = "imzML"
-  )
-  if (!is.null(run_id)) query_list$run_id <- run_id
-  if (!is.null(resolution)) query_list$resolution <- as.numeric(resolution)
-
-  artifacts <- meta$find(jsonlite::toJSON(query_list, auto_unbox = TRUE))
-
-  if (nrow(artifacts) == 0) {
-    stop("No imzML artifact found for sample='", sample_name,
-         "', stage='", stage_type, "'.",
-          if (!is.null(resolution)) paste0("', resolution=", resolution) else "'", ".")
-  }
-
-  if (nrow(artifacts) > 1) {
-    if (verbose) message("[load] Multiple artifacts found; selecting most recent")
-    if (is.list(artifacts$created_at)) {
-      artifacts$created_at <- do.call(c, artifacts$created_at)
-    }
-    ord <- order(artifacts$created_at, decreasing = TRUE, na.last = TRUE)
-    artifacts <- artifacts[ord, , drop = FALSE]
-  }
-  row <- artifacts[1, , drop = FALSE]
-
-  if (is.null(workdir)) {
-    workdir <- file.path(tempdir(),
-                         paste0("imzml_", gsub("[^A-Za-z0-9._-]+", "_",
-                                               paste0(sample_name, "_", stage_type))))
-  }
-  dir.create(workdir, recursive = TRUE, showWarnings = FALSE)
-  if (verbose) message("[load] workdir: ", workdir)
-
-  fs <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
-
-  imzml_name <- as.character(row$filename[1])
-  ibd_name   <- as.character(row$ibd_filename[1])
-
-  imzml_local <- file.path(workdir, imzml_name)
-  if (verbose) message("[load] Downloading ", imzml_name)
-  fs$download(name = imzml_name, path = imzml_local)
-  if (!file.exists(imzml_local)) stop("imzML download failed: ", imzml_local)
-
-  ibd_local <- NA_character_
-  if (!is.na(ibd_name) && nzchar(ibd_name)) {
-    ibd_local <- file.path(workdir, ibd_name)
-    if (verbose) message("[load] Downloading ", ibd_name)
-    fs$download(name = ibd_name, path = ibd_local)
-    if (!file.exists(ibd_local)) stop("ibd download failed: ", ibd_local)
-  } else {
-    warning("[load] No ibd filename in metadata for this stage; proceeding without it.")
-  }
-
-  # Download TSV files if present
-  if ("tsv_gridfs_ids" %in% names(row) && !is.null(row$tsv_gridfs_ids[[1]])) {
-    tsv_map <- row$tsv_gridfs_ids[[1]]
-    base_no_ext <- tools::file_path_sans_ext(imzml_name)
-    for (tsv_name in names(tsv_map)) {
-      stored_tsv <- paste0(base_no_ext, "_", tsv_name)
-      tsv_local  <- file.path(workdir, tsv_name)
-      if (verbose) message("[load] Downloading ", stored_tsv, " -> ", tsv_local)
-      try(fs$download(name = stored_tsv, path = tsv_local), silent = TRUE)
-    }
-  }
-
-  if (verbose) message("[load] Reading MSI with Cardinal (memory=", memory, ")")
-  obj <- Cardinal::readMSIData(imzml_local, memory = memory)
-
-  if (verbose) {
-    try({
-      message(sprintf("[load] OK: pixels=%s, features=%s",
-                      ncol(obj), nrow(obj)))
-    }, silent = TRUE)
-  }
-
-  return(obj)
-}
-
-
-
-
-
-
-
-
-
-# ===== SAVE/LOAD STAGES =====
-save_stage_to_mongo <- function(msi_object, run_id, stage_type, 
+save_stage_to_mongo <- function(msi_object, run_id, stage_type,
                                 sample_name,
-                                params = list(),
-                                db_name = "MSI_database", 
-                                mongo_url = "mongodb://localhost:27018") {
-  
-  # Check for duplicates (control_mean and snr_reference only)
+                                params    = list(),
+                                db_name   = DB_NAME,
+                                mongo_url = MONGO_URL) {
+
   if (stage_type %in% c("control_mean", "snr_reference")) {
-    mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                        db = db_name, url = mongo_url)
-    
-    query_list <- list(
-      sample_name = sample_name,
-      stage_type = stage_type
-    )
-    
-    if (stage_type == "snr_reference" && !is.null(params$snr)) {
-      query_list$snr <- params$snr
-    }
-    
-    existing <- mongo_meta$find(
-      query = jsonlite::toJSON(query_list, auto_unbox = TRUE)
-    )
-    
-    if (nrow(existing) > 0) {
+    meta   <- .con("processing_artifacts_metadata", db_name, mongo_url)
+    q_list <- list(sample_name = sample_name, stage_type = stage_type)
+    if (stage_type == "snr_reference" && !is.null(params$snr)) q_list$snr <- params$snr
+    if (meta$count(jsonlite::toJSON(q_list, auto_unbox = TRUE)) > 0) {
       message("⚠ ", stage_type, " already exists. Skipping save.")
-      return(invisible(existing$run_id[1]))
+      return(invisible(NULL))
     }
   }
-  
-  # Save RDS to GridFS
-  temp_path <- tempfile(pattern = paste0(stage_type, "_"), fileext = ".rds")
-  saveRDS(msi_object, temp_path)
-  
-  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
+
+  tmp <- tempfile(pattern = paste0(stage_type, "_"), fileext = ".rds")
+  saveRDS(msi_object, tmp)
+  on.exit(unlink(tmp))
+
+  grid     <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
   filename <- paste0(run_id, "_", stage_type, ".rds")
-  grid_result <- grid$upload(temp_path, name = filename)
-  unlink(temp_path)
-  
-  grid_id <- as.character(grid_result$id)
-  
-  # Create metadata
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                      db = db_name, url = mongo_url)
-  
-  metadata_row <- list(
-    gridfs_id = grid_id,
-    filename = filename,
-    run_id = run_id,
-    sample_name = sample_name,
-    stage_type = stage_type,
-    created_at = Sys.time()
-  )
-  
-  metadata_row <- c(metadata_row, params)
-  
-  mongo_meta$insert(metadata_row)
-  
+  grid_res <- grid$upload(tmp, name = filename)
+  grid_id  <- as.character(grid_res$id)
+
+  meta <- .con("processing_artifacts_metadata", db_name, mongo_url)
+  meta$insert(c(
+    list(
+      gridfs_id   = grid_id,
+      filename    = filename,
+      run_id      = run_id,
+      sample_name = sample_name,
+      stage_type  = stage_type,
+      created_at  = Sys.time()
+    ),
+    params
+  ))
+
   message("✓ Saved '", stage_type, "' (GridFS ID: ", grid_id, ")")
   invisible(grid_id)
 }
 
-load_stage_from_mongo <- function(sample_name, stage_type, run_id = NULL,
-                                  db_name = "MSI_database",
-                                  mongo_url = "mongodb://localhost:27018") {
-  
-  meta <- mongo("processing_artifacts_metadata", db = db_name, url = mongo_url)
-  
-  query_list <- list(
-    sample_name = sample_name,
-    stage_type = stage_type
-  )
-  
-  if (!is.null(run_id)) {
-    query_list$run_id <- run_id
-  }
-  
-  query <- jsonlite::toJSON(query_list, auto_unbox = TRUE)
-  artifacts <- meta$find(query)
-  
-  if (nrow(artifacts) == 0) {
-    stop("No artifact found for sample=", sample_name, ", stage=", stage_type)
-  }
-  
-  # Use most recent
-  if (nrow(artifacts) > 1) {
-    message("Multiple artifacts found, using most recent")
-  }
-  row <- artifacts[nrow(artifacts), , drop = FALSE]
-  
-  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  fname <- as.character(row$filename[1])
-  
-  message("Downloading ", fname, "...")
-  temp_dir <- tempdir()
-  local_path <- file.path(temp_dir, fname)
-  
-  if (!file.exists(local_path)) {
-    grid$download(fname, local_path)
-  }
-  
-  message("Loading RDS...")
-  obj <- readRDS(local_path)
-  
-  message("✓ Loaded stage: ", stage_type)
-  obj
-}
-
-# --- Query artifacts (returns dataframe) ---
-query_artifacts <- function(sample_name = NULL, 
-                            stage_type = NULL,
-                            resolution = NULL,  
-                            snr = NULL, 
-                            tolerance = NULL,
-                            reference_name = NULL,
-                            run_id = NULL,
-                            db_name = "MSI_database",  
-                            mongo_url = "mongodb://localhost:27018") {
-  
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                      db = db_name, url = mongo_url)
-  
-  # Build query
-  query_parts <- list()
-  if (!is.null(sample_name)) query_parts$sample_name <- sample_name
-  if (!is.null(stage_type)) query_parts$stage_type <- stage_type
-  if (!is.null(resolution)) query_parts$resolution <- as.numeric(resolution)  # TILFØJET
-  if (!is.null(snr)) query_parts$snr <- as.numeric(snr)
-  if (!is.null(tolerance)) query_parts$tolerance <- as.numeric(tolerance)
-  if (!is.null(reference_name)) query_parts$reference_name <- reference_name
-  if (!is.null(run_id)) query_parts$run_id <- run_id
-  
-  query_json <- if (length(query_parts) == 0) {
-    '{}'
-  } else {
-    jsonlite::toJSON(query_parts, auto_unbox = TRUE)
-  }
-  
-  results <- mongo_meta$find(query_json)
-  results
-}
-
-
-# --- Load artifact by gridfs_id ---
-load_artifact_by_id <- function(gridfs_id,
-                                db_name = "MSI_database",  
-                                mongo_url = "mongodb://localhost:27018") {
-  
-  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  
-  # Find file by _id
-  query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
-  file_info <- grid$find(query)
-  
-  if (nrow(file_info) == 0) {
-    stop("GridFS file not found: ", gridfs_id)
-  }
-  
-  filename <- file_info$name[1]
-  
-  # Download to temp directory
-  temp_dir <- tempdir()
-  grid$download(filename, temp_dir)
-  
-  # Read the downloaded file
-  downloaded_path <- file.path(temp_dir, filename)
-  obj <- readRDS(downloaded_path)
-  
-  message("Loaded artifact (GridFS ID: ", gridfs_id, ")")
-  obj
-}
-
-
-# --- Load artifact by query (gets first match) ---
-load_artifact <- function(sample_name = NULL, 
-                          stage_type = NULL,
-                          snr = NULL, 
-                          tolerance = NULL,
-                          reference_name = NULL,
-                          run_id = NULL,
-                          db_name = "MSI_database",
-                          mongo_url = "mongodb://localhost:27018") {
-  
-  artifacts <- query_artifacts(
-    sample_name = sample_name,
-    stage_type = stage_type,
-    snr = snr,
-    tolerance = tolerance,
-    reference_name = reference_name,
-    run_id = run_id,
-    db_name = db_name,
-    mongo_url = mongo_url
-  )
-  
-  if (nrow(artifacts) == 0) {
-    stop("No artifacts found matching query")
-  }
-  
-  if (nrow(artifacts) > 1) {
-    message("Multiple artifacts found (", nrow(artifacts), "), loading first match")
-  }
-  
-  gridfs_id <- artifacts$gridfs_id[1]
-  load_artifact_by_id(gridfs_id, db_name, mongo_url)
-}
-
-
-# --- Check if artifact exists ---
-artifact_exists <- function(sample_name, stage_type, params = list(),
-                           db_name = "MSI_database",
-                           mongo_url = "mongodb://localhost:27018") {
-  
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                      db = db_name, url = mongo_url)
-  
-  # Build query with sample_name, stage_type, and all params
-  query_parts <- list(
-    sample_name = sample_name,
-    stage_type = stage_type
-  )
-  query_parts <- c(query_parts, params)
-  
-  query_json <- jsonlite::toJSON(query_parts, auto_unbox = TRUE)
-  results <- mongo_meta$find(query_json)
-  
-  nrow(results) > 0
-}
-
-
-# --- Find what stages exist for a sample ---
-get_existing_stages <- function(sample_name, 
-                               db_name = "MSI_database",
-                               mongo_url = "mongodb://localhost:27018") {
-  
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                      db = db_name, url = mongo_url)
-  
-  query <- sprintf('{"sample_name": "%s"}', sample_name)
-  results <- mongo_meta$find(query)
-  
-  if (nrow(results) == 0) return(NULL)
-  
-  # Return list of stages with their parameters
-  stages <- lapply(seq_len(nrow(results)), function(i) {
-    row <- results[i, ]
-    list(
-      stage_type = row$stage_type,
-      run_id = row$run_id,
-      gridfs_id = row$gridfs_id,
-      snr = if ("snr" %in% names(row)) row$snr else NULL,
-      tolerance = if ("tolerance" %in% names(row)) row$tolerance else NULL,
-      reference_name = if ("reference_name" %in% names(row)) row$reference_name else NULL
-      # reference_source removed - not used for comparison
+# IMPORTANT: run_id is now MANDATORY. The "most recent" fallback is gone.
+load_stage_from_mongo <- function(sample_name, stage_type, run_id,
+                                  db_name   = DB_NAME,
+                                  mongo_url = MONGO_URL) {
+  if (missing(run_id) || is.null(run_id)) {
+    stop(
+      "load_stage_from_mongo() requires an explicit run_id. ",
+      "No fallback to 'most recent' is permitted. ",
+      "Retrieve run_id from query_legacy_artifacts() first."
     )
-  })
-  
-  stages
-}
-
-
-# --- Find compatible run_id (same sample + raw stage exists) ---
-find_compatible_run <- function(sample_name,
-                               db_name = "MSI_database",
-                               mongo_url = "mongodb://localhost:27018") {
-  
-  mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                      db = db_name, url = mongo_url)
-  
-  # Find raw stage for this sample
-  query <- sprintf('{"sample_name": "%s", "stage_type": "raw"}', sample_name)
-  results <- mongo_meta$find(query)
-  
-  if (nrow(results) == 0) return(NULL)
-  
-  # Return first run_id (assuming one raw per sample)
-  results$run_id[1]
-}
-
-
-
-
-#======== CLUSTERING ARTIFACTS FUNCTIONS ========#
-
-# --- Query clustering artifacts ---
-query_clustering_artifacts <- function(sample_name = NULL,
-                                      assignment_id = NULL,
-                                      clustering_method = NULL,
-                                      snr = NULL,
-                                      tolerance = NULL,
-                                      reference_name = NULL,
-                                      db_name = "MSI_database",
-                                      mongo_url = "mongodb://localhost:27018") {
-  
-  mongo_cluster_meta <- mongo(collection = "clustering_metadata",
-                             db = db_name, url = mongo_url)
-  
-  # Build query
-  query_parts <- list()
-  if (!is.null(sample_name)) query_parts$sample_name <- sample_name
-  if (!is.null(assignment_id)) query_parts$assignment_id <- assignment_id
-  if (!is.null(clustering_method)) query_parts$clustering_method <- clustering_method
-  if (!is.null(snr)) query_parts$snr <- snr
-  if (!is.null(tolerance)) query_parts$tolerance <- tolerance
-  if (!is.null(reference_name)) query_parts$reference_name <- reference_name
-  
-  query_json <- if (length(query_parts) == 0) {
-    '{}'
-  } else {
-    jsonlite::toJSON(query_parts, auto_unbox = TRUE)
   }
-  
-  results <- mongo_cluster_meta$find(query_json)
-  results
-}
 
-
-# --- Load clustering result by assignment_id ---
-load_clustering_by_id <- function(assignment_id,
-                                  db_name = "MSI_database",
-                                  mongo_url = "mongodb://localhost:27018") {
-  
-  # Query metadata
-  artifacts <- query_clustering_artifacts(
-    assignment_id = assignment_id,
-    db_name = db_name,
-    mongo_url = mongo_url
-  )
-  
+  meta      <- .con("processing_artifacts_metadata", db_name, mongo_url)
+  artifacts <- meta$find(jsonlite::toJSON(
+    list(sample_name = sample_name, stage_type = stage_type, run_id = run_id),
+    auto_unbox = TRUE
+  ))
   if (nrow(artifacts) == 0) {
-    stop("No clustering found with assignment_id: ", assignment_id)
+    stop("No artifact: sample=", sample_name, ", stage=", stage_type, ", run_id=", run_id)
   }
-  
-  gridfs_id <- artifacts$gridfs_id[1]
-  
-  # Load from GridFS
-  grid <- gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  
-  query <- sprintf('{"_id": {"$oid": "%s"}}', gridfs_id)
-  file_info <- grid$find(query)
-  
-  if (nrow(file_info) == 0) {
-    stop("GridFS file not found: ", gridfs_id)
-  }
-  
-  filename <- file_info$name[1]
-  
-  # Download to temp directory
-  temp_dir <- tempdir()
-  grid$download(filename, temp_dir)
-  
-  # Read the downloaded file
-  downloaded_path <- file.path(temp_dir, filename)
-  df <- readRDS(downloaded_path)
-  
-  message("Loaded clustering (assignment_id: ", assignment_id, ")")
-  message("  Sample: ", artifacts$sample_name[1])
-  message("  Method: ", artifacts$clustering_method[1])
-  message("  Dimensions: ", nrow(df), " pixels × ", ncol(df), " columns")
-  message("  Coordinate ranges: x = ", min(df$x), "-", max(df$x), 
-          ", y = ", min(df$y), "-", max(df$y))
-  
-  df
-}
-
-
-# --- Load clustering result by query (first match) ---
-load_clustering <- function(sample_name = NULL,
-                           assignment_id = NULL,
-                           clustering_method = NULL,
-                           snr = NULL,
-                           tolerance = NULL,
-                           reference_name = NULL,
-                           most_recent = TRUE,
-                           db_name = "MSI_database",
-                           mongo_url = "mongodb://localhost:27018") {
-  
-  artifacts <- query_clustering_artifacts(
-    sample_name = sample_name,
-    assignment_id = assignment_id,
-    clustering_method = clustering_method,
-    snr = snr,
-    tolerance = tolerance,
-    reference_name = reference_name,
-    db_name = db_name,
-    mongo_url = mongo_url
-  )
-  
-  if (nrow(artifacts) == 0) {
-    stop("No clustering artifacts found matching query")
-  }
-  
   if (nrow(artifacts) > 1) {
-    message("Multiple clusterings found (", nrow(artifacts), ")")
-    
-    if (most_recent) {
-      # Convert created_at to POSIXct if it's a list
-      if (is.list(artifacts$created_at)) {
-        artifacts$created_at <- do.call(c, artifacts$created_at)
-      }
-      # Sort by created_at descending and take first
-      artifacts <- artifacts[order(artifacts$created_at, decreasing = TRUE), ]
-      message("Loading most recent (", artifacts$created_at[1], ")")
-    } else {
-      message("Loading first match")
-    }
+    stop("Integrity error: multiple matches for run_id=", run_id, ", stage=", stage_type)
   }
-  
-  assignment_id <- artifacts$assignment_id[1]
+  grid  <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
+  fname <- as.character(artifacts$filename[1])
+  tmp   <- file.path(tempdir(), fname)
+  if (!file.exists(tmp)) grid$download(fname, tmp)
+  readRDS(tmp)
+}
+
+# Legacy artifact query (wraps old collection; used by processing_module.R).
+query_legacy_artifacts <- function(sample_name    = NULL,
+                                   stage_type     = NULL,
+                                   snr            = NULL,
+                                   tolerance      = NULL,
+                                   reference_name = NULL,
+                                   run_id         = NULL,
+                                   db_name        = DB_NAME,
+                                   mongo_url      = MONGO_URL) {
+  parts <- list()
+  if (!is.null(sample_name))    parts$sample_name    <- sample_name
+  if (!is.null(stage_type))     parts$stage_type     <- stage_type
+  if (!is.null(snr))            parts$snr            <- as.numeric(snr)
+  if (!is.null(tolerance))      parts$tolerance      <- as.numeric(tolerance)
+  if (!is.null(reference_name)) parts$reference_name <- reference_name
+  if (!is.null(run_id))         parts$run_id         <- run_id
+  q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
+  .con("processing_artifacts_metadata", db_name, mongo_url)$find(q)
+}
+
+# Clustering artifact helpers (used by clustering_module.R).
+query_clustering_artifacts <- function(sample_name       = NULL,
+                                       assignment_id     = NULL,
+                                       clustering_method = NULL,
+                                       snr               = NULL,
+                                       tolerance         = NULL,
+                                       reference_name    = NULL,
+                                       db_name           = DB_NAME,
+                                       mongo_url         = MONGO_URL) {
+  parts <- list()
+  if (!is.null(sample_name))       parts$sample_name       <- sample_name
+  if (!is.null(assignment_id))     parts$assignment_id     <- assignment_id
+  if (!is.null(clustering_method)) parts$clustering_method <- clustering_method
+  if (!is.null(snr))               parts$snr               <- snr
+  if (!is.null(tolerance))         parts$tolerance         <- tolerance
+  if (!is.null(reference_name))    parts$reference_name    <- reference_name
+  q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
+  .con("clustering_metadata", db_name, mongo_url)$find(q)
+}
+
+load_clustering_by_id <- function(assignment_id,
+                                  db_name   = DB_NAME,
+                                  mongo_url = MONGO_URL) {
+  artifacts <- query_clustering_artifacts(assignment_id = assignment_id,
+                                          db_name = db_name, mongo_url = mongo_url)
+  if (nrow(artifacts) == 0) stop("No clustering: assignment_id=", assignment_id)
+
+  fname    <- as.character(artifacts$gridfs_name[1] %||% artifacts$filename[1])
+  tmp_path <- file.path(tempdir(), fname)
+  if (!file.exists(tmp_path)) {
+    mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)$download(fname, tmp_path)
+  }
+  message("Loaded clustering: ", assignment_id)
+  readRDS(tmp_path)
+}
+
+# REMOVED most_recent parameter. Callers must supply assignment_id explicitly.
+load_clustering <- function(assignment_id, db_name = DB_NAME, mongo_url = MONGO_URL) {
+  if (missing(assignment_id) || is.null(assignment_id)) {
+    stop(
+      "load_clustering() requires an explicit assignment_id. ",
+      "Use query_clustering_artifacts() to list available IDs."
+    )
+  }
   load_clustering_by_id(assignment_id, db_name, mongo_url)
 }
-
-

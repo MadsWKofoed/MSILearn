@@ -5,7 +5,7 @@ process_msi_pipeline <- function(imzml_path, ibd_path, imzml_name,
                                  snr, tolerance, resolution = 10) {
 
   # Check if exact combination already exists
-  existing_binned <- query_artifacts(
+  existing_binned <- query_legacy_artifacts(
     sample_name = imzml_name,
     stage_type  = "binned_dataframe"
   )
