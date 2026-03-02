@@ -189,6 +189,7 @@ processing_module_server <- function(id) {
     # ── Studies dropdown ───────────────────────────────────────────────────
     observe({
       input$refresh_studies
+      input$study_mode          # also re-fetch when switching to 'existing'
       studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
       if (nrow(studies_df) == 0) {
         updateSelectInput(session, "existing_study_id",
@@ -212,7 +213,14 @@ processing_module_server <- function(id) {
       )
       if (!is.null(sid)) {
         active_study_id(sid)
-        showNotification(paste0("✓ Study created: ", sid), type = "message")
+        showNotification(paste0("\u2713 Study created: ", sid), type = "message")
+        # Refresh the 'existing' dropdown so it is immediately available
+        studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
+        if (nrow(studies_df) > 0) {
+          ch <- setNames(studies_df[["_id"]],
+                         paste0(studies_df$name, " [", studies_df[["_id"]], "]"))
+          updateSelectInput(session, "existing_study_id", choices = ch)
+        }
       }
     })
 

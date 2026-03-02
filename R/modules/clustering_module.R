@@ -257,7 +257,9 @@ clustering_module_server <- function(id) {
     }
 
     observeEvent(input$refresh_studies, load_studies(), ignoreInit = FALSE)
-    observe(load_studies())   # initial load
+
+    # Auto-load on module start using a one-shot invalidation
+    session$onFlushed(function() load_studies(), once = TRUE)
 
     # ── Study → sample cascade ───────────────────────────────────────────────
 
