@@ -206,11 +206,16 @@ list_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
       sprintf('{"study_id": "%s"}', study_id),
       fields = '{"sample_name":1,"study_id":1,"created_at":1}'
     ),
-    error = function(e) data.frame()
+    error = function(e) {
+      message("[list_samples] ERROR for study_id=", study_id, ": ", e$message)
+      data.frame()
+    }
   )
-  if (!("_id" %in% names(df))) return(data.frame(`_id` = character(), sample_name = character(),
-                                                    study_id = character(), created_at = character(),
-                                                    stringsAsFactors = FALSE, check.names = FALSE))
+  if (!("_id" %in% names(df))) {
+    return(data.frame(`_id` = character(), sample_name = character(),
+                      study_id = character(), created_at = character(),
+                      stringsAsFactors = FALSE, check.names = FALSE))
+  }
   df
 }
 
@@ -401,10 +406,18 @@ list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
 
 #' Return all study documents as a data.frame.
 get_studies <- function(db = DB_NAME, url = MONGO_URL) {
-  df <- tryCatch(.con("studies", db, url)$find("{}"), error = function(e) data.frame())
-  if (!("_id" %in% names(df))) return(data.frame(`_id` = character(), name = character(),
-                                                   created_at = character(),
-                                                   stringsAsFactors = FALSE, check.names = FALSE))
+  df <- tryCatch(
+    list_studies(db, url),
+    error = function(e) {
+      message("[get_studies] ERROR: ", e$message)
+      data.frame()
+    }
+  )
+  if (!("_id" %in% names(df))) {
+    return(data.frame(`_id` = character(), name = character(),
+                      created_at = character(),
+                      stringsAsFactors = FALSE, check.names = FALSE))
+  }
   df
 }
 

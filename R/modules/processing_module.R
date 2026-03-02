@@ -190,7 +190,13 @@ processing_module_server <- function(id) {
     observe({
       input$refresh_studies
       input$study_mode          # also re-fetch when switching to 'existing'
-      studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
+      studies_df <- tryCatch(
+        get_studies(),
+        error = function(e) {
+          showNotification(paste("Could not load studies:", e$message), type = "error")
+          data.frame()
+        }
+      )
       has_ids <- nrow(studies_df) > 0 && "_id" %in% names(studies_df)
       if (!has_ids) {
         updateSelectInput(session, "existing_study_id",
