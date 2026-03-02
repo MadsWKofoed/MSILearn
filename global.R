@@ -10,7 +10,7 @@ setCardinalParallel(workers = bp)
 # MongoDB connections
 msi_con <- mongo(
   collection = "msi_data",
-  db = "MSI_database",  
+  db = "MSI_database_test",  
   url = "mongodb://localhost:27018"
 )
 
@@ -64,7 +64,7 @@ ui <- navbarPage(
 
 server <- function(input, output, session) {
   processing_module_server("processing")
-  clustering_module_server("clustering", msi_con)
+  clustering_module_server("clustering")
   prediction_module_server("prediction")
   training_module_server("training")
 }

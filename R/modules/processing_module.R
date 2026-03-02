@@ -1,64 +1,112 @@
 # R/modules/processing_module.R
+#
+# Processing page – fully provenance-aware.
+#
+# Flow:
+#   1. User chooses "Create new Study" OR "Add to existing Study".
+#   2. Sample is registered (or retrieved) via upsert_sample().
+#   3. Parameters → deterministic pipeline_id shown before running.
+#   4. Artifact table shows all existing (sample, pipeline_id) combos.
+#   5. Run Processing → saves via save_artifact(); errors on exact duplicate.
+#   6. No "most recent" logic anywhere.
 
 processing_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Processing",
     fluidRow(
-      # ── Sidebar (2/12) ──────────────────────────────────────────────────────
-      column(2,
-        h4("Data Source"),
-        radioButtons(ns("data_source"), "Select data source:",
-          choices  = c("Upload new files", "Use existing dataset"),
-          selected = "Upload new files"
+
+      # ── LEFT SIDEBAR (3 / 12) ──────────────────────────────────────────
+      column(3,
+
+        # ── 0. Study / Sample selection ────────────────────────────────
+        wellPanel(
+          h4("Study & Sample"),
+          radioButtons(ns("study_mode"), "Study:",
+            choices  = c("Create new Study" = "new",
+                         "Add to existing Study" = "existing"),
+            selected = "new"
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'new'", ns("study_mode")),
+            textInput(ns("new_study_name"), "Study name:", placeholder = "e.g. SSC_cohort_2025"),
+            textInput(ns("new_study_desc"), "Description (optional):"),
+            actionButton(ns("create_study_btn"), "Create Study",
+                         class = "btn-sm btn-success")
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'existing'", ns("study_mode")),
+            actionButton(ns("refresh_studies"), "Refresh", class = "btn-xs btn-default"),
+            selectInput(ns("existing_study_id"), "Select Study:",
+                        choices = c("(loading...)" = ""), width = "100%")
+          ),
+          uiOutput(ns("study_badge")),
+          hr(),
+          textInput(ns("sample_name_input"), "Sample name:",
+                    placeholder = "Leave empty to use filename"),
+          uiOutput(ns("sample_duplicate_warning"))
         ),
 
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'Upload new files'", ns("data_source")),
-          fileInput(ns("msi_files"), "Upload imzML + ibd files",
-                    multiple = TRUE, accept = c(".imzML", ".ibd")),
-          textInput(ns("sample_name_upload"), "Sample name (optional):",
-                    placeholder = "Leave empty to use filename")
+        # ── 1. File source ─────────────────────────────────────────────
+        wellPanel(
+          h4("Data Source"),
+          radioButtons(ns("data_source"), NULL,
+            choices  = c("Upload new files", "Use existing dataset"),
+            selected = "Upload new files"
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'Upload new files'", ns("data_source")),
+            fileInput(ns("msi_files"), "Upload imzML + ibd files",
+                      multiple = TRUE, accept = c(".imzML", ".ibd"))
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'Use existing dataset'", ns("data_source")),
+            uiOutput(ns("existing_sample_ui"))
+          )
         ),
 
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'Use existing dataset'", ns("data_source")),
-          selectInput(ns("existing_sample"), "Select sample:", choices = "Loading..."),
-          textOutput(ns("existing_info"))
+        # ── 2. Processing parameters ───────────────────────────────────
+        wellPanel(
+          h4("Processing Parameters"),
+          numericInput(ns("resolution"), "Resolution (ppm):",
+                       value = 10, min = 1, max = 100, step = 1),
+          numericInput(ns("snr"),        "SNR:",
+                       value = 3,  min = 1.5, max = 30, step = 0.1),
+          numericInput(ns("tolerance"),  "Binning tolerance (mz):",
+                       value = 0.5, min = 0.01, max = 3, step = 0.01),
+          radioButtons(ns("ref_source"), "Reference list:",
+            choices  = c("From database", "Upload your own"),
+            selected = "From database"
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'Upload your own'", ns("ref_source")),
+            fileInput(ns("ref_csv"), "Upload .csv", multiple = FALSE, accept = ".csv")
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
+            selectInput(ns("ref_csv_mongo"), "Select reference:", choices = "Loading...")
+          )
         ),
 
-        hr(),
-        h4("Processing Parameters"),
-        numericInput(ns("resolution"), "Resolution (ppm):",
-                     value = 10, min = 1, max = 100, step = 1),
-        numericInput(ns("snr"), "SNR:",
-                     value = 3, min = 1.5, max = 30, step = 0.1),
-        numericInput(ns("tolerance"), "Binning tolerance:",
-                     value = 0.5, min = 0.1, max = 3, step = 0.1),
-
-        radioButtons(ns("ref_source"), "Reference list source:",
-          choices  = c("From database", "Upload your own"),
-          selected = "From database"
-        ),
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'Upload your own'", ns("ref_source")),
-          fileInput(ns("ref_csv"), "Upload m/z reference list (.csv)",
-                    multiple = FALSE, accept = ".csv")
-        ),
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
-          selectInput(ns("ref_csv_mongo"), "Select reference list:", choices = "Loading...")
-        ),
-
-        hr(),
-        actionButton(ns("run_processing"), "Run Processing", class = "btn-primary"),
-        br(), br(),
-        actionButton(ns("clear_cache"), "Clear local cache", class = "btn-warning")
+        # ── 3. Pipeline preview + run ──────────────────────────────────
+        wellPanel(
+          h4("Pipeline"),
+          verbatimTextOutput(ns("pipeline_id_preview")),
+          actionButton(ns("run_processing"), "Run Processing",
+                       class = "btn-primary btn-lg", style = "width:100%"),
+          br(), br(),
+          actionButton(ns("clear_cache"), "Clear local cache",
+                       class = "btn-warning btn-sm")
+        )
       ),
 
-      # ── Log / status (4/12) ─────────────────────────────────────────────────
-      column(4,
-        h3("Processing Pipeline Status"),
-        uiOutput(ns("pipeline_status")),
+      # ── CENTRE: Log / status (3 / 12) ─────────────────────────────────
+      column(3,
+        h4("Existing Artifacts"),
+        p(tags$small("Artifacts for the current study + sample.
+                      Processing is blocked for exact duplicate pipeline_ids.")),
+        tableOutput(ns("artifact_table")),
+        actionButton(ns("refresh_artifacts"), "Refresh",
+                     class = "btn-xs btn-default"),
         hr(),
         h4("Processing Log"),
         verbatimTextOutput(ns("processing_log")),
@@ -67,10 +115,11 @@ processing_module_ui <- function(id) {
         verbatimTextOutput(ns("cache_status"))
       ),
 
-      # ── Plots (6/12) ────────────────────────────────────────────────────────
+      # ── RIGHT: Plots (6 / 12) ──────────────────────────────────────────
       column(6,
+        uiOutput(ns("pipeline_status")),
         wellPanel(
-          h4("MSI Images - Top 3 m/z (by variance)"),
+          h4("MSI Images – Top 3 m/z (by variance)"),
           tabsetPanel(
             tabPanel("Raw",        plotOutput(ns("top3_raw_plot"),  height = "400px")),
             tabPanel("Normalized", plotOutput(ns("top3_norm_plot"), height = "400px"))
@@ -93,13 +142,12 @@ processing_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # ── MongoDB ───────────────────────────────────────────────────────────────
-    mongo_ref  <- mongo(collection = "mz_references",
-                        db = "msi_project", url = "mongodb://localhost:27018")
-    mongo_meta <- mongo(collection = "processing_artifacts_metadata",
-                        db = "MSI_database", url = "mongodb://localhost:27018")
+    # ── MongoDB connections ────────────────────────────────────────────────
+    mongo_ref <- mongolite::mongo(collection = "mz_references",
+                                  db  = "msi_project",
+                                  url = "mongodb://localhost:27018")
 
-    # ── Reactive state ────────────────────────────────────────────────────────
+    # ── Reactive state ─────────────────────────────────────────────────────
     processing_log      <- reactiveVal("")
     current_cache_dir   <- reactiveVal(NULL)
     current_sample_name <- reactiveVal(NULL)
@@ -108,7 +156,9 @@ processing_module_server <- function(id) {
     plot_distance_binned  <- reactiveVal(NULL)
     plot_distance_scatter <- reactiveVal(NULL)
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # The study_id that is currently "active" (resolved after create / select)
+    active_study_id <- reactiveVal(NULL)
+
     add_log <- function(msg) {
       processing_log(paste0(processing_log(),
                              format(Sys.time(), "[%H:%M:%S]"), " ", msg, "\n"))
@@ -116,79 +166,119 @@ processing_module_server <- function(id) {
 
     cleanup_cardinal_temp <- function() {
       tryCatch({
-        temp_files <- list.files(
-          tempdir(),
-          pattern   = "(imzml_|Cardinal|matter_array|msi_run_)",
-          full.names = TRUE, recursive = TRUE
-        )
-        if (length(temp_files) > 0) {
-          total_mb <- sum(file.size(temp_files), na.rm = TRUE) / 1024^2
-          unlink(temp_files, recursive = TRUE)
-          add_log(sprintf("✓ System temp cleaned: %.2f MB", total_mb))
-        }
+        tmp <- list.files(tempdir(),
+          pattern = "(imzml_|Cardinal|matter_array|msi_run_)",
+          full.names = TRUE, recursive = TRUE)
+        if (length(tmp) > 0) { s <- sum(file.size(tmp), na.rm=TRUE)/1024^2
+          unlink(tmp, recursive = TRUE)
+          add_log(sprintf("✓ System temp cleaned: %.2f MB", s)) }
         gc()
       }, error = function(e) invisible(NULL))
     }
 
-    # ── Reference dropdown ────────────────────────────────────────────────────
+    # ── Reference dropdown ─────────────────────────────────────────────────
     observe({
-      refs <- unique(mongo_ref$find(
-        fields = '{"_id": 0, "reference_name": 1}'
-      )$reference_name)
-      if (length(refs) == 0) refs <- "No references found"
+      refs <- tryCatch(
+        unique(mongo_ref$find(fields = '{"_id":0,"reference_name":1}')$reference_name),
+        error = function(e) character(0)
+      )
+      if (length(refs) == 0) refs <- c("No references found" = "")
       updateSelectInput(session, "ref_csv_mongo", choices = refs)
     })
 
-    # ── Sample dropdown (existing) ────────────────────────────────────────────
-    available_samples <- reactive({
-      input$data_source
-      arts <- mongo_meta$find(
-        query  = '{"stage_type": "raw_files"}',
-        fields = '{"_id": 0, "sample_name": 1}'
-      )
-      if (nrow(arts) == 0) "No samples in database" else unique(arts$sample_name)
-    })
-
+    # ── Studies dropdown ───────────────────────────────────────────────────
     observe({
-      updateSelectInput(session, "existing_sample", choices = available_samples())
-    })
-
-    # ── Existing sample info ──────────────────────────────────────────────────
-    output$existing_info <- renderText({
-      req(input$data_source == "Use existing dataset", input$existing_sample)
-
-      raw_arts <- mongo_meta$find(jsonlite::toJSON(list(
-        sample_name = input$existing_sample, stage_type = "raw_files"
-      ), auto_unbox = TRUE))
-
-      proc_arts <- mongo_meta$find(jsonlite::toJSON(list(
-        sample_name = input$existing_sample, stage_type = "binned_dataframe"
-      ), auto_unbox = TRUE))
-
-      parts <- character(0)
-
-      if (nrow(raw_arts) > 0) {
-        parts <- c(parts, sprintf("✓ Raw files in database (uploaded: %s)",
-                                  as.character(raw_arts$created_at[nrow(raw_arts)])))
-      }
-
-      if (nrow(proc_arts) > 0) {
-        parts <- c(parts,
-          sprintf("\n%d processed version(s):", nrow(proc_arts)),
-          sapply(seq_len(nrow(proc_arts)), function(i) {
-            sprintf("  - Res: %.0f ppm, SNR: %.1f, Tol: %.2f, Ref: %s",
-                    proc_arts$resolution[i], proc_arts$snr[i],
-                    proc_arts$tolerance[i], proc_arts$reference_name[i])
-          })
-        )
+      input$refresh_studies
+      studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
+      if (nrow(studies_df) == 0) {
+        updateSelectInput(session, "existing_study_id",
+                          choices = c("No studies found" = ""))
       } else {
-        parts <- c(parts, "\nNo processed versions exist yet")
+        ch <- setNames(studies_df[["_id"]],
+                       paste0(studies_df$name, " [", studies_df[["_id"]], "]"))
+        updateSelectInput(session, "existing_study_id", choices = ch)
       }
-
-      paste(parts, collapse = "\n")
     })
 
-    # ── Selected reference ────────────────────────────────────────────────────
+    # ── Create study button ────────────────────────────────────────────────
+    observeEvent(input$create_study_btn, {
+      nm <- trimws(input$new_study_name)
+      if (!nzchar(nm)) {
+        showNotification("Enter a study name first.", type = "warning"); return()
+      }
+      sid <- tryCatch(
+        create_study(nm, input$new_study_desc),
+        error = function(e) { showNotification(e$message, type="error"); NULL }
+      )
+      if (!is.null(sid)) {
+        active_study_id(sid)
+        showNotification(paste0("✓ Study created: ", sid), type = "message")
+      }
+    })
+
+    # Resolve active study from dropdown when in "existing" mode
+    observe({
+      req(input$study_mode == "existing", input$existing_study_id,
+          nzchar(input$existing_study_id))
+      active_study_id(input$existing_study_id)
+    })
+
+    # ── Study badge ────────────────────────────────────────────────────────
+    output$study_badge <- renderUI({
+      sid <- active_study_id()
+      if (is.null(sid)) return(tags$small(style="color:grey", "No study selected"))
+      tags$div(class="alert alert-info", style="padding:6px;margin:4px 0",
+               tags$b("Active study: "), sid)
+    })
+
+    # ── Existing-sample dropdown (for "Use existing dataset") ──────────────
+    output$existing_sample_ui <- renderUI({
+      sid <- active_study_id()
+      if (is.null(sid)) return(tags$small("Select a study first."))
+      samp_df <- tryCatch(get_samples(sid), error = function(e) data.frame())
+      if (nrow(samp_df) == 0)
+        return(tags$small("No samples in this study yet."))
+      selectInput(ns("existing_sample"),  "Select sample:",
+                  choices = setNames(samp_df[["_id"]], samp_df$sample_name),
+                  width   = "100%")
+    })
+
+    # ── Duplicate-name warning (for upload path) ───────────────────────────
+    output$sample_duplicate_warning <- renderUI({
+      sid <- active_study_id()
+      nm  <- trimws(input$sample_name_input)
+      if (is.null(sid) || !nzchar(nm)) return(NULL)
+      if (sample_name_exists(sid, nm)) {
+        tags$div(class = "alert alert-warning", style = "padding:4px; font-size:12px",
+                 "⚠ A sample with this name already exists in this study.",
+                 " Processing will attach a new artifact to the existing sample.")
+      } else NULL
+    })
+
+    # ── Resolve current sample name ────────────────────────────────────────
+    current_sample_name_resolved <- reactive({
+      if (input$data_source == "Upload new files") {
+        req(input$msi_files)
+        file_name <- input$msi_files$name[
+          grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)][1]
+        nm <- trimws(input$sample_name_input)
+        if (nzchar(nm)) nm else tools::file_path_sans_ext(basename(file_name))
+      } else {
+        req(input$existing_sample)
+        # existing_sample value is sample_id – fetch sample_name
+        samp_col <- mongolite::mongo(collection = "samples",
+                                     db  = DB_NAME,
+                                     url = "mongodb://localhost:27018")
+        row <- samp_col$find(
+          sprintf('{"_id": "%s"}', input$existing_sample),
+          fields = '{"sample_name":1}'
+        )
+        if (nrow(row) == 0) stop("Sample not found")
+        row$sample_name[1]
+      }
+    })
+
+    # ── Selected reference ─────────────────────────────────────────────────
     selected_mz <- reactive({
       req(input$ref_source)
       if (input$ref_source == "Upload your own") {
@@ -197,10 +287,10 @@ processing_module_server <- function(id) {
         list(mz   = as.numeric(df$mz),
              name = tools::file_path_sans_ext(basename(input$ref_csv$name)))
       } else {
-        req(input$ref_csv_mongo)
+        req(input$ref_csv_mongo, nzchar(input$ref_csv_mongo))
         doc <- mongo_ref$find(
           sprintf('{"reference_name": "%s"}', input$ref_csv_mongo),
-          fields = '{"_id": 0, "mz_values": 1}'
+          fields = '{"_id":0,"mz_values":1}'
         )
         if (nrow(doc) == 0) return(NULL)
         list(mz   = as.numeric(unlist(doc$mz_values[[1]])),
@@ -208,87 +298,121 @@ processing_module_server <- function(id) {
       }
     })
 
-    # ── Current sample name ───────────────────────────────────────────────────
-    current_sample <- reactive({
-      if (input$data_source == "Upload new files") {
-        req(input$msi_files)
-        imzml_name <- input$msi_files$name[
-          grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)][1]
-        if (nchar(input$sample_name_upload) > 0) input$sample_name_upload else imzml_name
-      } else {
-        req(input$existing_sample)
-        input$existing_sample
-      }
-    })
-
-    # ── Clear cache button ────────────────────────────────────────────────────
-    observeEvent(input$clear_cache, {
-      cache_dir <- current_cache_dir()
-      if (is.null(cache_dir) || !dir.exists(cache_dir)) {
-        showNotification("No active cache to clear", type = "message", duration = 3)
-        return()
-      }
-      files      <- list.files(cache_dir, full.names = TRUE, recursive = TRUE)
-      cache_size <- sum(file.size(files)) / 1024^2
-      unlink(cache_dir, recursive = TRUE)
-      current_cache_dir(NULL)
-
-      temp_files <- list.files(tempdir(),
-        pattern = "(imzml_|Cardinal|matter_array|msi_run_)",
-        full.names = TRUE, recursive = TRUE)
-      temp_size <- if (length(temp_files) > 0) {
-        s <- sum(file.size(temp_files), na.rm = TRUE) / 1024^2
-        unlink(temp_files, recursive = TRUE); s
-      } else 0
-
-      plot_top3_raw(NULL); plot_top3_norm(NULL)
-      plot_distance_binned(NULL); plot_distance_scatter(NULL)
-      gc()
-
-      showNotification(
-        sprintf("✓ Cleared: %.2f MB freed", cache_size + temp_size),
-        type = "message", duration = 5
+    # ── Compute pipeline_id preview ────────────────────────────────────────
+    current_pipeline_params <- reactive({
+      mz_ref <- selected_mz()
+      req(mz_ref)
+      list(
+        snr            = as.numeric(input$snr),
+        tolerance      = as.numeric(input$tolerance),
+        resolution     = as.numeric(input$resolution),
+        reference_name = mz_ref$name
       )
     })
 
-    # ── Main processing pipeline ──────────────────────────────────────────────
+    output$pipeline_id_preview <- renderText({
+      params <- tryCatch(current_pipeline_params(), error = function(e) NULL)
+      if (is.null(params)) return("(configure parameters above)")
+      pid <- compute_pipeline_id("processing", params)
+      paste0("pipeline_id:\n", substr(pid, 1, 16), "...\n\n",
+             "snr=",        params$snr,        "\n",
+             "tol=",        params$tolerance,  "\n",
+             "res=",        params$resolution, " ppm\n",
+             "ref=",        params$reference_name)
+    })
+
+    # ── Artifact table for current study + sample ──────────────────────────
+    output$artifact_table <- renderTable({
+      input$refresh_artifacts
+      sid <- active_study_id()
+      if (is.null(sid)) return(data.frame(message = "No study selected"))
+      nm <- tryCatch(current_sample_name_resolved(), error = function(e) NULL)
+      if (is.null(nm)) return(data.frame(message = "No sample name"))
+      sample_id <- get_sample_id(sid, nm)
+      arts <- query_artifacts(sample_id  = sample_id,
+                               stage_type = "binned_dataframe")
+      if (nrow(arts) == 0) return(data.frame(message = "No artifacts yet"))
+      pipes <- lapply(arts$pipeline_id, function(pid) {
+        tryCatch({
+          p <- get_pipeline(pid)
+          pa <- p$params[[1]]
+          data.frame(
+            pipeline_id  = substr(pid, 1, 12),
+            snr          = pa$snr       %||% NA,
+            tolerance    = pa$tolerance %||% NA,
+            resolution   = pa$resolution %||% NA,
+            reference    = pa$reference_name %||% NA,
+            created_at   = arts$created_at[arts$pipeline_id == pid][1],
+            stringsAsFactors = FALSE
+          )
+        }, error = function(e) data.frame(pipeline_id = substr(pid,1,12),
+                                          snr=NA, tolerance=NA,
+                                          resolution=NA, reference=NA,
+                                          created_at=NA))
+      })
+      do.call(rbind, pipes)
+    }, striped = TRUE, hover = TRUE, bordered = TRUE, na = "–")
+
+    # ── Clear cache ────────────────────────────────────────────────────────
+    observeEvent(input$clear_cache, {
+      d <- current_cache_dir()
+      if (is.null(d) || !dir.exists(d)) {
+        showNotification("No active cache", type = "message"); return()
+      }
+      fls  <- list.files(d, full.names = TRUE, recursive = TRUE)
+      mb   <- sum(file.size(fls)) / 1024^2
+      unlink(d, recursive = TRUE); current_cache_dir(NULL)
+      plot_top3_raw(NULL); plot_top3_norm(NULL)
+      plot_distance_binned(NULL); plot_distance_scatter(NULL)
+      gc()
+      showNotification(sprintf("✓ Cleared %.2f MB", mb), type = "message")
+    })
+
+    # ── MAIN PROCESSING PIPELINE ───────────────────────────────────────────
     observeEvent(input$run_processing, {
+
+      study_id <- active_study_id()
+      if (is.null(study_id) || !nzchar(study_id)) {
+        showNotification("Select or create a Study first.", type = "error"); return()
+      }
+
       mz_ref      <- selected_mz()
-      sample_name <- current_sample()
+      sample_name <- tryCatch(current_sample_name_resolved(), error = function(e) NULL)
 
       if (is.null(mz_ref) || is.null(sample_name)) {
-        showNotification("Please configure all parameters first",
-                         type = "error", duration = NULL)
+        showNotification("Configure all parameters first.", type = "error", duration = NULL)
         return()
       }
 
-      # Exact-match dedup check
-      exact_match <- mongo_meta$find(jsonlite::toJSON(list(
-        sample_name    = sample_name,
-        stage_type     = "binned_dataframe",
-        resolution     = as.numeric(input$resolution),
+      params <- list(
         snr            = as.numeric(input$snr),
         tolerance      = as.numeric(input$tolerance),
+        resolution     = as.numeric(input$resolution),
         reference_name = mz_ref$name
-      ), auto_unbox = TRUE))
+      )
+      pipeline_id <- compute_pipeline_id("processing", params)
 
-      if (nrow(exact_match) > 0) {
+      # Resolve sample_id (creates sample document if new)
+      sample_id <- upsert_sample(study_id, sample_name)
+
+      # Block exact duplicate
+      arts <- query_artifacts(sample_id = sample_id, stage_type = "binned_dataframe",
+                               pipeline_id = pipeline_id)
+      if (nrow(arts) > 0) {
         showNotification(
-          "This exact processing already exists. No action needed.",
-          type = "warning", duration = 10
+          paste0("Artifact already exists for this exact pipeline_id:\n", pipeline_id),
+          type = "warning", duration = 12
         )
         return()
       }
 
-      # Reset plots
       plot_top3_raw(NULL); plot_top3_norm(NULL)
       plot_distance_binned(NULL); plot_distance_scatter(NULL)
-
       shinyjs::disable("run_processing")
       on.exit(shinyjs::enable("run_processing"), add = TRUE)
 
       progress <- Progress$new(session, min = 0, max = 100)
-      progress$set(message = "Starting processing pipeline...", value = 0)
+      progress$set(message = "Starting…", value = 0)
       on.exit(progress$close(), add = TRUE)
 
       processing_log("")
@@ -296,22 +420,19 @@ processing_module_server <- function(id) {
 
       tryCatch({
         add_log("=== PROCESSING STARTED ===")
-        add_log(sprintf("Sample: %s", sample_name))
-        add_log(sprintf("Res=%d ppm | SNR=%.1f | Tol=%.2f | Ref=%s",
-                        input$resolution, input$snr, input$tolerance, mz_ref$name))
+        add_log(sprintf("Study:  %s", study_id))
+        add_log(sprintf("Sample: %s  [id: %s]", sample_name, sample_id))
+        add_log(sprintf("pipeline_id: %s", pipeline_id))
 
-        # Throw-away working dir — deleted on handler exit
+        # ── Work dir ───────────────────────────────────────────────────
         work_dir <- tempfile("msi_run_")
-        dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
-        on.exit(
-          tryCatch(unlink(work_dir, recursive = TRUE), error = function(e) NULL),
-          add = TRUE
-        )
+        dir.create(work_dir, recursive = TRUE)
+        on.exit(tryCatch(unlink(work_dir, recursive = TRUE), error = function(e) NULL),
+                add = TRUE)
         current_cache_dir(work_dir)
         current_sample_name(sample_name)
-        add_log(sprintf("Work dir: %s", work_dir))
 
-        # ── STEP 1: Raw files ───────────────────────────────────────────────
+        # ── STEP 1: Raw files ──────────────────────────────────────────
         progress$set(value = 10, message = "Handling raw data...")
 
         if (input$data_source == "Upload new files") {
@@ -319,63 +440,61 @@ processing_module_server <- function(id) {
           files     <- input$msi_files
           imzml_idx <- grepl("\\.imzML$", files$name, ignore.case = TRUE)
           ibd_idx   <- grepl("\\.ibd$",   files$name, ignore.case = TRUE)
-
           if (!any(imzml_idx) || !any(ibd_idx))
-            stop("Both imzML and ibd files are required")
+            stop("Both imzML and ibd files are required.")
 
-          existing_raw <- mongo_meta$find(jsonlite::toJSON(list(
-            sample_name = sample_name, stage_type = "raw_files"
-          ), auto_unbox = TRUE))
-
+          # Check legacy raw_files in processing_artifacts_metadata
+          existing_raw <- query_legacy_artifacts(sample_name = sample_name,
+                                                 stage_type  = "raw_files")
           if (nrow(existing_raw) > 0) {
             add_log("⚠ Raw files already in database — skipping upload")
           } else {
             add_log("Uploading raw files to MongoDB...")
-            save_raw_pair_to_mongo(
+            raw_refs <- save_raw_pair_to_mongo(
               sample_name = sample_name,
               imzml_path  = files$datapath[imzml_idx][1],
-              ibd_path    = files$datapath[ibd_idx][1],
-              db_name     = "MSI_database"
+              ibd_path    = files$datapath[ibd_idx][1]
+            )
+            # Back-fill raw_ref into the sample document
+            mongolite::mongo(collection = "samples", db = DB_NAME,
+                             url = "mongodb://localhost:27018")$update(
+              sprintf('{"_id": "%s"}', sample_id),
+              jsonlite::toJSON(list(`$set` = list(raw_ref = raw_refs)),
+                               auto_unbox = TRUE)
             )
             add_log("✓ Raw files saved")
           }
         }
 
-        # ── STEP 2: Load raw from MongoDB ───────────────────────────────────
+        # ── STEP 2: Load raw MSI object ────────────────────────────────
         progress$set(value = 25, message = "Loading MSI object...")
         add_log("Downloading raw files from MongoDB...")
-
         msi_data <- load_raw_object_from_mongo(
           sample_name = sample_name,
           workdir     = work_dir,
-          db_name     = "MSI_database",
+          db_name     = DB_NAME,
           resolution  = as.numeric(input$resolution)
         )
         add_log(sprintf("✓ MSI loaded: %d pixels × %d m/z values",
                         ncol(msi_data), nrow(msi_data)))
 
-        # ── STEP 3: Mean → peakPick → align ─────────────────────────────────
+        # ── STEP 3: Mean → peakPick → align ───────────────────────────
         progress$set(value = 45, message = "Mean spectrum + peak picking + alignment...")
         add_log("Computing mean spectrum...")
         control_mean <- Cardinal::summarizeFeatures(msi_data, "mean")
 
         add_log(sprintf("Peak picking (SNR=%.1f) + aligning (tol=%.2f)...",
                         input$snr, input$tolerance))
-        processing_run_id <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-
         control_MSI_ref <- control_mean |>
           Cardinal::peakPick(SNR = input$snr) |>
-          Cardinal::peakAlign(ref      = mz_ref$mz,
-                              tolerance = input$tolerance,
-                              units    = "mz") |>
+          Cardinal::peakAlign(ref = mz_ref$mz, tolerance = input$tolerance,
+                              units = "mz") |>
           Cardinal::subsetFeatures() |>
           Cardinal::process()
         add_log(sprintf("✓ Reference aligned: %d m/z bins", nrow(control_MSI_ref)))
 
-        # ── STEP 4: Bin full dataset ─────────────────────────────────────────
+        # ── STEP 4: Bin full dataset ───────────────────────────────────
         progress$set(value = 70, message = "Binning full dataset...")
-        add_log("Binning MSI data...")
-
         msi_data_binned <- Cardinal::bin(
           msi_data,
           ref       = Cardinal::mz(control_MSI_ref),
@@ -385,161 +504,145 @@ processing_module_server <- function(id) {
         ) |> Cardinal::process()
         add_log("✓ Data binned")
 
-        # ── STEP 5: TIC normalization + plots ────────────────────────────────
+        # ── STEP 5: TIC normalization + plots ──────────────────────────
         progress$set(value = 82, message = "Generating plots...")
-        add_log("Normalizing (TIC) and generating plots...")
-
-        spec_mat     <- as.matrix(Cardinal::spectra(msi_data_binned))  # features × pixels
-        tic          <- colSums(spec_mat, na.rm = TRUE)
+        spec_mat <- as.matrix(Cardinal::spectra(msi_data_binned))
+        tic      <- colSums(spec_mat, na.rm = TRUE)
         tic[!is.finite(tic) | tic <= 0] <- NA_real_
         spec_mat_tic <- sweep(spec_mat, 2, tic, "/")
-
-        mz_vals <- Cardinal::mz(msi_data_binned)
+        mz_vals  <- Cardinal::mz(msi_data_binned)
 
         var_raw  <- apply(spec_mat,     1, var, na.rm = TRUE)
         var_norm <- apply(spec_mat_tic, 1, var, na.rm = TRUE)
-
         top3_mz      <- mz_vals[order(var_raw,  decreasing = TRUE)[1:3]]
         norm_top3_mz <- mz_vals[order(var_norm, decreasing = TRUE)[1:3]]
-
-        coords_df <- Cardinal::coord(msi_data_binned)
-
-        # Extract image data NOW while .ibd file still exists in work_dir
-        # Build pixel × mz matrices for the top 3 m/z only — tiny memory footprint
-        top3_idx      <- match(top3_mz,      mz_vals)
-        norm_top3_idx <- match(norm_top3_mz, mz_vals)
+        coords_df    <- Cardinal::coord(msi_data_binned)
 
         make_image_df <- function(idx, coords, mat) {
-          data.frame(
-            x     = coords$x,
-            y     = coords$y,
-            mz1   = mat[idx[1], ],
-            mz2   = mat[idx[2], ],
-            mz3   = mat[idx[3], ]
-          )
+          data.frame(x=coords$x, y=coords$y,
+                     mz1=mat[idx[1],], mz2=mat[idx[2],], mz3=mat[idx[3],])
         }
-
-        img_df_raw  <- make_image_df(top3_idx,      coords_df, spec_mat)
-        img_df_norm <- make_image_df(norm_top3_idx, coords_df, spec_mat_tic)
-
-        # Labels for legend
-        raw_labels  <- paste0("mz=", round(top3_mz,      2))
-        norm_labels <- paste0("mz=", round(norm_top3_mz, 2))
+        img_df_raw  <- make_image_df(match(top3_mz,      mz_vals), coords_df, spec_mat)
+        img_df_norm <- make_image_df(match(norm_top3_mz, mz_vals), coords_df, spec_mat_tic)
 
         make_overlay_plot <- function(df, lbl, title) {
-          scale01 <- function(v) {
+          s01 <- function(v) {
             v[!is.finite(v)] <- 0
             lo <- min(v); hi <- max(v)
             if (hi == lo) return(rep(0, length(v)))
             (v - lo) / (hi - lo)
           }
-          r <- scale01(df$mz1)
-          g <- scale01(df$mz2)
-          b <- scale01(df$mz3)
-          pixel_cols <- rgb(r, g, b,
-                            alpha        = pmax(r, g, b) * 0.9 + 0.1,
-                            maxColorValue = 1)
-          list(x = df$x, y = df$y, cols = pixel_cols, lbl = lbl, title = title)
+          r <- s01(df$mz1); g <- s01(df$mz2); b <- s01(df$mz3)
+          list(x = df$x, y = df$y,
+               cols  = rgb(r, g, b, alpha = pmax(r,g,b)*0.9+0.1, maxColorValue=1),
+               lbl   = lbl, title = title)
         }
+        plot_top3_raw( make_overlay_plot(img_df_raw,  paste0("mz=",round(top3_mz,     2)),
+                                         "Top 3 m/z (raw variance)"))
+        plot_top3_norm(make_overlay_plot(img_df_norm, paste0("mz=",round(norm_top3_mz,2)),
+                                         "Top 3 m/z (TIC-normalized variance)"))
 
-        plot_top3_raw(make_overlay_plot(img_df_raw,  raw_labels,  "Top 3 m/z (raw variance)"))
-        plot_top3_norm(make_overlay_plot(img_df_norm, norm_labels, "Top 3 m/z (TIC-normalized variance)"))
-
-        # ── STEP 6: Spatial distance plots ───────────────────────────────────
+        # ── STEP 6: Spatial distance plots ────────────────────────────
         add_log("Calculating spatial vs intensity distances...")
+        norm_mat  <- cbind(x=coords_df$x, y=coords_df$y, t(spec_mat_tic))
+        valid_r   <- complete.cases(norm_mat)
+        norm_mat  <- norm_mat[valid_r, , drop = FALSE]
 
-        coords_df       <- Cardinal::coord(msi_data_binned)
-        norm_msi_matrix <- cbind(x = coords_df$x, y = coords_df$y, t(spec_mat_tic))
-        valid_rows      <- complete.cases(norm_msi_matrix)
-        norm_msi_matrix <- norm_msi_matrix[valid_rows, , drop = FALSE]
-        add_log(sprintf("Using %d/%d valid pixels for distance calc",
-                        sum(valid_rows), length(valid_rows)))
+        n_pairs   <- 10000L
+        n         <- nrow(norm_mat)
+        pairs     <- data.frame(i=sample(n,n_pairs,replace=TRUE),
+                                j=sample(n,n_pairs,replace=TRUE))
+        pairs     <- subset(pairs, i != j)
+        pairs     <- unique(data.frame(i=pmin(pairs$i,pairs$j),
+                                       j=pmax(pairs$i,pairs$j)))
+        if (nrow(pairs) > n_pairs) pairs <- pairs[seq_len(n_pairs),]
 
-        n_pairs <- 10000L
-        n       <- nrow(norm_msi_matrix)
-        pairs   <- data.frame(i = sample(n, n_pairs, replace = TRUE),
-                              j = sample(n, n_pairs, replace = TRUE))
-        pairs   <- subset(pairs, i != j)
-        pairs   <- unique(data.frame(i = pmin(pairs$i, pairs$j),
-                                     j = pmax(pairs$i, pairs$j)))
-        if (nrow(pairs) > n_pairs) pairs <- pairs[seq_len(n_pairs), ]
+        xy      <- norm_mat[, c("x","y"), drop=FALSE]
+        intens  <- norm_mat[, -c(1,2),   drop=FALSE]
+        space_d <- sqrt(rowSums((xy[pairs$i,,drop=FALSE]-xy[pairs$j,,drop=FALSE])^2))
+        cos_d   <- mapply(function(i,j) {
+          a <- intens[i,]; b <- intens[j,]
+          na <- sqrt(sum(a^2,na.rm=TRUE)); nb <- sqrt(sum(b^2,na.rm=TRUE))
+          if (!is.finite(na)||!is.finite(nb)||na==0||nb==0) return(NA_real_)
+          1 - sum(a*b,na.rm=TRUE)/(na*nb)
+        }, pairs$i, pairs$j)
 
-        xy    <- norm_msi_matrix[, c("x", "y"), drop = FALSE]
-        intens <- norm_msi_matrix[, -c(1, 2), drop = FALSE]
-
-        space_dist <- sqrt(rowSums(
-          (xy[pairs$i, , drop = FALSE] - xy[pairs$j, , drop = FALSE])^2
-        ))
-
-        cosine_dist <- function(a, b) {
-          na <- sqrt(sum(a^2, na.rm = TRUE))
-          nb <- sqrt(sum(b^2, na.rm = TRUE))
-          if (!is.finite(na) || !is.finite(nb) || na == 0 || nb == 0) return(NA_real_)
-          1 - sum(a * b, na.rm = TRUE) / (na * nb)
-        }
-        intens_dist <- mapply(function(i, j) cosine_dist(intens[i, ], intens[j, ]),
-                              pairs$i, pairs$j)
-
-        df_dist <- data.frame(space_distance = space_dist,
-                              intensity_distance = intens_dist)
-        
-        # Drop NA pairs before plotting
+        df_dist <- data.frame(space_distance    = space_d,
+                              intensity_distance = cos_d)
         df_dist <- df_dist[is.finite(df_dist$space_distance) &
                            is.finite(df_dist$intensity_distance), ]
 
-        add_log(sprintf("Distance pairs for scatter: %d", nrow(df_dist)))
-
-        df_binned <- df_dist |>
+        df_bin <- df_dist |>
           dplyr::mutate(bin = cut(space_distance, breaks = 50L)) |>
           dplyr::group_by(bin) |>
           dplyr::summarise(
-            space_mid  = mean(space_distance,    na.rm = TRUE),
+            space_mid  = mean(space_distance,       na.rm = TRUE),
             int_median = median(intensity_distance, na.rm = TRUE),
             int_q25    = quantile(intensity_distance, 0.25, na.rm = TRUE),
             int_q75    = quantile(intensity_distance, 0.75, na.rm = TRUE),
-            .groups = "drop"
+            .groups    = "drop"
           )
 
         plot_distance_binned(
-          ggplot(df_binned, aes(x = space_mid, y = int_median)) +
+          ggplot(df_bin, aes(x=space_mid, y=int_median)) +
             geom_line() +
-            geom_ribbon(aes(ymin = int_q25, ymax = int_q75), alpha = 0.2) +
+            geom_ribbon(aes(ymin=int_q25, ymax=int_q75), alpha=0.2) +
             theme_bw() +
-            labs(x = "Euclidean pixel distance",
-                 y = "Cosine distance (median ± IQR)",
-                 title = "Spatial vs Intensity Distance (binned)")
+            labs(x="Euclidean pixel distance",
+                 y="Cosine distance (median ± IQR)",
+                 title="Spatial vs Intensity Distance (binned)")
         )
-
         plot_distance_scatter(
-          ggplot(df_dist, aes(x = space_distance, y = intensity_distance)) +
-            geom_point(alpha = 0.2, size = 1) +
+          ggplot(df_dist, aes(x=space_distance, y=intensity_distance)) +
+            geom_point(alpha=0.2, size=1) +
             theme_bw() +
-            labs(x = "Euclidean pixel distance",
-                 y = "Cosine distance",
-                 title = "Spatial vs Intensity Distance (10k pairs)")
+            labs(x="Euclidean pixel distance",
+                 y="Cosine distance",
+                 title="Spatial vs Intensity Distance (10k pairs)")
         )
-        add_log("✓ Plots generated")
 
-        # ── STEP 7: Feature matrix → MongoDB ────────────────────────────────
+        # ── STEP 7: Build feature matrix ───────────────────────────────
         progress$set(value = 92, message = "Building feature matrix...")
-        add_log("Building feature matrix...")
-
-        msi_matrix  <- t(spec_mat)   # reuse already-materialized matrix
-        mz_names    <- paste0("mz_", mz_vals)   # reuse already-fetched mz_vals
-        coords2     <- as.data.frame(coords_df)  # reuse already-fetched coords
-        pixel_names <- rep(Cardinal::runNames(msi_data_binned), nrow(msi_matrix))
-
-        full_df <- data.frame(
+        mz_names    <- paste0("mz_", mz_vals)
+        pixel_names <- rep(Cardinal::runNames(msi_data_binned), nrow(t(spec_mat)))
+        full_df     <- data.frame(
           runNames = pixel_names,
-          x        = coords2$x,
-          y        = coords2$y,
-          msi_matrix,
+          x        = coords_df$x,
+          y        = coords_df$y,
+          t(spec_mat),
           check.names = FALSE
         )
         colnames(full_df) <- c("runNames", "x", "y", mz_names)
+        add_log(sprintf("Feature matrix: %d pixels × %d features",
+                        nrow(full_df), length(mz_names)))
 
+        # ── STEP 8: Register pipeline + save artifact ──────────────────
+        progress$set(value = 96, message = "Saving to MongoDB...")
+
+        upsert_pipeline(
+          type         = "processing",
+          name         = paste0("proc_snr", input$snr, "_tol", input$tolerance,
+                                "_res", input$resolution, "_", mz_ref$name),
+          params       = params,
+          code_version = "dev"
+        )
+
+        artifact_id <- save_artifact(
+          obj         = full_df,
+          study_id    = study_id,
+          sample_id   = sample_id,
+          pipeline_id = pipeline_id,
+          stage_type  = "binned_dataframe",
+          extra_meta  = list(
+            num_features = length(mz_names),
+            num_pixels   = nrow(full_df)
+          )
+        )
+
+        # Also keep legacy record for processing_module compat
+        run_id_legacy <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
         save_stage_to_mongo(
-          full_df, processing_run_id, "binned_dataframe",
+          full_df, run_id_legacy, "binned_dataframe",
           sample_name = sample_name,
           params = list(
             snr            = as.numeric(input$snr),
@@ -548,34 +651,29 @@ processing_module_server <- function(id) {
             resolution     = as.numeric(input$resolution),
             num_features   = length(mz_names),
             num_pixels     = nrow(full_df)
-          ),
-          db_name = "MSI_database"
+          )
         )
 
-        add_log(sprintf("✓ Saved: %d pixels × %d features",
-                        nrow(full_df), length(mz_names)))
-
         progress$set(value = 100, message = "Complete!")
+        add_log(sprintf("✓ artifact_id: %s", artifact_id))
+        add_log(sprintf("✓ pipeline_id: %s", pipeline_id))
         add_log("=== PROCESSING COMPLETE ===")
-        add_log(sprintf("Run ID: %s", processing_run_id))
 
         output$pipeline_status <- renderUI({
           div(class = "alert alert-success",
             h4("✅ Processing Complete"),
-            p(sprintf("Sample: %s",       sample_name)),
-            p(sprintf("Run ID: %s",       processing_run_id)),
-            p(sprintf("Resolution: %d ppm", input$resolution)),
-            p(sprintf("SNR: %.1f",         input$snr)),
-            p(sprintf("Tolerance: %.2f",   input$tolerance)),
-            p(sprintf("Reference: %s",     mz_ref$name)),
-            p(sprintf("Features: %d m/z bins", length(mz_names))),
-            p(sprintf("Pixels: %d",        nrow(full_df)))
+            p(strong("Study:   "), study_id),
+            p(strong("Sample:  "), sample_name),
+            p(strong("sample_id: "), sample_id),
+            p(strong("pipeline_id: "), pipeline_id),
+            p(strong("artifact_id: "), artifact_id),
+            p(strong("Features: "), length(mz_names), " m/z bins"),
+            p(strong("Pixels:   "), nrow(full_df))
           )
         })
 
         showNotification(
-          sprintf("✅ Processing complete! %d features | Run: %s",
-                  length(mz_names), processing_run_id),
+          sprintf("✅ Processing complete! %d features", length(mz_names)),
           type = "message", duration = 10
         )
 
@@ -586,56 +684,42 @@ processing_module_server <- function(id) {
       })
     })
 
-    # ── Render outputs ────────────────────────────────────────────────────────
+    # ── Render outputs ─────────────────────────────────────────────────────
     output$processing_log <- renderText({ processing_log() })
 
     output$cache_status <- renderText({
-      cache_dir <- current_cache_dir()
-      if (is.null(cache_dir) || !dir.exists(cache_dir)) return("No active cache")
-      files <- list.files(cache_dir, full.names = TRUE, recursive = TRUE)
-      if (length(files) == 0) return(sprintf("Work dir: %s\n(empty)", cache_dir))
+      d <- current_cache_dir()
+      if (is.null(d) || !dir.exists(d)) return("No active cache")
+      fls <- list.files(d, full.names = TRUE, recursive = TRUE)
+      if (length(fls) == 0) return(sprintf("Work dir: %s\n(empty)", d))
       sprintf("Work dir: %s\nFiles: %d | Size: %.2f MB\nSample: %s",
-              cache_dir, length(files),
-              sum(file.size(files)) / 1024^2,
+              d, length(fls), sum(file.size(fls))/1024^2,
               current_sample_name() %||% "None")
     })
 
-    output$top3_raw_plot <- renderPlot({
-      req(plot_top3_raw())
-      p <- plot_top3_raw()
-      par(bg = "black", col.axis = "white", col.lab = "white",
-          col.main = "white", fg = "white", mar = c(3, 3, 2, 1))
-      plot(p$x, p$y, col = p$cols, pch = 15, cex = 0.5,
-           xlab = "x", ylab = "y", main = p$title, asp = 1, axes = FALSE)
-      axis(1, col = "white", col.ticks = "white", col.axis = "white")
-      axis(2, col = "white", col.ticks = "white", col.axis = "white")
-      legend("topright", legend = p$lbl, col = c("red", "green", "blue"),
-             pch = 15, pt.cex = 1.5, text.col = "white",
-             bg = adjustcolor("black", alpha.f = 0.6), box.col = "white")
-    })
-
-    output$top3_norm_plot <- renderPlot({
-      req(plot_top3_norm())
-      p <- plot_top3_norm()
-      par(bg = "black", col.axis = "white", col.lab = "white",
-          col.main = "white", fg = "white", mar = c(3, 3, 2, 1))
-      plot(p$x, p$y, col = p$cols, pch = 15, cex = 0.5,
-           xlab = "x", ylab = "y", main = p$title, asp = 1, axes = FALSE)
-      axis(1, col = "white", col.ticks = "white", col.axis = "white")
-      axis(2, col = "white", col.ticks = "white", col.axis = "white")
-      legend("topright", legend = p$lbl, col = c("red", "green", "blue"),
-             pch = 15, pt.cex = 1.5, text.col = "white",
-             bg = adjustcolor("black", alpha.f = 0.6), box.col = "white")
-    })
+    render_overlay <- function(rv) {
+      renderPlot({
+        req(rv())
+        p <- rv()
+        par(bg="black", col.axis="white", col.lab="white",
+            col.main="white", fg="white", mar=c(3,3,2,1))
+        plot(p$x, p$y, col=p$cols, pch=15, cex=0.5,
+             xlab="x", ylab="y", main=p$title, asp=1, axes=FALSE)
+        axis(1, col="white", col.ticks="white", col.axis="white")
+        axis(2, col="white", col.ticks="white", col.axis="white")
+        legend("topright", legend=p$lbl, col=c("red","green","blue"),
+               pch=15, pt.cex=1.5, text.col="white",
+               bg=adjustcolor("black", alpha.f=0.6), box.col="white")
+      })
+    }
+    output$top3_raw_plot   <- render_overlay(plot_top3_raw)
+    output$top3_norm_plot  <- render_overlay(plot_top3_norm)
 
     output$distance_binned_plot <- renderPlot({
-      req(plot_distance_binned())
-      plot_distance_binned()
+      req(plot_distance_binned()); plot_distance_binned()
     })
-
     output$distance_scatter_plot <- renderPlot({
-      req(plot_distance_scatter())
-      plot_distance_scatter()
+      req(plot_distance_scatter()); plot_distance_scatter()
     })
   })
 }

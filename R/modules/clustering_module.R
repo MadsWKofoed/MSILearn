@@ -1,1152 +1,866 @@
+# R/modules/clustering_module.R
+# Clustering tab — provenance-aware rewrite.
+#
+# Provenance chain enforced:
+#   study → sample → pipeline_id (binned_dataframe artifact)
+#     → clustering params → clustering artifact
+#     → annotation set → annotation
+#
+# Rules:
+#   • No "most recent" fallback anywhere.
+#   • All artifact loading requires explicit (sample_id, stage_type, pipeline_id).
+#   • Annotation sets are version-controlled; each annotation is keyed by
+#     (sample_id, annotation_set_id).
+#   • Legacy insert into "clustering_metadata" kept for backwards compat.
+
+library(shiny)
+library(plotly)
+library(sp)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COLOUR PALETTE
+# ─────────────────────────────────────────────────────────────────────────────
+
+CLASS_COLORS <- c(
+  "#E41A1C", "#377EB8", "#4DAF4A", "#FF7F00", "#984EA3",
+  "#A65628", "#F781BF", "#999999", "#66C2A5", "#FC8D62",
+  "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494"
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: rasterise a ggplot / base-R plot to a plotly PNG layer
+# ─────────────────────────────────────────────────────────────────────────────
+
+make_raster_png <- function(plot_obj, width = 800, height = 600) {
+  tmp <- tempfile(fileext = ".png")
+  on.exit(unlink(tmp))
+  grDevices::png(tmp, width = width, height = height)
+  if (inherits(plot_obj, "gg")) {
+    print(plot_obj)
+  } else {
+    plot_obj
+  }
+  grDevices::dev.off()
+  base64enc::base64encode(tmp)
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UI
+# ─────────────────────────────────────────────────────────────────────────────
+
 clustering_module_ui <- function(id) {
   ns <- NS(id)
-  tabPanel("Clustering",
-           sidebarLayout(
-             sidebarPanel(
-               selectInput(ns("sample_select"), "Select sample:", choices = "Loading..."),
-               uiOutput(ns("res_ui")),
-               uiOutput(ns("snr_ui")),
-               uiOutput(ns("tol_ui")),
-               uiOutput(ns("ref_ui")),
-               actionButton(ns("load_dataset"), "Load selected dataset"),
-               tags$hr(),
 
-              fileInput(ns("histology_img"), "Upload histology image (optional):",
-                        accept = c("image/png", "image/jpeg", "image/jpg")),
-               actionButton(ns("clear_histology"), "Clear histology", class = "btn-sm btn-warning"),
-               tags$hr(),
-               
-               h4("Clustering Configuration"),
-                selectInput(ns("method"), "Clustering method:", 
-                          choices = c("K-means", "VSClust", "MSIClust")),
+  fluidPage(
+    tags$head(tags$style(HTML("
+      .section-header { font-weight: bold; margin-top: 8px; margin-bottom: 4px; }
+      .pipeline-badge { font-family: monospace; font-size: 11px;
+                        word-break: break-all; color: #555; }
+    "))),
 
-                # Normalization selection
-                selectInput(
-                  ns("normalize"),
-                  "Normalization:",
-                  choices = c(
-                    "None" = "none",
-                    "TIC (row sum)" = "tic",
-                    "Median (row median)" = "median",
-                    "RMS (row RMS)" = "rms"
-                  )
-                ),
+    fluidRow(
 
-                # Number of clusters (fælles for begge metoder)
-                numericInput(ns("clusters"), "Number of clusters:", 
-                            value = 3, min = 2, max = 30),
+      # ── LEFT SIDEBAR ──────────────────────────────────────────────────────
+      column(3,
 
-                # Dynamic parameter UI based on method
-                uiOutput(ns("method_params_ui")),
-               actionButton(ns("run_clustering"), "Run Clustering"),
-               tags$hr(),
-               
-               selectInput(ns("orientation"), "Orientation adjustment:",
-                           choices = c("Default", "Flip X", "Flip Y", "Flip Both")),
-               textInput(ns("class_label"), "Assign Class:", value = "Class1"),
-               actionButton(ns("assign_class"), "Assign to Selection"),
-               actionButton(ns("assign_all"), "Assign ALL unassigned"),
-               tags$hr(),
-               actionButton(ns("commit_db"), "Commit to MongoDB"),
-               width = 2
-             ),
-             mainPanel(
-               uiOutput(ns("cluster_layout")),
-               textOutput(ns("status_text")),
-               width = 10
-             )
-           )
+        # ── 1. Study & Sample ───────────────────────────────────────────────
+        wellPanel(
+          tags$div(class = "section-header", "Study & Sample"),
+
+          selectInput(ns("study_select"), "Study",
+                      choices = c("— select —" = ""),
+                      width = "100%"),
+
+          actionButton(ns("refresh_studies"), "↺ Refresh", class = "btn-xs"),
+          tags$hr(style = "margin: 6px 0"),
+
+          selectInput(ns("sample_select"), "Sample",
+                      choices = c("— select study first —" = ""),
+                      width = "100%")
+        ),
+
+        # ── 2. Processing artifact (pipeline) ───────────────────────────────
+        wellPanel(
+          tags$div(class = "section-header", "Processing Artifact"),
+
+          tags$p("Select the processing pipeline used to generate the feature matrix.",
+                 style = "font-size:12px; color:#666;"),
+
+          selectInput(ns("pipeline_select"), "Pipeline ID",
+                      choices = c("— select sample first —" = ""),
+                      width = "100%"),
+
+          uiOutput(ns("pipeline_params_ui")),
+
+          actionButton(ns("load_dataset_btn"), "Load Dataset",
+                       class = "btn-primary btn-sm", width = "100%")
+        ),
+
+        # ── 3. Histology ─────────────────────────────────────────────────────
+        wellPanel(
+          tags$div(class = "section-header", "Histology Image (optional)"),
+          fileInput(ns("histology_upload"), NULL,
+                    accept = c("image/png", "image/jpeg"),
+                    buttonLabel = "Upload image")
+        ),
+
+        # ── 4. Clustering config ─────────────────────────────────────────────
+        wellPanel(
+          tags$div(class = "section-header", "Clustering Configuration"),
+
+          selectInput(ns("normalize"), "Normalisation",
+                      choices = c("None" = "none", "TIC" = "tic",
+                                  "Median" = "median", "RMS" = "rms")),
+
+          radioButtons(ns("method"), "Method",
+                       choices = c("K-means" = "kmeans",
+                                   "VSClust"  = "vsclust",
+                                   "MSIClust" = "msiclust"),
+                       selected = "kmeans"),
+
+          sliderInput(ns("clusters"), "Number of clusters (k)",
+                      min = 2, max = 15, value = 5, step = 1),
+
+          # VSClust / MSIClust params (shown conditionally)
+          conditionalPanel(
+            condition = sprintf("input['%s'] != 'kmeans'", ns("method")),
+            sliderInput(ns("Sds"), "Sds (noise sensitivity)",
+                        min = 0.1, max = 5.0, value = 1.3, step = 0.1),
+            sliderInput(ns("minMem"), "Min membership",
+                        min = 0.0, max = 1.0, value = 0.5, step = 0.05)
+          ),
+
+          # MSIClust extra
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'msiclust'", ns("method")),
+            sliderInput(ns("cor_radius"), "Correlation radius",
+                        min = 1, max = 5, value = 1, step = 1)
+          ),
+
+          actionButton(ns("run_clustering_btn"), "Run Clustering",
+                       class = "btn-success btn-sm", width = "100%")
+        ),
+
+        # ── 5. Annotation set ────────────────────────────────────────────────
+        wellPanel(
+          tags$div(class = "section-header", "Annotation Set"),
+
+          radioButtons(ns("ann_set_mode"), NULL,
+                       choices = c("Select existing"  = "existing",
+                                   "Create new"       = "new"),
+                       selected = "existing"),
+
+          # existing branch
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'existing'", ns("ann_set_mode")),
+            selectInput(ns("ann_set_select"), "Annotation set",
+                        choices = c("— none —" = ""),
+                        width = "100%")
+          ),
+
+          # new branch
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'new'", ns("ann_set_mode")),
+            textInput(ns("ann_set_name"), "Name", placeholder = "e.g. tumour_vs_stroma"),
+            textInput(ns("ann_set_labels"), "Classes (comma-separated)",
+                      placeholder = "Tumour, Stroma, Necrosis"),
+            actionButton(ns("create_ann_set_btn"), "Create annotation set",
+                         class = "btn-info btn-sm", width = "100%"),
+            uiOutput(ns("ann_set_create_status"))
+          )
+        ),
+
+        # ── 6. Class assignment ───────────────────────────────────────────────
+        wellPanel(
+          tags$div(class = "section-header", "Assign Class to Selection"),
+
+          uiOutput(ns("class_buttons_ui")),
+
+          tags$hr(style = "margin: 6px 0"),
+
+          selectInput(ns("orientation"), "Orientation",
+                      choices = c("Original"    = "original",
+                                  "Flip X"      = "flip_x",
+                                  "Flip Y"      = "flip_y",
+                                  "Flip Both"   = "flip_both")),
+
+          actionButton(ns("assign_all_btn"), "Assign to ALL pixels",
+                       class = "btn-warning btn-xs"),
+
+          tags$hr(style = "margin: 6px 0"),
+
+          actionButton(ns("commit_btn"), "Commit to Database",
+                       class = "btn-danger btn-sm", width = "100%"),
+          uiOutput(ns("commit_status"))
+        )
+      ), # end column(3)
+
+      # ── CENTRE: plots ─────────────────────────────────────────────────────
+      column(9,
+        uiOutput(ns("cluster_layout"))
+      )
+    ) # end fluidRow
   )
 }
 
 
-clustering_module_server <- function(id, msi_con) {
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER
+# ─────────────────────────────────────────────────────────────────────────────
+
+clustering_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
-    
-    mongo_meta <- mongo(collection = "processing_artifacts_metadata", 
-                       db = "MSI_database",  
-                       url = "mongodb://localhost:27018")
-    mongo_cluster_meta <- mongo(collection = "clustering_metadata",
-                               db = "MSI_database",  
-                               url = "mongodb://localhost:27018")
-    
-    processed_data <- reactiveVal(NULL)
-    clustered_data <- reactiveVal(NULL)
-    annotated_data <- reactiveVal(NULL)
-    original_clustered <- reactiveVal(NULL)
-    histology_image <- reactiveVal(NULL)
-    vsclust_membership_data <- reactiveVal(NULL)
-    current_method <- reactiveVal(NULL)
-    
-    # --- Load all unique samples ---
-    observe({
-      artifacts <- mongo_meta$find(
-        query = '{"stage_type": "binned_dataframe"}',
-        fields = '{"_id": 0, "sample_name": 1}'
-      )
-      
-      if (nrow(artifacts) == 0) {
-        updateSelectInput(session, "sample_select", choices = "No samples found")
-      } else {
-        samples <- unique(artifacts$sample_name)
-        updateSelectInput(session, "sample_select", choices = samples)
-      }
-    })
 
-    # --- Resolution dropdown ---
-    output$res_ui <- renderUI({
-      req(input$sample_select)
-      
-      artifacts <- query_artifacts(
-        sample_name = input$sample_select,
-        stage_type = "binned_dataframe",
-        db_name = "MSI_database"
-      )
-      
-      if (nrow(artifacts) == 0) return(NULL)
-      
-      res_values <- unique(artifacts$resolution)
-      res_values <- res_values[!is.na(res_values)]
-      res_values <- sort(as.numeric(res_values))
-      
-      selectInput(ns("res_select"), "Select resolution (ppm):", choices = res_values)
-    })
-    
-    # --- Update SNR dropdown when sample is selected ---
-    output$snr_ui <- renderUI({
-      req(input$sample_select)
-      
-      artifacts <- query_artifacts(
-        sample_name = input$sample_select,
-        stage_type = "binned_dataframe",
-        resolution = as.numeric(input$res_select),
-        db_name = "MSI_database"
-      )
-      
-      if (nrow(artifacts) == 0) return(NULL)
-      
-      snr_values <- unique(artifacts$snr)
-      snr_values <- snr_values[!is.na(snr_values)]
-      snr_values <- sort(as.numeric(snr_values))
-      
-      selectInput(ns("snr_select"), "Select SNR:", choices = snr_values)
-    })
-    
-    # --- Update tolerance dropdown when Res and SNR are selected ---
-    output$tol_ui <- renderUI({
-      req(input$sample_select, input$snr_select)
-      
-      artifacts <- query_artifacts(
-        sample_name = input$sample_select,
-        stage_type = "binned_dataframe",
-        resolution = as.numeric(input$res_select),
-        snr = as.numeric(input$snr_select),
-        db_name = "MSI_database"
-      )
-      
-      if (nrow(artifacts) == 0) return(NULL)
-      
-      tol_values <- unique(artifacts$tolerance)
-      tol_values <- tol_values[!is.na(tol_values)]
-      tol_values <- sort(as.numeric(tol_values))
-      
-      selectInput(ns("tol_select"), "Select tolerance:", choices = tol_values)
-    })
-    
-    # --- Update reference dropdown when tolerance is selected ---
-    output$ref_ui <- renderUI({
-      req(input$sample_select, input$res_select, input$snr_select, input$tol_select)
-      
-      artifacts <- query_artifacts(
-        sample_name = input$sample_select,
-        stage_type = "binned_dataframe",
-        resolution = as.numeric(input$res_select),  # TILFØJET
-        snr = as.numeric(input$snr_select),
-        tolerance = as.numeric(input$tol_select),
-        db_name = "MSI_database"
-      )
-      
-      if (nrow(artifacts) == 0) return(NULL)
-      
-      ref_names <- unique(artifacts$reference_name)
-      ref_names <- ref_names[!is.na(ref_names)]
-      
-      selectInput(ns("ref_select"), "Select reference:", choices = ref_names)
-    })
-    
-    # --- Load selected dataset ---
-    observeEvent(input$load_dataset, {
-      req(input$sample_select, input$res_select, input$snr_select, 
-          input$tol_select, input$ref_select)
-      
-      shinyjs::disable("load_dataset")
-      on.exit(shinyjs::enable("load_dataset"))
-      
-      progress <- Progress$new(session, min = 0, max = 100)
-      progress$set(message = "Loading dataset...", value = 0)
-      on.exit(progress$close(), add = TRUE)
-      
+    # ── Reactive state ───────────────────────────────────────────────────────
+
+    active_study_id       <- reactiveVal(NULL)
+    active_sample_id      <- reactiveVal(NULL)
+    active_pipeline_id    <- reactiveVal(NULL)
+    active_artifact_id    <- reactiveVal(NULL)   # the processing artifact _id
+    active_ann_set_id     <- reactiveVal(NULL)
+
+    processed_data        <- reactiveVal(NULL)   # loaded feature matrix (data.frame)
+    clustered_data        <- reactiveVal(NULL)   # after run_clustering
+    original_clustered    <- reactiveVal(NULL)   # unflipped copy
+    histology_image       <- reactiveVal(NULL)
+    vsclust_membership    <- reactiveVal(NULL)   # membership matrix for VSClust/MSIClust
+    current_method        <- reactiveVal("kmeans")
+
+    # Colour book-keeping
+    class_colors          <- reactiveVal(list())
+    next_color_i          <- reactiveVal(1L)
+
+    # Shape from plotly_relayout (lasso / rectangle)
+    sel_shape             <- reactiveVal(NULL)
+
+
+    # ── Study list ──────────────────────────────────────────────────────────
+
+    load_studies <- function() {
       tryCatch({
-        # OPDATERET query med resolution
-        artifacts <- query_artifacts(
-          sample_name = input$sample_select,
-          stage_type = "binned_dataframe",
-          resolution = as.numeric(input$res_select),  
-          snr = as.numeric(input$snr_select),
-          tolerance = as.numeric(input$tol_select),
-          reference_name = input$ref_select,
-          db_name = "MSI_database"
-        )
-        
-        if (nrow(artifacts) == 0) {
-          showNotification("No matching dataset found.", type = "error")
+        df <- get_studies()
+        if (is.null(df) || nrow(df) == 0) {
+          updateSelectInput(session, "study_select",
+                            choices = c("— no studies found —" = ""))
           return()
         }
-        
-        progress$set(value = 30, message = "Loading from database...")
-        
-        gridfs_id <- artifacts$gridfs_id[1]
-        df <- load_artifact_by_id(gridfs_id, db_name = "MSI_database")
-        
-        progress$set(value = 90, message = "Processing data...")
-        
-        # OPDATERET dataset info med resolution
-        dataset_info <- paste0(
-          "Sample: ", input$sample_select, "\n",
-          "Resolution: ", input$res_select, " ppm\n",  
-          "SNR: ", input$snr_select, " | ",
-          "Tolerance: ", input$tol_select, " | ",
-          "Reference: ", input$ref_select, "\n",
-          "Dimensions: ", nrow(df), " pixels × ", sum(grepl("^mz_", names(df))), " features"
-        )
-        
-        processed_data(df)
-        clustered_data(NULL)
-        annotated_data(NULL)
-        
-        progress$set(value = 100, message = "Complete!")
-        
-        output$status_text <- renderText(dataset_info)
-        
-        showNotification(
-          paste0("Dataset loaded: ", nrow(df), " pixels × ", 
-                sum(grepl("^mz_", names(df))), " features"),
-          type = "message",
-          duration = 5
-        )
-        
+        choices <- setNames(df[["_id"]], df$name)
+        updateSelectInput(session, "study_select",
+                          choices = c("— select —" = "", choices))
       }, error = function(e) {
-        showNotification(
-          paste("Error loading dataset:", e$message),
-          type = "error",
-          duration = NULL
-        )
+        showNotification(paste("Error loading studies:", e$message), type = "error")
       })
-    })
-    
-    # Dynamic parameter UI based on selected method
-    output$method_params_ui <- renderUI({
-      req(input$method)
-      
-      if (input$method == "K-means") {
-        helpText("K-means partitions data into k distinct clusters")
-      } else if (input$method == "VSClust") {
-        tagList(
-          numericInput(ns("Sds"), "Fuzziness parameter (Sds):", 
-                      value = 1.3, min = 0.5, max = 3, step = 0.01),
-          numericInput(ns("minMem"), "Minimum membership:", 
-                      value = 0.5, min = 0.1, max = 1, step = 0.01),
-          helpText("VSClust uses fuzzy clustering with membership scores")
-        )
-      } else if (input$method == "MSIClust") {
-        tagList(
-          numericInput(ns("cor_radius"), "Correlation radius (pixels):",
-                      value = 1, min = 1, max = 5, step = 1),
-          numericInput(ns("cor_scale"), "Correlation scale factor:",
-                      value = 25, min = 1, max = 100, step = 1),
-          numericInput(ns("minMem"), "Minimum membership:", 
-                      value = 0.5, min = 0.1, max = 1, step = 0.01),
-          helpText("MSIClust uses spatial correlation to set per-pixel fuzzifiers")
-        )
+    }
+
+    observeEvent(input$refresh_studies, load_studies(), ignoreInit = FALSE)
+    observe(load_studies())   # initial load
+
+    # ── Study → sample cascade ───────────────────────────────────────────────
+
+    observeEvent(input$study_select, {
+      sid <- input$study_select
+      if (!nzchar(sid)) {
+        active_study_id(NULL)
+        updateSelectInput(session, "sample_select",
+                          choices = c("— select study first —" = ""))
+        return()
       }
-    })
+      active_study_id(sid)
 
-
-    # --- Run clustering ---
-    observeEvent(input$run_clustering, {
-      df <- processed_data()
-      req(df)
-      
-      shinyjs::disable("run_clustering")
-      on.exit(shinyjs::enable("run_clustering"))
-      
-      progress <- Progress$new(session, min = 0, max = 100)
-      progress$set(message = "Running clustering...", value = 0)
-      on.exit(progress$close(), add = TRUE)
-      
       tryCatch({
-        progress$set(value = 30, 
-                    message = paste0("Running ", input$method, " with k=", input$clusters, "..."))
-        
-        clustered <- switch(input$method,
-          "K-means" = {
-            current_method("K-means")
-            vsclust_membership_data(NULL)
-            run_kmeans(df, 
-                      k = input$clusters, 
-                      normalize_method = input$normalize)
-          },
-          "VSClust" = {
-            current_method("VSClust")
-            result <- run_vsclust(df,
-                      k = input$clusters,
-                      normalize_method = input$normalize,
-                      Sds = input$Sds %||% 1.3,
-                      minMem = input$minMem %||% 0.5)
-            vsclust_membership_data(result)
-            result
-          },
-          "MSIClust" = {
-            current_method("MSIClust")
-            result <- run_msiclust(df,
-                      k = input$clusters,
-                      normalize_method = input$normalize,
-                      cor_radius = input$cor_radius %||% 1,
-                      cor_scale = input$cor_scale %||% 25,
-                      cor_cores = max(parallel::detectCores() - 1, 1),
-                      minMem = input$minMem %||% 0.5)
-            vsclust_membership_data(result)
-            result
-          },
-          stop("Unknown clustering method")
-        )
-        
-        progress$set(value = 90, message = "Finalizing...")
-        
-        original_clustered(clustered)
-        clustered_data(clustered)
-        annotated_data(NULL)
-        
-        progress$set(value = 100, message = "Complete!")
-        
-        norm_text <- if (input$normalize == "none") {
-          "no normalization"
+        df <- get_samples(sid)
+        if (is.null(df) || nrow(df) == 0) {
+          updateSelectInput(session, "sample_select",
+                            choices = c("— no samples in this study —" = ""))
         } else {
-          paste("with", input$normalize, "normalization")
+          choices <- setNames(df[["_id"]], df$sample_name)
+          updateSelectInput(session, "sample_select",
+                            choices = c("— select —" = "", choices))
         }
-
-        output$status_text <- renderText(
-          paste0("Clustering complete: ", input$method, " (", norm_text, ") - ",
-                input$clusters, " clusters")
-        )
-        
-        showNotification(
-          paste0("Clustering complete: ", input$clusters, " clusters identified"),
-          type = "message",
-          duration = 5
-        )
-        
+        # refresh annotation sets for this study
+        refresh_ann_sets(sid)
       }, error = function(e) {
-        showNotification(
-          paste("Clustering error:", e$message),
-          type = "error",
-          duration = NULL
-        )
-      })
-    })
-    
-    observeEvent(input$minMem, {
-      # Only react if VSClust or MSIClust was used and we have membership data
-      req(current_method() %in% c("VSClust", "MSIClust"))
-      req(vsclust_membership_data())
-      
-      # Don't trigger during initial clustering run
-      req(clustered_data())
-      
-      tryCatch({
-        # Get stored membership data
-        df <- vsclust_membership_data()
-        
-        # Reapply threshold with new minMem value
-        df_updated <- apply_minmem_threshold(df, input$minMem)
-        
-        # Update both original and current clustered data
-        original_clustered(df_updated)
-        
-        # Apply current orientation transformation
-        orientation <- input$orientation %||% "Default"
-        
-        if (orientation == "Default") {
-          clustered_data(df_updated)
-        } else {
-          df_adjusted <- df_updated
-          
-          if (orientation == "Flip X" || orientation == "Flip Both") {
-            df_adjusted$x <- max(df_updated$x) - df_adjusted$x + min(df_updated$x)
-          }
-          if (orientation == "Flip Y" || orientation == "Flip Both") {
-            df_adjusted$y <- max(df_updated$y) - df_adjusted$y + min(df_updated$y)
-          }
-          
-          clustered_data(df_adjusted)
-        }
-        
-        # Clear annotations since cluster assignments changed
-        annotated_data(NULL)
-        class_colors(c())
-        next_color_i(1)
-        
-        showNotification(
-          paste0("Cluster assignments updated with minMem = ", input$minMem),
-          type = "message",
-          duration = 3
-        )
-        
-      }, error = function(e) {
-        showNotification(
-          paste("Error updating membership threshold:", e$message),
-          type = "error",
-          duration = NULL
-        )
+        showNotification(paste("Error loading samples:", e$message), type = "error")
       })
     }, ignoreInit = TRUE)
 
-    # --- Apply orientation adjustment ---
-    observe({
-      req(input$orientation)
-      
-      # Get base data
-      base_df <- original_clustered()
-      req(base_df)
-      
-      if (input$orientation == "Default") {
-        isolate({
-          clustered_data(base_df)
-          annotated_data(NULL)
-          class_colors(c())
-          next_color_i(1)
-        })
+    # ── Sample → pipeline list cascade ──────────────────────────────────────
+
+    observeEvent(input$sample_select, {
+      samp <- input$sample_select
+      if (!nzchar(samp)) {
+        active_sample_id(NULL)
+        updateSelectInput(session, "pipeline_select",
+                          choices = c("— select sample first —" = ""))
         return()
       }
-      
-      # Apply transformation to base data
-      df_adjusted <- base_df
-      
-      if (input$orientation == "Flip X") {
-        df_adjusted$x <- max(base_df$x) - df_adjusted$x + min(base_df$x)
-      } else if (input$orientation == "Flip Y") {
-        df_adjusted$y <- max(base_df$y) - df_adjusted$y + min(base_df$y)
-      } else if (input$orientation == "Flip Both") {
-        df_adjusted$x <- max(base_df$x) - df_adjusted$x + min(base_df$x)
-        df_adjusted$y <- max(base_df$y) - df_adjusted$y + min(base_df$y)
-      }
-      
-      # Use isolate to prevent triggering observer when updating
-      isolate({
-        clustered_data(df_adjusted)
-        annotated_data(NULL)
-        class_colors(c())
-        next_color_i(1)
+      active_sample_id(samp)
+
+      tryCatch({
+        pids <- list_available_pipeline_ids(samp, "binned_dataframe")
+        if (length(pids) == 0) {
+          updateSelectInput(session, "pipeline_select",
+                            choices = c("— no processed artifacts —" = ""))
+        } else {
+          # Enrich each pipeline_id with human-readable label
+          choices <- vapply(pids, function(pid) {
+            tryCatch({
+              meta <- get_pipeline(pid)
+              paste0(meta$name[1], " (", substr(pid, 1, 8), "…)")
+            }, error = function(e) substr(pid, 1, 16))
+          }, character(1))
+          choices <- setNames(pids, choices)
+          updateSelectInput(session, "pipeline_select",
+                            choices = c("— select —" = "", choices))
+        }
+      }, error = function(e) {
+        showNotification(paste("Error listing pipelines:", e$message), type = "error")
       })
-    }) %>% bindEvent(input$orientation)
+    }, ignoreInit = TRUE)
 
+    # ── Pipeline params preview ──────────────────────────────────────────────
 
-    # --- State and colors ---
-    my_palette <- c(
-      "red","blue","orange", "lightgreen","mediumpurple","brown","pink","cyan","magenta","yellow",
-      "darkred","darkblue","darkgreen","darkorange","darkviolet","gold","gray20","gray50",
-      "deepskyblue","springgreen","navy","maroon","olive","turquoise","orchid","salmon",
-      "khaki","steelblue","seagreen","tan"
-    )
-    class_colors <- reactiveVal(c())
-    next_color_i <- reactiveVal(1)
-    
-    # Reset colors when new clustering is run
-    observeEvent(input$run_clustering, {
-      annotated_data(NULL)
-      class_colors(c())
-      next_color_i(1)
+    output$pipeline_params_ui <- renderUI({
+      pid <- input$pipeline_select
+      if (!nzchar(pid %||% "")) return(NULL)
+      tryCatch({
+        meta   <- get_pipeline(pid)
+        params <- meta$params[[1]]
+        tags$div(
+          class = "pipeline-badge",
+          tags$b("Params: "),
+          paste(names(params), unlist(params), sep = "=", collapse = ", ")
+        )
+      }, error = function(e) NULL)
     })
-    
-# --- Raster helper for both cluster and class plots (transparent background) ---
-make_raster_png <- function(df, fill_var, colors) {
-  df$x <- df$x - min(df$x) + 1
-  df$y <- df$y - min(df$y) + 1
-  width <- max(df$x)
-  height <- max(df$y)
-  
-  # Create EMPTY matrix (NA = transparent)
-  mat <- matrix(NA_character_, nrow = height, ncol = width)
-  
-  # Flip y-coordinates: (height - y + 1) converts bottom-up to top-down
-  mat[cbind(height - df$y + 1, df$x)] <- as.character(df[[fill_var]])
-  
-  col_img <- matrix(colors[mat], nrow = height, ncol = width)
-  
-  rgb_vals <- col2rgb(col_img, alpha = TRUE) / 255
-  rgb_array <- array(NA_real_, dim = c(height, width, 4))
-  rgb_array[,,1] <- matrix(rgb_vals["red", ], nrow = height, ncol = width)
-  rgb_array[,,2] <- matrix(rgb_vals["green", ], nrow = height, ncol = width)
-  rgb_array[,,3] <- matrix(rgb_vals["blue", ], nrow = height, ncol = width)
-  rgb_array[,,4] <- matrix(rgb_vals["alpha", ], nrow = height, ncol = width)
-  
-  # Make NA pixels transparent
-  na_pixels <- is.na(mat)
-  rgb_array[,,4][na_pixels] <- 0
-  
-  tmp <- tempfile(fileext = ".png")
-  png::writePNG(rgb_array, target = tmp)
-  base64enc::dataURI(file = tmp, mime = "image/png")
-}
 
+    observeEvent(input$pipeline_select, {
+      pid <- input$pipeline_select
+      active_pipeline_id(if (nzchar(pid %||% "")) pid else NULL)
+    })
 
-    
-    # --- Selection storage ---
-    sel_shape <- reactiveVal(NULL)
-    
-    
-    # --- Capture drawn shapes (auto-detect completion) ---
-    observeEvent(event_data("plotly_relayout", source = "cluster"), {
-      ev <- event_data("plotly_relayout", source = "cluster")
-      req(ev)
-      
-      # Method 1: Direct path key (works after editing)
-      if (any(grepl("shapes\\[\\d+\\]\\.path$", names(ev)))) {
-        path_key <- grep("shapes\\[\\d+\\]\\.path$", names(ev), value = TRUE)[1]
-        path <- ev[[path_key]]
-        
-        if (!is.null(path) && nchar(path) > 0) {
-          coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
-          xy <- do.call(rbind, strsplit(coords, ","))
-          x <- as.numeric(xy[,1])
-          y <- as.numeric(xy[,2])
-          
-          sel_shape(list(type = "polygon", x = x, y = y))
-          
+    # ── Load dataset button ──────────────────────────────────────────────────
+
+    observeEvent(input$load_dataset_btn, {
+      samp <- active_sample_id()
+      pid  <- active_pipeline_id()
+
+      if (is.null(samp) || !nzchar(samp)) {
+        showNotification("Select a sample first.", type = "warning"); return()
+      }
+      if (is.null(pid) || !nzchar(pid)) {
+        showNotification("Select a processing pipeline first.", type = "warning"); return()
+      }
+
+      withProgress(message = "Loading feature matrix …", {
+        tryCatch({
+          # Resolve artifact metadata to get artifact _id for provenance
+          art_meta <- query_artifacts(sample_id  = samp,
+                                      stage_type  = "binned_dataframe",
+                                      pipeline_id = pid)
+          if (nrow(art_meta) == 0) stop("No artifact found for this sample + pipeline.")
+
+          active_artifact_id(art_meta[["_id"]][1])
+
+          df <- load_artifact_by_pipeline(samp, "binned_dataframe", pid)
+          processed_data(df)
+          clustered_data(NULL)
+          original_clustered(NULL)
+          vsclust_membership(NULL)
+
           showNotification(
-            paste0("✓ Polygon captured (", length(x), " points)"),
-            type = "message", 
-            duration = 2
+            sprintf("Loaded %d pixels × %d features.",
+                    nrow(df),
+                    length(grep("^mz_", names(df)))),
+            type = "message"
           )
-        }
-        return()
+        }, error = function(e) {
+          showNotification(paste("Load failed:", e$message), type = "error")
+        })
+      })
+    })
+
+    # ── Histology upload ─────────────────────────────────────────────────────
+
+    observeEvent(input$histology_upload, {
+      req(input$histology_upload)
+      img <- tryCatch(
+        png::readPNG(input$histology_upload$datapath),
+        error = function(e)
+          jpeg::readJPEG(input$histology_upload$datapath)
+      )
+      histology_image(img)
+    })
+
+    # ── Run clustering ───────────────────────────────────────────────────────
+
+    observeEvent(input$run_clustering_btn, {
+      df <- processed_data()
+      if (is.null(df)) {
+        showNotification("Load a dataset first.", type = "warning"); return()
       }
-      
-      # Method 2: shapes array (works on first draw)
-      if ("shapes" %in% names(ev)) {
-        shapes_data <- ev$shapes
-        
-        # Check if it's a data.frame (from first event)
-        if (is.data.frame(shapes_data) && nrow(shapes_data) > 0) {
-          last_row <- shapes_data[nrow(shapes_data), ]
-          
-          if (!is.null(last_row$path) && nchar(last_row$path) > 0) {
-            path <- last_row$path
-            coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
-            xy <- do.call(rbind, strsplit(coords, ","))
-            x <- as.numeric(xy[,1])
-            y <- as.numeric(xy[,2])
-            
-            sel_shape(list(type = "polygon", x = x, y = y))
-            
-            showNotification(
-              paste0("✓ Polygon captured (", length(x), " points)"),
-              type = "message", 
-              duration = 2
+
+      method <- input$method
+      current_method(method)
+      k      <- input$clusters
+      norm   <- input$normalize
+
+      withProgress(message = paste("Running", method, "…"), {
+        tryCatch({
+          result <- switch(method,
+            kmeans = run_kmeans(df, k = k, normalize_method = norm),
+            vsclust = {
+              res <- run_vsclust(df, k = k, normalize_method = norm,
+                                 Sds = input$Sds, minMem = input$minMem)
+              mem_cols <- grep("^membership_", names(res), value = TRUE)
+              vsclust_membership(as.matrix(res[, mem_cols, drop = FALSE]))
+              res
+            },
+            msiclust = {
+              res <- run_msiclust(df, k = k, normalize_method = norm,
+                                  Sds = input$Sds, minMem = input$minMem,
+                                  cor_radius = input$cor_radius)
+              mem_cols <- grep("^membership_", names(res), value = TRUE)
+              vsclust_membership(as.matrix(res[, mem_cols, drop = FALSE]))
+              res
+            }
+          )
+          result$Class <- NA_character_
+          clustered_data(result)
+          original_clustered(result)
+
+          # Reset colour assignments
+          class_colors(list())
+          next_color_i(1L)
+
+          showNotification(
+            sprintf("Clustering done. %d pixels, %d unique clusters.",
+                    nrow(result),
+                    length(unique(result$cluster[result$cluster != "No_cluster"]))),
+            type = "message"
+          )
+        }, error = function(e) {
+          showNotification(paste("Clustering error:", e$message), type = "error")
+        })
+      })
+    })
+
+    # ── MinMem live update (VSClust / MSIClust) ───────────────────────────────
+
+    observeEvent(input$minMem, {
+      df <- clustered_data()
+      if (is.null(df)) return()
+      if (!("raw_cluster" %in% names(df))) return()
+      clustered_data(apply_minmem_threshold(df, input$minMem))
+    }, ignoreInit = TRUE)
+
+    # ── Orientation flip ──────────────────────────────────────────────────────
+
+    observeEvent(input$orientation, {
+      orig <- original_clustered()
+      if (is.null(orig)) return()
+      df <- orig
+      x_range <- range(df$x, na.rm = TRUE)
+      y_range <- range(df$y, na.rm = TRUE)
+      df <- switch(input$orientation,
+        flip_x    = { df$x <- x_range[2] - df$x + x_range[1]; df },
+        flip_y    = { df$y <- y_range[2] - df$y + y_range[1]; df },
+        flip_both = { df$x <- x_range[2] - df$x + x_range[1]
+                      df$y <- y_range[2] - df$y + y_range[1]; df },
+        df   # original
+      )
+      clustered_data(df)
+    }, ignoreInit = TRUE)
+
+    # ── Annotation set helpers ────────────────────────────────────────────────
+
+    refresh_ann_sets <- function(study_id) {
+      tryCatch({
+        df <- list_annotation_sets(study_id)
+        if (is.null(df) || nrow(df) == 0) {
+          choices <- c("— none —" = "")
+        } else {
+          choices <- setNames(df[["_id"]], df$name)
+        }
+        updateSelectInput(session, "ann_set_select",
+                          choices = c("— select —" = "", choices))
+      }, error = function(e) NULL)
+    }
+
+    observeEvent(input$ann_set_select, {
+      v <- input$ann_set_select
+      active_ann_set_id(if (nzchar(v %||% "")) v else NULL)
+    })
+
+    # Create new annotation set
+    observeEvent(input$create_ann_set_btn, {
+      sid <- active_study_id()
+      if (is.null(sid)) {
+        showNotification("Select a study first.", type = "warning"); return()
+      }
+      nm <- trimws(input$ann_set_name %||% "")
+      if (!nzchar(nm)) {
+        showNotification("Enter a name for the annotation set.", type = "warning"); return()
+      }
+      labels_raw <- trimws(input$ann_set_labels %||% "")
+      if (!nzchar(labels_raw)) {
+        showNotification("Enter at least one class label.", type = "warning"); return()
+      }
+      labels <- trimws(strsplit(labels_raw, ",")[[1]])
+      labels <- labels[nzchar(labels)]
+
+      tryCatch({
+        ann_id <- upsert_annotation_set(sid, nm, labels)
+        active_ann_set_id(ann_id)
+        refresh_ann_sets(sid)
+        # switch UI to existing mode and select the new set
+        updateRadioButtons(session, "ann_set_mode", selected = "existing")
+        updateSelectInput(session, "ann_set_select", selected = ann_id)
+
+        output$ann_set_create_status <- renderUI(
+          tags$span(style = "color:green", "✓ Created: ", nm)
+        )
+      }, error = function(e) {
+        output$ann_set_create_status <- renderUI(
+          tags$span(style = "color:red", "Error: ", e$message)
+        )
+      })
+    })
+
+    # ── Class button UI (one button per unique cluster) ───────────────────────
+
+    output$class_buttons_ui <- renderUI({
+      df <- clustered_data()
+      if (is.null(df)) return(tags$p("Run clustering first.", style = "color:#999;"))
+
+      clusters <- sort(unique(df$cluster[df$cluster != "No_cluster"]))
+      if (length(clusters) == 0) return(NULL)
+
+      colors <- class_colors()
+
+      lapply(clusters, function(cl) {
+        col <- colors[[as.character(cl)]] %||% "#cccccc"
+        fluidRow(
+          column(2, tags$div(style = sprintf(
+            "width:16px; height:16px; background:%s; margin-top:6px;", col))),
+          column(10,
+            actionButton(
+              ns(paste0("assign_", cl)),
+              label = paste("Cluster", cl),
+              class = "btn-xs btn-default",
+              style = sprintf("border-left: 4px solid %s; margin-bottom:3px;", col)
             )
-          }
+          )
+        )
+      })
+    })
+
+    # Assign class via polygon selection — one observer per cluster button
+    observe({
+      df <- clustered_data()
+      if (is.null(df)) return()
+
+      clusters <- sort(unique(df$cluster[df$cluster != "No_cluster"]))
+
+      lapply(clusters, function(cl) {
+        local({
+          lcl <- cl
+          btn_id <- paste0("assign_", lcl)
+          observeEvent(input[[btn_id]], {
+            shape <- sel_shape()
+            df    <- clustered_data()
+            if (is.null(shape) || is.null(df)) {
+              showNotification("Draw a shape on the cluster plot first.", type = "warning")
+              return()
+            }
+
+            # Colour assignment
+            colors <- class_colors()
+            key    <- as.character(lcl)
+            if (is.null(colors[[key]])) {
+              i          <- next_color_i()
+              colors[[key]] <- CLASS_COLORS[((i - 1) %% length(CLASS_COLORS)) + 1]
+              next_color_i(i + 1L)
+              class_colors(colors)
+            }
+
+            # Point-in-polygon
+            xs <- shape$x
+            ys <- shape$y
+            if (length(xs) < 3) {
+              # Bounding box from rectangle selection
+              in_sel <- df$x >= min(xs) & df$x <= max(xs) &
+                        df$y >= min(ys) & df$y <= max(ys)
+            } else {
+              in_poly <- sp::point.in.polygon(df$x, df$y, xs, ys)
+              in_sel  <- in_poly > 0
+            }
+
+            in_cluster <- df$cluster == as.character(lcl)
+            df$Class[in_sel & in_cluster] <- paste("Class", lcl)
+            clustered_data(df)
+          }, ignoreInit = TRUE)
+        })
+      })
+    })
+
+    # Assign all pixels of a cluster to a class (no selection needed)
+    observeEvent(input$assign_all_btn, {
+      df <- clustered_data()
+      if (is.null(df)) {
+        showNotification("Run clustering first.", type = "warning"); return()
+      }
+
+      clusters <- sort(unique(df$cluster[df$cluster != "No_cluster"]))
+      colors   <- class_colors()
+      i        <- next_color_i()
+
+      for (cl in clusters) {
+        key <- as.character(cl)
+        if (is.null(colors[[key]])) {
+          colors[[key]] <- CLASS_COLORS[((i - 1) %% length(CLASS_COLORS)) + 1]
+          i <- i + 1L
         }
-        return()
+        df$Class[df$cluster == as.character(cl)] <- paste("Class", cl)
       }
+      next_color_i(i)
+      class_colors(colors)
+      clustered_data(df)
     })
-    
-# --- Assign to selection ---
-observeEvent(input$assign_class, {
-  shape <- sel_shape()
-  if (is.null(shape)) {
-    showNotification("No selection drawn.", type = "warning", duration = 4)
-    return()
-  }
-  
-  df <- annotated_data() %||% clustered_data()
-  req(df)
-  
-  # Initialize Class column if missing
-  if (!"Class" %in% names(df)) {
-    df$Class <- "Unassigned"
-  } else {
-    df$Class[is.na(df$Class)] <- "Unassigned"
-  }
-  df$Class <- as.character(df$Class)
-  
-  # Only polygon selection supported
-  if (!identical(shape$type, "polygon")) {
-    showNotification("Only polygon selection is supported.", type = "error", duration = 4)
-    return()
-  }
-  
-  # Get polygon coordinates
-  poly_x <- shape$x
-  poly_y <- shape$y
-  
-  # Apply inverse transformation based on orientation
-  orientation <- input$orientation %||% "Default"
-  base_df <- original_clustered()
-  req(base_df)
-  
-  if (orientation == "Flip X" || orientation == "Flip Both") {
-    # Reverse the x flip: x_flipped = max - x + min, so x = max + min - x_flipped
-    poly_x <- max(base_df$x) + min(base_df$x) - poly_x
-  }
-  if (orientation == "Flip Y" || orientation == "Flip Both") {
-    # Reverse the y flip
-    poly_y <- max(base_df$y) + min(base_df$y) - poly_y
-  }
-  
-  inside <- sp::point.in.polygon(df$x, df$y, poly_x, poly_y) > 0
-  
-  n_sel <- sum(inside)
-  if (n_sel == 0) {
-    showNotification("No pixels in selection.", type = "warning", duration = 4)
-    return()
-  }
-  
-  lab <- input$class_label
-  df$Class[inside] <- lab
-  annotated_data(df)
-  
-  # Update colors - NEVER add Unassigned to palette
-  if (lab != "Unassigned") {
-    cols <- class_colors()
-    
-    if (!(lab %in% names(cols))) {
-      i <- next_color_i()
-      cols[lab] <- my_palette[i]
-      next_color_i(if (i >= length(my_palette)) 1 else i + 1)
-    }
-    
-    class_colors(cols)
-  }
-  
-  # Clear shapes
-  try({
-    plotlyProxy("cluster_plot", session) %>%
-      plotlyProxyInvoke("relayout", list(shapes = list()))
-  }, silent = TRUE)
-  sel_shape(NULL)
-  
-  showNotification(
-    sprintf("Assigned '%s' to %d pixels.", lab, n_sel),
-    type = "message", duration = 3
-  )
-})
 
-# --- Assign all unassigned ---
-observeEvent(input$assign_all, {
-  df <- annotated_data() %||% clustered_data()
-  req(df)
-  
-  if (!"Class" %in% names(df)) {
-    df$Class <- "Unassigned"
-  } else {
-    df$Class[is.na(df$Class)] <- "Unassigned"
-  }
-  df$Class <- as.character(df$Class)
-  
-  n_unassigned <- sum(df$Class == "Unassigned")
-  
-  if (n_unassigned > 0) {
-    lab <- input$class_label
-    df$Class[df$Class == "Unassigned"] <- lab
-    annotated_data(df)
-    
-    # Update colors - NEVER add Unassigned to palette
-    if (lab != "Unassigned") {
-      cols <- class_colors()
-      
-      if (!(lab %in% names(cols))) {
-        i <- next_color_i()
-        cols[lab] <- my_palette[i]
-        next_color_i(if (i >= length(my_palette)) 1 else i + 1)
+    # ── Commit to database ────────────────────────────────────────────────────
+
+    observeEvent(input$commit_btn, {
+      study_id    <- active_study_id()
+      sample_id   <- active_sample_id()
+      artifact_id <- active_artifact_id()
+      ann_set_id  <- active_ann_set_id()
+      pid         <- active_pipeline_id()
+      df          <- clustered_data()
+
+      # ── Validate prerequisites
+      if (is.null(study_id))  { showNotification("No study selected.", type = "error"); return() }
+      if (is.null(sample_id)) { showNotification("No sample selected.", type = "error"); return() }
+      if (is.null(pid))       { showNotification("No processing pipeline selected.", type = "error"); return() }
+      if (is.null(df))        { showNotification("Run clustering first.", type = "error"); return() }
+      if (is.null(ann_set_id)) {
+        showNotification("Select or create an annotation set first.", type = "error"); return()
       }
-    
-      class_colors(cols)
-    }
-    
-    showNotification(
-      sprintf("Assigned '%s' to %d pixels.", lab, n_unassigned),
-      type = "message", duration = 3
-    )
-  } else {
-    showNotification("No unassigned pixels.", type = "warning", duration = 3)
-  }
-})
-    
-    
-# --- Cluster plot (use cluster version) ---
-output$cluster_plot <- renderPlotly({
-  df <- clustered_data()
-  req(df)
 
-  # Sørg for at cluster er character (tillader både tal og "No_cluster")
-  df$cluster <- as.character(df$cluster)
+      # Check that at least some pixels are annotated
+      annotation_df <- df[!is.na(df$Class), c("x", "y", "Class"), drop = FALSE]
+      if (nrow(annotation_df) == 0) {
+        showNotification("No pixels have been assigned a class yet.", type = "warning"); return()
+      }
 
-  # Hvilke clusters findes faktisk?
-  present_clusters <- unique(df$cluster)
-  present_clusters <- c(
-    if ("No_cluster" %in% present_clusters) "No_cluster",
-    sort(setdiff(present_clusters, "No_cluster"))
-  )
+      withProgress(message = "Committing to database …", {
+        tryCatch({
 
-  # “Rigtige” clusters uden No_cluster
-  valid_clusters <- sort(setdiff(present_clusters, "No_cluster"))
-  n_valid <- length(valid_clusters)
+          # 1) Register clustering pipeline (deterministic ID)
+          method <- current_method()
+          cluster_params <- list(
+            method             = method,
+            k                  = input$clusters,
+            normalize          = input$normalize,
+            input_pipeline_id  = pid   # CRITICAL: provenance link to processing artifact
+          )
+          if (method %in% c("vsclust", "msiclust")) {
+            cluster_params$Sds    <- input$Sds
+            cluster_params$minMem <- input$minMem
+          }
+          if (method == "msiclust") {
+            cluster_params$cor_radius <- input$cor_radius
+          }
 
-  # Farver til rigtige clusters
-  cols_base <- RColorBrewer::brewer.pal(max(n_valid, 3), "Set3")[seq_len(n_valid)]
-  names(cols_base) <- valid_clusters
+          cluster_pid <- upsert_pipeline(
+            type         = "clustering",
+            name         = paste0(method, "_k", input$clusters),
+            params       = cluster_params,
+            code_version = "dev"
+          )
 
-  # Farve til No_cluster (lys grå)
-  no_cluster_col <- "#D9D9D9"
+          # 2) Save clustering result as artifact
+          art_id <- save_clustering_artifact(
+            clustered_df       = df,
+            study_id           = study_id,
+            sample_id          = sample_id,
+            input_artifact_id  = artifact_id %||% "",
+            cluster_pipeline_id = cluster_pid
+          )
 
-  all_colors <- c("No_cluster" = no_cluster_col)
-  for (cl in valid_clusters) {
-    all_colors[cl] <- cols_base[[cl]]
-  }
+          # 3) Save annotations
+          ann_id <- save_annotation(
+            annotation_df    = annotation_df,
+            sample_id        = sample_id,
+            annotation_set_id = ann_set_id
+          )
 
-  # Raster til cluster
-  img_uri <- make_raster_png(df, "cluster", all_colors)
+          # 4) Legacy compat — insert into clustering_metadata
+          tryCatch({
+            mongo_cluster_meta <- mongolite::mongo(
+              collection = "clustering_metadata",
+              db         = DB_NAME,
+              url        = MONGO_URL
+            )
+            mongo_cluster_meta$insert(list(
+              assignment_id      = art_id,
+              study_id           = study_id,
+              sample_id          = sample_id,
+              pipeline_id        = pid,
+              cluster_pipeline_id = cluster_pid,
+              clustering_method  = method,
+              k                  = input$clusters,
+              normalize          = input$normalize,
+              annotation_set_id  = ann_set_id,
+              annotation_id      = ann_id,
+              n_annotated        = nrow(annotation_df),
+              created_at         = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+            ))
+          }, error = function(e) {
+            message("Legacy clustering_metadata insert failed (non-fatal): ", e$message)
+          })
 
-  # --- Orientering: behold din nuværende logik ---------------------------
-  base_df <- original_clustered()
-  req(base_df)
+          output$commit_status <- renderUI(
+            tags$div(style = "color:green; margin-top:6px;",
+              tags$b("✓ Committed"), tags$br(),
+              tags$small("Artifact: ", substr(art_id, 1, 12), "…"), tags$br(),
+              tags$small("Annotation: ", substr(ann_id, 1, 12), "…")
+            )
+          )
+          showNotification("Committed to database.", type = "message")
 
-  orientation <- input$orientation %||% "Default"
-
-  x_min <- min(df$x); x_max <- max(df$x)
-  y_min <- min(df$y); y_max <- max(df$y)
-
-  x_range <- c(x_min, x_max)
-  y_range <- c(y_min, y_max)
-
-  img_x     <- x_min
-  img_y     <- y_max
-  img_sizex <- x_max - x_min
-  img_sizey <- y_max - y_min
-
-  if (orientation == "Flip X" || orientation == "Flip Both") {
-    x_range  <- rev(x_range)
-    img_x    <- x_max
-    img_sizex <- -(x_max - x_min)
-  }
-  if (orientation == "Flip Y" || orientation == "Flip Both") {
-    y_range  <- rev(y_range)
-    img_y    <- y_min
-    img_sizey <- y_max - y_min
-  }
-
-  p <- plot_ly(source = "cluster") %>%
-    add_trace(x = NULL, y = NULL, type = "scatter", mode = "markers") %>%
-    layout(
-      images = list(list(
-        source = img_uri,
-        xref = "x", yref = "y",
-        x = img_x, y = img_y,
-        sizex = img_sizex,
-        sizey = img_sizey,
-        sizing = "stretch", layer = "below"
-      )),
-      dragmode = "drawclosedpath",
-      newshape = list(line = list(color = "black", width = 1),
-                      fillcolor = "rgba(0,0,0,0.05)"),
-      title = "MSI Clustering Result",
-      xaxis = list(range = x_range, title = "x"),
-      yaxis = list(range = y_range, title = "y",
-                   scaleanchor = "x", scaleratio = 1),
-      showlegend = TRUE,
-      legend = list(
-        orientation = "h",
-        x = 0.5,
-        xanchor = "center",
-        y = -0.15,
-        yanchor = "top"
-      )
-    ) %>%
-    config(
-      displaylogo = FALSE,
-      modeBarButtonsToAdd = list("drawclosedpath", "eraseshape"),
-      modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian",
-                                 "toggleSpikelines", "toImage", "select2d", "lasso2d")
-    )
-
-  # Legend-traces – samme stil som class_plot
-  for (cls in present_clusters) {
-    col <- all_colors[[cls]]
-
-    p <- p %>%
-      add_trace(
-        x = x_min - 1000,
-        y = y_min - 1000,
-        type = "scatter",
-        mode = "markers",
-        marker = list(size = 10, color = col),
-        name = if (cls == "No_cluster") "No cluster" else paste("Cluster", cls),
-        showlegend = TRUE,
-        hoverinfo = "skip",
-        inherit = FALSE
-      )
-  }
-
-  p
-})
-
-
-# --- Class plot (interactive with raster) ---
-output$class_plot <- renderPlotly({
-  df <- annotated_data() %||% clustered_data()
-  req(df)
-  
-  # Initialize Class column if missing
-  if (!"Class" %in% names(df)) {
-    df$Class <- "Unassigned"
-  } else {
-    df$Class[is.na(df$Class)] <- "Unassigned"
-  }
-  df$Class <- as.character(df$Class)
-  
-  # Get colors
-  cols_used <- class_colors()
-  cols_used <- cols_used[names(cols_used) != "Unassigned"]
-  
-  present_classes <- unique(df$Class)
-  present_classes <- c(
-    if ("Unassigned" %in% present_classes) "Unassigned",
-    sort(setdiff(present_classes, "Unassigned"))
-  )
-  
-  plotly_light_blue <- "#B8BFFC"
-  all_colors <- c("Unassigned" = plotly_light_blue)
-  for (cls in present_classes) {
-    if (cls != "Unassigned") {
-      all_colors[cls] <- cols_used[[cls]]
-    }
-  }
-  
-  img_uri <- make_raster_png(df, "Class", all_colors)
-  
-  # Determine axis ranges and image anchor based on orientation
-  base_df <- original_clustered()
-  req(base_df)
-  
-  orientation <- input$orientation %||% "Default"
-  
-  # Calculate ranges
-  x_min <- min(df$x)
-  x_max <- max(df$x)
-  y_min <- min(df$y)
-  y_max <- max(df$y)
-  
-  x_range <- c(x_min, x_max)
-  y_range <- c(y_min, y_max)
-  
-  # Image positioning and size
-  img_x <- x_min
-  img_y <- y_max
-  img_sizex <- x_max - x_min
-  img_sizey <- y_max - y_min
-  
-  # Adjust for flipped axes
-  if (orientation == "Flip X" || orientation == "Flip Both") {
-    x_range <- rev(x_range)
-    img_x <- x_max  # Start from right
-    img_sizex <- -(x_max - x_min)  # Negative size flips image
-  }
-  if (orientation == "Flip Y" || orientation == "Flip Both") {
-    y_range <- rev(y_range)
-    img_y <- y_min  # Start from bottom
-    img_sizey <- y_max - y_min  # Positive (y is already flipped in make_raster_png)
-  }
-  
-  p <- plot_ly() %>%
-    layout(
-      images = list(list(
-        source = img_uri,
-        xref = "x", yref = "y",
-        x = img_x, y = img_y,
-        sizex = img_sizex, 
-        sizey = img_sizey,
-        sizing = "stretch", layer = "below"
-      )),
-      title = "Class Assignment",
-      xaxis = list(range = x_range, title = "x"),
-      yaxis = list(range = y_range, title = "y",
-                  scaleanchor = "x", scaleratio = 1),
-      showlegend = TRUE,
-      legend = list(
-        orientation = "h",
-        x = 0.5,
-        xanchor = "center",
-        y = -0.15,
-        yanchor = "top"
-      )
-    ) %>%
-    config(
-      displaylogo = FALSE,
-      modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", 
-                                "toggleSpikelines", "toImage", "select2d", "lasso2d")
-    )
-  
-  # Add legend traces
-  for (i in seq_along(present_classes)) {
-    cls <- present_classes[i]
-    col <- all_colors[[cls]]
-    
-    p <- p %>%
-      add_trace(
-        x = c(x_min - 1000),
-        y = c(y_min - 1000),
-        type = "scatter",
-        mode = "markers",
-        marker = list(
-          size = 10,   
-          color = col
-        ),
-        name = cls,
-        showlegend = TRUE,
-        hoverinfo = "skip"
-      )
-  }
-  
-  p
-})
-
-# --- Histology image upload ---
-  observeEvent(input$histology_img, {
-    req(input$histology_img)
-    
-    tryCatch({
-      # Read image file and convert to base64
-      img_path <- input$histology_img$datapath
-      img_data <- readBin(img_path, "raw", file.info(img_path)$size)
-      
-      # Determine MIME type
-      ext <- tolower(tools::file_ext(input$histology_img$name))
-      mime <- switch(ext,
-                    "png" = "image/png",
-                    "jpg" = "image/jpeg",
-                    "jpeg" = "image/jpeg",
-                    "image/png")
-      
-      # Create data URI
-      img_uri <- paste0("data:", mime, ";base64,", 
-                        base64enc::base64encode(img_data))
-      
-      histology_image(img_uri)
-      
-      showNotification(
-        "Histology image loaded",
-        type = "message",
-        duration = 3
-      )
-    }, error = function(e) {
-      showNotification(
-        paste("Error loading image:", e$message),
-        type = "error",
-        duration = NULL
-      )
+        }, error = function(e) {
+          output$commit_status <- renderUI(
+            tags$span(style = "color:red", "Error: ", e$message)
+          )
+          showNotification(paste("Commit failed:", e$message), type = "error")
+        })
+      })
     })
-  })
-  
-    # Clear histology
-    observeEvent(input$clear_histology, {
-      histology_image(NULL)
-      showNotification("Histology image cleared", type = "message", duration = 2)
+
+    # ── Plots layout ──────────────────────────────────────────────────────────
+
+    output$cluster_layout <- renderUI({
+      df <- clustered_data()
+      if (is.null(df)) {
+        return(tags$div(
+          style = "padding:40px; text-align:center; color:#aaa;",
+          tags$h4("Load a dataset and run clustering to see results.")
+        ))
+      }
+
+      has_hist <- !is.null(histology_image())
+      plot_rows <- list(
+        fluidRow(
+          column(6, plotlyOutput(ns("cluster_plot"),  height = "420px")),
+          column(6, plotlyOutput(ns("class_plot"),    height = "420px"))
+        )
+      )
+      if (has_hist) {
+        plot_rows <- c(plot_rows, list(
+          fluidRow(column(12, plotOutput(ns("histology_plot"), height = "320px")))
+        ))
+      }
+      do.call(tagList, plot_rows)
     })
-    
-    # TILFØJET: Histology plot (uden orientation transformationer)
-    output$histology_plot <- renderPlot({
-      req(histology_image())
-      
-      # Get coordinate ranges from clustered data
+
+    # ── Cluster plot (plotly, lasso/rectangle selection) ─────────────────────
+
+    output$cluster_plot <- renderPlotly({
       df <- clustered_data()
       req(df)
-      
-      x_min <- min(df$x)
-      x_max <- max(df$x)
-      y_min <- min(df$y)
-      y_max <- max(df$y)
-      
-      # Decode base64 image
-      img_uri <- histology_image()
-      img_data <- sub("^data:image/[a-z]+;base64,", "", img_uri)
-      img_raw <- base64enc::base64decode(img_data)
-      
-      # Write to temp file and read
-      tmp_img <- tempfile(fileext = ".png")
-      writeBin(img_raw, tmp_img)
-      
-      # Read image based on type
-      img <- tryCatch({
-        if (grepl("data:image/png", img_uri)) {
-          png::readPNG(tmp_img)
-        } else {
-          jpeg::readJPEG(tmp_img)
-        }
-      }, error = function(e) NULL)
-      
-      if (is.null(img)) {
-        plot.new()
-        text(0.5, 0.5, "Error loading image", cex = 1.5)
-        return()
-      }
-      
-      # Plot with matching coordinate system (no orientation transformations)
-      par(mar = c(4, 4, 3, 1))
-      plot(NULL, xlim = c(x_min, x_max), ylim = c(y_min, y_max),
-          xlab = "x", ylab = "y", main = "Histology",
-          asp = 1)
-      
-      rasterImage(img, x_min, y_min, x_max, y_max)
+
+      colors <- class_colors()
+
+      # Build colour map: cluster → colour
+      clusters <- unique(df$cluster)
+      pal <- setNames(
+        CLASS_COLORS[seq_along(clusters) %% length(CLASS_COLORS) + 1],
+        clusters
+      )
+      pal["No_cluster"] <- "#e0e0e0"
+      cols <- pal[df$cluster]
+
+      p <- plot_ly(
+        x = df$x, y = df$y, type = "scatter", mode = "markers",
+        marker = list(color = cols, size = 4, opacity = 0.85),
+        text   = paste("Cluster:", df$cluster),
+        hoverinfo = "text",
+        source = ns("cluster_plot")
+      ) |>
+        layout(
+          title  = "Cluster map",
+          xaxis  = list(title = "x", scaleanchor = "y"),
+          yaxis  = list(title = "y"),
+          dragmode = "lasso"
+        ) |>
+        event_register("plotly_relayout") |>
+        event_register("plotly_selected")
+
+      p
     })
 
-    
-    # --- Layout ---
-    output$cluster_layout <- renderUI({
-      req(clustered_data())
-      
-      has_histology <- !is.null(histology_image())
-      
-      if (has_histology) {
-        # Layout WITH histology: cluster + histology side-by-side, class below
-        tagList(
-          fluidRow(
-            column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-            column(6, plotOutput(ns("histology_plot"), height = "600px"))
-          ),
-          fluidRow(
-            column(6, plotlyOutput(ns("class_plot"), height = "600px"))
-          )
-        )
-      } else {
-        # Layout WITHOUT histology: original side-by-side
-        fluidRow(
-          column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-          column(6, plotlyOutput(ns("class_plot"), height = "600px"))
-        )
+    # Capture lasso / rectangle selection coordinates
+    observeEvent(event_data("plotly_selected", source = ns("cluster_plot")), {
+      ev <- event_data("plotly_selected", source = ns("cluster_plot"))
+      if (!is.null(ev) && nrow(ev) > 0) {
+        sel_shape(list(x = ev$x, y = ev$y))
       }
     })
-    
-    # --- Commit to MongoDB ---
-    observeEvent(input$commit_db, {
-      df <- annotated_data() %||% clustered_data()
+
+    # ── Class plot ────────────────────────────────────────────────────────────
+
+    output$class_plot <- renderPlotly({
+      df <- clustered_data()
       req(df)
-      
-      # Disable button during commit
-      shinyjs::disable("commit_db")
-      on.exit(shinyjs::enable("commit_db"))
-      
-      # Create progress
-      progress <- Progress$new(session, min = 0, max = 100)
-      progress$set(message = "Preparing data for commit...", value = 0)
-      on.exit(progress$close(), add = TRUE)
-      
-      tryCatch({
-        # Ensure Class column exists in current (possibly transformed) data
-        if (!"Class" %in% names(df)) df$Class <- "Unassigned"
-        df$Class <- as.character(df$Class)
-        df$Class[is.na(df$Class)] <- "Unassigned"
-        
-        # CRITICAL: Get original coordinates and transfer class assignments
-        base_df <- original_clustered()
-        req(base_df)
-        
-        # The assignment was made on transformed coordinates (df$x, df$y)
-        # but we need to save with original coordinates (base_df$x, base_df$y)
-        # Since both dataframes have the same row order, we can directly transfer the Class column
-        df_to_save <- base_df
-        df_to_save$Class <- df$Class  # Transfer class assignments
-        
-        # Verify integrity
-        if (nrow(df_to_save) != nrow(df)) {
-          stop("Row count mismatch between original and transformed data")
-        }
-        
-        progress$set(value = 20, message = "Generating metadata...")
-        
-        # Generate assignment ID
-        assignment_id <- as.character(UUIDgenerate())
-        
-        # Count class assignments
-        class_counts <- table(df_to_save$Class)
-        n_unassigned <- as.integer(class_counts["Unassigned"] %||% 0)
-        n_assigned <- sum(class_counts[names(class_counts) != "Unassigned"])
-        unique_classes <- sort(setdiff(unique(df_to_save$Class), "Unassigned"))
-        
-        progress$set(value = 40, message = "Saving clustering data to GridFS...")
-        
-        # Save data with ORIGINAL coordinates to GridFS
-        temp_path <- tempfile(pattern = "annotated_clustering_", fileext = ".rds")
-        saveRDS(df_to_save, temp_path)
-        
-        grid <- gridfs(db = "MSI_database", prefix = "fs", url = "mongodb://localhost:27018")
-        gridfs_result <- grid$upload(temp_path, name = paste0(assignment_id, "_annotated_clustering.rds"))
-        
-        # Extract just the ID as string (consistent with processing pipeline)
-        gridfs_id <- as.character(gridfs_result$id)
-        
-        progress$set(value = 70, message = "Creating metadata record...")
-        
-        # Create metadata document for clustering collection
-        metadata_doc <- list(
-          assignment_id = assignment_id,
-          gridfs_id = gridfs_id,
-          sample_name = input$sample_select,
-          created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OSZ", tz = "UTC"),
-          
-          # OPDATERET: Tilføj resolution
-          resolution = as.numeric(input$res_select),  # TILFØJET
-          snr = as.numeric(input$snr_select),
-          tolerance = as.numeric(input$tol_select),
-          reference_name = input$ref_select,
-          
-          clustering_method = input$method,
-          num_clusters = as.integer(input$clusters),
-          normalization_method = input$normalize,
-          vsclust_Sds = if (input$method == "VSClust") as.numeric(input$Sds) else NA,
-          vsclust_minMem = if (input$method == "VSClust") as.numeric(input$minMem) else NA,
-          orientation_used = input$orientation,
-          
-          num_pixels = as.integer(nrow(df_to_save)),
-          num_features = as.integer(sum(grepl("^mz_", names(df_to_save)))),
-          
-          num_assigned = as.integer(n_assigned),
-          num_unassigned = as.integer(n_unassigned),
-          unique_classes = if (length(unique_classes) > 0) paste(unique_classes, collapse = ", ") else "",
-          num_unique_classes = as.integer(length(unique_classes))
+
+      annotated <- df[!is.na(df$Class), ]
+      unanno    <- df[is.na(df$Class),  ]
+
+      colors <- class_colors()
+      cls    <- unique(annotated$Class)
+      pal    <- setNames(
+        CLASS_COLORS[seq_along(cls) %% length(CLASS_COLORS) + 1],
+        cls
+      )
+      col_vec <- ifelse(is.na(df$Class), "#e0e0e0", pal[df$Class])
+
+      plot_ly(
+        x = df$x, y = df$y, type = "scatter", mode = "markers",
+        marker = list(color = col_vec, size = 4, opacity = 0.85),
+        text = paste("Class:", ifelse(is.na(df$Class), "—", df$Class)),
+        hoverinfo = "text"
+      ) |>
+        layout(
+          title = "Class map",
+          xaxis = list(title = "x", scaleanchor = "y"),
+          yaxis = list(title = "y")
         )
-        
-        progress$set(value = 90, message = "Inserting metadata...")
-        
-        # Insert into clustering metadata collection
-        mongo_cluster_meta$insert(metadata_doc)
-        
-        progress$set(value = 100, message = "Complete!")
-        
-        showNotification(
-          sprintf("✅ Clustering committed successfully\nAssignment ID: %s\n%d pixels: %d assigned, %d unassigned\n(Saved with original coordinates)",
-                  assignment_id, nrow(df_to_save), n_assigned, n_unassigned),
-          type = "message",
-          duration = 10
-        )
-        
-      }, error = function(e) {
-        showNotification(
-          paste0("❌ MongoDB commit failed: ", conditionMessage(e)),
-          type = "error",
-          duration = NULL
-        )
-      })
     })
-  })
+
+    # ── Histology overlay ─────────────────────────────────────────────────────
+
+    output$histology_plot <- renderPlot({
+      img <- histology_image()
+      df  <- clustered_data()
+      req(img, df)
+
+      x_range <- range(df$x, na.rm = TRUE)
+      y_range <- range(df$y, na.rm = TRUE)
+
+      graphics::plot(
+        1, type = "n",
+        xlim = x_range, ylim = y_range,
+        xlab = "x", ylab = "y",
+        main = "Histology overlay"
+      )
+      graphics::rasterImage(img,
+                            x_range[1], y_range[1],
+                            x_range[2], y_range[2],
+                            interpolate = TRUE)
+    })
+
+  }) # end moduleServer
 }

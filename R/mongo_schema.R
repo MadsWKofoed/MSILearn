@@ -2,7 +2,7 @@
 # MongoDB schema initialisation and index enforcement.
 # Call `initialise_schema()` once at application startup (idempotent).
 
-DB_NAME  <- "MSI_database"
+DB_NAME  <- "MSI_database_test"
 MONGO_URL <- "mongodb://localhost:27018"
 
 # ---------------------------------------------------------------------------

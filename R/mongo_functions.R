@@ -15,7 +15,7 @@ library(digest)
 library(jsonlite)
 library(mongolite)
 
-DB_NAME   <- "MSI_database"
+DB_NAME   <- "MSI_database_test"
 MONGO_URL <- "mongodb://localhost:27018"
 
 # Null-coalescing operator used throughout
@@ -379,6 +379,103 @@ load_annotation <- function(sample_id, annotation_set_id,
 
 list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
   .con("annotation_sets", db, url)$find(sprintf('{"study_id": "%s"}', study_id))
+}
+
+
+# ============================================================================
+# B.EXTRA  CONVENIENCE WRAPPERS (used by Shiny modules)
+# ============================================================================
+
+#' Return all study documents as a data.frame.
+get_studies <- function(db = DB_NAME, url = MONGO_URL) {
+  .con("studies", db, url)$find("{}")
+}
+
+#' Create a new study and return its _id.
+#' study_id defaults to a URL-safe slug derived from name + timestamp.
+create_study <- function(name, description = "",
+                         study_id = NULL,
+                         db = DB_NAME, url = MONGO_URL) {
+  if (is.null(study_id) || !nzchar(study_id)) {
+    slug <- gsub("[^A-Za-z0-9]+", "_", tolower(name))
+    study_id <- paste0("study_", slug, "_", format(Sys.time(), "%Y%m%d%H%M%S"))
+  }
+  upsert_study(study_id, name, description, db, url)
+}
+
+#' Return all sample documents for a study as a data.frame.
+get_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
+  list_samples(study_id, db, url)
+}
+
+#' Create (or idempotently retrieve) a sample and return its _id.
+create_sample <- function(study_id, sample_name,
+                          raw_refs         = list(),
+                          acquisition_meta = list(),
+                          db = DB_NAME, url = MONGO_URL) {
+  upsert_sample(study_id, sample_name, raw_refs, acquisition_meta, db, url)
+}
+
+#' Check whether a sample_name already exists within a study.
+sample_name_exists <- function(study_id, sample_name, db = DB_NAME, url = MONGO_URL) {
+  col <- .con("samples", db, url)
+  q   <- jsonlite::toJSON(
+    list(study_id = study_id, sample_name = sample_name),
+    auto_unbox = TRUE
+  )
+  col$count(q) > 0
+}
+
+#' Save a clustering result as a first-class artifact.
+#' cluster_pipeline_id must be produced by upsert_pipeline(type="clustering", ...).
+save_clustering_artifact <- function(clustered_df,
+                                     study_id,
+                                     sample_id,
+                                     input_artifact_id,
+                                     cluster_pipeline_id,
+                                     db = DB_NAME, url = MONGO_URL) {
+  save_artifact(
+    obj         = clustered_df,
+    study_id    = study_id,
+    sample_id   = sample_id,
+    pipeline_id = cluster_pipeline_id,
+    stage_type  = "clustering_result",
+    extra_meta  = list(input_artifact_id = input_artifact_id),
+    db          = db,
+    url         = url
+  )
+}
+
+#' List clustering artifacts for a sample + input pipeline combination.
+list_clustering_artifacts <- function(study_id   = NULL,
+                                      sample_id  = NULL,
+                                      db = DB_NAME, url = MONGO_URL) {
+  query_artifacts(
+    study_id   = study_id,
+    sample_id  = sample_id,
+    stage_type = "clustering_result",
+    db         = db,
+    url         = url
+  )
+}
+
+#' List all unique pipeline_ids that produced artifacts of a given stage_type
+#' for a given sample.
+list_available_pipeline_ids <- function(sample_id, stage_type,
+                                        db = DB_NAME, url = MONGO_URL) {
+  res <- query_artifacts(sample_id = sample_id, stage_type = stage_type, db = db, url = url)
+  if (nrow(res) == 0) return(character(0))
+  unique(res$pipeline_id)
+}
+
+#' Compute (but do not persist) the deterministic pipeline_id for a parameter set.
+compute_pipeline_id <- function(type, params, code_version = "dev") {
+  canonical <- list(
+    type         = type,
+    params       = params[order(names(params))],
+    code_version = code_version
+  )
+  digest::digest(canonical, algo = "sha256", serialize = TRUE)
 }
 
 
