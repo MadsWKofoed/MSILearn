@@ -535,8 +535,21 @@ clustering_module_server <- function(id) {
 
     observeEvent(input$ann_set_select, {
       v <- input$ann_set_select
-      active_ann_set_id(if (nzchar(v %||% "")) v else NULL)
-    })
+      if (!is.null(v) && nzchar(v)) {
+        active_ann_set_id(v)
+      } else {
+        active_ann_set_id(NULL)
+      }
+    }, ignoreNULL = FALSE, ignoreInit = TRUE)
+
+    observeEvent(input$ann_set_mode, {
+      if (input$ann_set_mode == "existing") {
+        sid <- active_study_id()
+        if (!is.null(sid) && nzchar(sid)) {
+          refresh_ann_sets(sid)
+        }
+      }
+    }, ignoreInit = TRUE)
 
     observeEvent(input$create_ann_set_btn, {
       sid <- active_study_id()
