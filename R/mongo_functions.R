@@ -397,9 +397,19 @@ load_annotation <- function(sample_id, annotation_set_id,
 
 list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
   tryCatch({
-    df <- .con("annotation_sets", db, url)$find(
-      sprintf('{"study_id": "%s"}', study_id)
+    col <- .con("annotation_sets", db, url)
+    
+    # Check raw count first
+    cnt <- col$count(sprintf('{"study_id": "%s"}', study_id))
+    message("[list_annotation_sets] count()=", cnt, " for study_id=", study_id)
+    
+    df <- col$find(
+      sprintf('{"study_id": "%s"}', study_id),
+      fields = '{"label_schema": 0}'   # exclude the array field
     )
+    message("[list_annotation_sets] nrow after find=", nrow(df),
+            " cols=", paste(names(df), collapse=","))
+    
     if (!("_id" %in% names(df))) {
       return(data.frame(`_id` = character(), name = character(),
                         study_id = character(), created_at = character(),
@@ -407,7 +417,7 @@ list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
     }
     df
   }, error = function(e) {
-    message("[list_annotation_sets] ERROR study_id=", study_id, ": ", e$message)
+    message("[list_annotation_sets] ERROR: ", e$message)
     data.frame(`_id` = character(), name = character(),
                study_id = character(), created_at = character(),
                stringsAsFactors = FALSE, check.names = FALSE)
