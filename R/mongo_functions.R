@@ -396,7 +396,22 @@ load_annotation <- function(sample_id, annotation_set_id,
 }
 
 list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
-  .con("annotation_sets", db, url)$find(sprintf('{"study_id": "%s"}', study_id))
+  tryCatch({
+    df <- .con("annotation_sets", db, url)$find(
+      sprintf('{"study_id": "%s"}', study_id)
+    )
+    if (!("_id" %in% names(df))) {
+      return(data.frame(`_id` = character(), name = character(),
+                        study_id = character(), created_at = character(),
+                        stringsAsFactors = FALSE, check.names = FALSE))
+    }
+    df
+  }, error = function(e) {
+    message("[list_annotation_sets] ERROR study_id=", study_id, ": ", e$message)
+    data.frame(`_id` = character(), name = character(),
+               study_id = character(), created_at = character(),
+               stringsAsFactors = FALSE, check.names = FALSE)
+  })
 }
 
 #' Save or REPLACE pixel-level annotations for one sample.

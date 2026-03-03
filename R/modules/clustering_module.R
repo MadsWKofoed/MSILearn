@@ -518,8 +518,11 @@ clustering_module_server <- function(id) {
     # ── Annotation set helpers ────────────────────────────────────────────────
 
     refresh_ann_sets <- function(study_id) {
+      message("[refresh_ann_sets] called with study_id=", study_id)   # ADD THIS
       tryCatch({
         sets_df <- list_annotation_sets(study_id)
+        message("[refresh_ann_sets] nrow=", nrow(sets_df),
+                " cols=", paste(names(sets_df), collapse=","))         # ADD THIS
         if (is.null(sets_df) || nrow(sets_df) == 0 || !("_id" %in% names(sets_df))) {
           updateSelectInput(session, "ann_set_select",
                             choices = c("No annotation sets found" = ""))
@@ -529,6 +532,7 @@ clustering_module_server <- function(id) {
                             choices = c("— select —" = "", choices))
         }
       }, error = function(e) {
+        message("[refresh_ann_sets] ERROR: ", e$message)               # ADD THIS
         showNotification(paste("Error loading annotation sets:", e$message), type = "error")
       })
     }
