@@ -297,11 +297,9 @@ run_msiclust <- function(full_df, k = 3,
   inv_cor_scaled <- inv_cor_scaled[has_neighbors]
   names(inv_cor_scaled) <- NULL
   
-  # Filter full_df to match and RESET ROW INDICES  ← fix
-  key_full <- paste(full_df$x, full_df$y)
-  key_cor  <- paste(cor_data$x, cor_data$y)
-  full_df  <- full_df[key_full %in% key_cor, , drop = FALSE]
-  row.names(full_df) <- NULL    # ← this is the critical line
+  # Filter full_df to match using the SAME logical index — avoids key collision
+  full_df  <- full_df[has_neighbors, , drop = FALSE]
+  row.names(full_df) <- NULL
   
   if (n_removed > 0) message(sprintf("[MSIClust] Removed %d pixels with no neighbors", n_removed))
   
