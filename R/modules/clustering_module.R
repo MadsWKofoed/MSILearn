@@ -109,22 +109,22 @@ clustering_module_ui <- function(id) {
         # ── 5. Annotation set ──────────────────────────────────────────────
         tags$h5("Annotation Set", style = "font-weight:bold; margin-bottom:4px;"),
         radioButtons(ns("ann_set_mode"), NULL,
-                     choices = c("Select existing" = "existing",
-                                 "Create new"      = "new"),
-                     selected = "existing"),
+                    choices = c("Use existing" = "existing", "Create new" = "new"),
+                    selected = "existing"),
+
         conditionalPanel(
           condition = sprintf("input['%s'] == 'existing'", ns("ann_set_mode")),
-          selectInput(ns("ann_set_select"), "Annotation set",
-                      choices = c("— none —" = ""), width = "100%")
+          selectInput(ns("ann_set_select"), "Annotation set:",
+                      choices = c("— select study first —" = ""), width = "100%")
         ),
+
         conditionalPanel(
           condition = sprintf("input['%s'] == 'new'", ns("ann_set_mode")),
-          textInput(ns("ann_set_name"),   "Name",
-                    placeholder = "e.g. tumour_vs_stroma"),
-          textInput(ns("ann_set_labels"), "Classes (comma-separated)",
-                    placeholder = "Tumour, Stroma, Necrosis"),
+          textInput(ns("ann_set_name"), "Name:", placeholder = "e.g. Tumour vs Stroma"),
+          textInput(ns("ann_set_labels"), "Labels (comma-separated):",
+                    placeholder = "Tumour, Stroma, Background"),
           actionButton(ns("create_ann_set_btn"), "Create annotation set",
-                       class = "btn-info btn-sm", width = "100%"),
+                      class = "btn-sm btn-success"),
           uiOutput(ns("ann_set_create_status"))
         ),
         tags$hr(),
@@ -519,12 +519,18 @@ clustering_module_server <- function(id) {
 
     refresh_ann_sets <- function(study_id) {
       tryCatch({
-        df <- list_annotation_sets(study_id)
-        choices <- if (is.null(df) || nrow(df) == 0) c("— none —" = "") else
-                   setNames(df[["_id"]], df$name)
-        updateSelectInput(session, "ann_set_select",
-                          choices = c("— select —" = "", choices))
-      }, error = function(e) NULL)
+        sets_df <- list_annotation_sets(study_id)
+        if (is.null(sets_df) || nrow(sets_df) == 0 || !("_id" %in% names(sets_df))) {
+          updateSelectInput(session, "ann_set_select",
+                            choices = c("No annotation sets found" = ""))
+        } else {
+          choices <- setNames(sets_df[["_id"]], sets_df$name)
+          updateSelectInput(session, "ann_set_select",
+                            choices = c("— select —" = "", choices))
+        }
+      }, error = function(e) {
+        showNotification(paste("Error loading annotation sets:", e$message), type = "error")
+      })
     }
 
     observeEvent(input$ann_set_select, {
@@ -547,18 +553,21 @@ clustering_module_server <- function(id) {
         showNotification("Enter at least one class label.", type = "warning"); return()
       }
       tryCatch({
-        ann_id <- upsert_annotation_set(sid, nm, labels)
-        active_ann_set_id(ann_id)
+        ann_set_id <- upsert_annotation_set(
+          study_id     = sid,
+          name         = nm,
+          label_schema = labels
+        )
+        active_ann_set_id(ann_set_id)
         refresh_ann_sets(sid)
-        updateRadioButtons(session, "ann_set_mode", selected = "existing")
-        updateSelectInput(session, "ann_set_select", selected = ann_id)
-        output$ann_set_create_status <- renderUI(
-          tags$span(style = "color:green", "\u2713 Created: ", nm)
-        )
+        output$ann_set_create_status <- renderUI({
+          tags$div(class = "alert alert-success", style = "padding:4px; font-size:12px",
+                  paste0("✓ Created: ", nm))
+        })
+        showNotification(paste0("Annotation set created: ", ann_set_id),
+                        type = "message", duration = 4)
       }, error = function(e) {
-        output$ann_set_create_status <- renderUI(
-          tags$span(style = "color:red", "Error: ", e$message)
-        )
+        showNotification(paste("Error creating annotation set:", e$message), type = "error")
       })
     })
 
