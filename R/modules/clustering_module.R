@@ -521,17 +521,28 @@ clustering_module_server <- function(id) {
       message("[refresh_ann_sets] called with study_id='", study_id, "'")
       message("[refresh_ann_sets] nchar=", nchar(study_id),
               " trimmed='", trimws(study_id), "'")
-      
-      # Run query directly and message the raw JSON sent
       q <- sprintf('{"study_id": "%s"}', study_id)
       message("[refresh_ann_sets] query=", q)
-      
+
       tryCatch({
         sets_df <- list_annotation_sets(study_id)
         message("[refresh_ann_sets] nrow=", nrow(sets_df),
                 " cols=", paste(names(sets_df), collapse = ","))
+
+        # ── THIS BLOCK WAS MISSING ──────────────────────────────────────────
+        if (nrow(sets_df) == 0 || !("_id" %in% names(sets_df))) {
+          updateSelectInput(session, "ann_set_select",
+                            choices = c("No annotation sets found" = ""))
+        } else {
+          choices <- setNames(sets_df[["_id"]], sets_df$name)
+          updateSelectInput(session, "ann_set_select",
+                            choices = c("— select —" = "", choices))
+        }
+        # ───────────────────────────────────────────────────────────────────
+
       }, error = function(e) {
         message("[refresh_ann_sets] ERROR: ", e$message)
+        showNotification(paste("Error loading annotation sets:", e$message), type = "error")
       })
     }
 
