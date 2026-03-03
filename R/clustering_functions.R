@@ -273,11 +273,9 @@ run_msiclust <- function(full_df, k = 3,
   message(sprintf("[MSIClust] Start: %d pixels, %d features, k=%d, norm=%s, r=%d, cores=%d",
                   nrow(full_df), length(mz_cols), k, normalize_method, cor_radius, cor_cores))
   
-  # --- 1) Prepare data for correlation (x, y + mz_ only) ---
   cor_input_cols <- c("x", "y", mz_cols)
   cor_data <- full_df[, intersect(cor_input_cols, names(full_df)), drop = FALSE]
   
-  # --- 2) Compute per-pixel neighbor correlation ---
   message("[MSIClust] Computing neighbor correlations...")
   t1 <- Sys.time()
   
@@ -292,19 +290,21 @@ run_msiclust <- function(full_df, k = 3,
   cor_data$inv_cor <- 1 - cor_data$avg_corr_neighbors
   inv_cor_scaled <- cor_data$inv_cor * cor_scale
   
-  # --- 3) Remove pixels with no neighbors ---
+  # Remove pixels with no neighbors
   has_neighbors <- !is.na(cor_data$avg_corr_neighbors)
   n_removed <- sum(!has_neighbors)
   cor_data <- cor_data[has_neighbors, ]
   inv_cor_scaled <- inv_cor_scaled[has_neighbors]
   
+  # Filter full_df to match and RESET ROW INDICES  ← fix
   key_full <- paste(full_df$x, full_df$y)
-  key_cor <- paste(cor_data$x, cor_data$y)
-  full_df <- full_df[key_full %in% key_cor, ]
+  key_cor  <- paste(cor_data$x, cor_data$y)
+  full_df  <- full_df[key_full %in% key_cor, , drop = FALSE]
+  row.names(full_df) <- NULL    # ← this is the critical line
   
   if (n_removed > 0) message(sprintf("[MSIClust] Removed %d pixels with no neighbors", n_removed))
   
-  # --- 4) Normalize signal columns (pixel-wise) ---
+  # Normalize
   if (normalize_method != "none") {
     message(sprintf("[MSIClust] Normalizing (%s)...", normalize_method))
     t3 <- Sys.time()
@@ -319,12 +319,11 @@ run_msiclust <- function(full_df, k = 3,
     message(sprintf("[MSIClust] Normalization done (%.1f sec)", as.numeric(Sys.time() - t3, units = "secs")))
   } else {
     cor_data_norm_xy <- cor_data[, c("x", "y", mz_cols), drop = FALSE]
+    row.names(cor_data_norm_xy) <- NULL    # ← also reset here
   }
   
-  # --- 5) Clustering input: mz_ columns only (no x, y) ---
   X_clust <- as.matrix(cor_data_norm_xy[, mz_cols, drop = FALSE])
   
-  # --- 6) Determine per-pixel fuzzifier ---
   message("[MSIClust] Computing fuzzifiers...")
   t4 <- Sys.time()
   
@@ -338,7 +337,6 @@ run_msiclust <- function(full_df, k = 3,
                   as.numeric(Sys.time() - t4, units = "secs"),
                   min(fuzz$m), max(fuzz$m)))
   
-  # --- 7) Run VSClust algorithm with per-pixel fuzzifiers ---
   message("[MSIClust] Running vsclust_algorithm...")
   t5 <- Sys.time()
   
@@ -351,7 +349,7 @@ run_msiclust <- function(full_df, k = 3,
   
   message(sprintf("[MSIClust] vsclust_algorithm done (%.1f sec)", as.numeric(Sys.time() - t5, units = "secs")))
   
-  # --- 8) Assign results back to full_df ---
+  # Assign results — row indices are now guaranteed contiguous
   membership_cols <- paste0("membership_", seq_len(k))
   full_df[, membership_cols] <- msiclust_alg$membership
   full_df$max_membership <- matrixStats::rowMaxs(msiclust_alg$membership)
