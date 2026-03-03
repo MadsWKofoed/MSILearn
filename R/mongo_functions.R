@@ -399,6 +399,56 @@ list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
   .con("annotation_sets", db, url)$find(sprintf('{"study_id": "%s"}', study_id))
 }
 
+#' Save or REPLACE pixel-level annotations for one sample.
+#'
+#' Unlike save_annotation(), this function uses upsert semantics:
+#' if an annotation already exists for (sample_id, annotation_set_id) it is
+#' deleted and re-written with the new data.  This allows the user to
+#' re-commit after re-labelling pixels without errors.
+#'
+#' annotation_df must contain at least columns: x, y, Class.
+upsert_annotation <- function(annotation_df, sample_id, annotation_set_id,
+                              format = "dataframe_rds",
+                              db = DB_NAME, url = MONGO_URL) {
+  col   <- .con("annotations", db, url)
+  dup_q <- jsonlite::toJSON(
+    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
+    auto_unbox = TRUE
+  )
+
+  # Remove previous annotation (GridFS file + metadata document) if present
+  existing <- col$find(dup_q)
+  if (nrow(existing) > 0) {
+    old_gridfs <- as.character(existing$gridfs_name[1])
+    tryCatch(
+      .gridfs(db, url)$remove(old_gridfs),
+      error = function(e)
+        message("[upsert_annotation] Could not remove old GridFS file (non-fatal): ", e$message)
+    )
+    col$remove(dup_q)
+    message("[upsert_annotation] Replaced existing annotation for sample_id=",
+            sample_id, ", annotation_set_id=", annotation_set_id)
+  }
+
+  ann_doc_id <- digest::digest(
+    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
+    algo = "sha256", serialize = TRUE
+  )
+  filename <- paste0(ann_doc_id, "_annotation.rds")
+  .upload_rds(annotation_df, filename, db, url)
+
+  .insert(col, list(
+    `_id`             = ann_doc_id,
+    sample_id         = sample_id,
+    annotation_set_id = annotation_set_id,
+    format            = format,
+    gridfs_name       = filename,
+    created_at        = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  ))
+  message("\u2713 Annotation upserted: ", ann_doc_id)
+  invisible(ann_doc_id)
+}
+
 
 # ============================================================================
 # B.EXTRA  CONVENIENCE WRAPPERS (used by Shiny modules)
@@ -458,12 +508,30 @@ sample_name_exists <- function(study_id, sample_name, db = DB_NAME, url = MONGO_
 
 #' Save a clustering result as a first-class artifact.
 #' cluster_pipeline_id must be produced by upsert_pipeline(type="clustering", ...).
+#'
+#' Upsert semantics: if an artifact already exists for the same
+#' (sample_id, stage_type="clustering_result", cluster_pipeline_id), the
+#' existing artifact_id is returned and no duplicate is written.  This allows
+#' the user to re-commit after adjusting cluster labels without errors.
 save_clustering_artifact <- function(clustered_df,
                                      study_id,
                                      sample_id,
                                      input_artifact_id,
                                      cluster_pipeline_id,
                                      db = DB_NAME, url = MONGO_URL) {
+  col   <- .con("artifacts", db, url)
+  dup_q <- jsonlite::toJSON(
+    list(sample_id = sample_id,
+         stage_type  = "clustering_result",
+         pipeline_id = cluster_pipeline_id),
+    auto_unbox = TRUE
+  )
+  existing <- col$find(dup_q, fields = '{"_id":1}')
+  if (nrow(existing) > 0) {
+    message("[save_clustering_artifact] Artifact already exists: ",
+            existing[["_id"]][1], " — returning existing id.")
+    return(invisible(existing[["_id"]][1]))
+  }
   save_artifact(
     obj         = clustered_df,
     study_id    = study_id,
