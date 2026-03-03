@@ -295,6 +295,7 @@ run_msiclust <- function(full_df, k = 3,
   n_removed <- sum(!has_neighbors)
   cor_data <- cor_data[has_neighbors, ]
   inv_cor_scaled <- inv_cor_scaled[has_neighbors]
+  names(inv_cor_scaled) <- NULL
   
   # Filter full_df to match and RESET ROW INDICES  ← fix
   key_full <- paste(full_df$x, full_df$y)
