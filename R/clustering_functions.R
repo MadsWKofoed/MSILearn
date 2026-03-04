@@ -84,6 +84,7 @@ run_kmeans <- function(full_df, k = 3, normalize_method = c("none", "tic", "medi
   }
 
   feature_matrix <- as.matrix(df_norm[, mz_cols, drop = FALSE])
+  feature_matrix[!is.finite(feature_matrix)] <- 0 
   km <- kmeans(feature_matrix, centers = k, nstart = 25)
 
   df_norm$cluster <- km$cluster
