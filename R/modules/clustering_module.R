@@ -358,29 +358,51 @@ clustering_module_server <- function(id) {
     # ── Dynamic method params UI (old version) ────────────────────────────────
 
     output$method_params_ui <- renderUI({
-      req(input$method)
-      if (input$method == "K-means") {
-        helpText("K-means partitions data into k distinct clusters.")
-      } else if (input$method == "VSClust") {
-        tagList(
-          numericInput(ns("Sds"),    "Fuzziness (Sds)",
-                       value = 1.3, min = 0.5, max = 3, step = 0.01),
-          numericInput(ns("minMem"), "Min membership",
-                       value = 0.5, min = 0.1, max = 1, step = 0.01),
-          helpText("VSClust: fuzzy clustering with membership scores.")
-        )
-      } else if (input$method == "MSIClust") {
-        tagList(
-          numericInput(ns("cor_radius"), "Correlation radius (px)",
-                       value = 1, min = 1, max = 5, step = 1),
-          numericInput(ns("cor_scale"),  "Correlation scale factor",
-                       value = 25, min = 1, max = 100, step = 1),
-          numericInput(ns("minMem"),     "Min membership",
-                       value = 0.5, min = 0.1, max = 1, step = 0.01),
-          helpText("MSIClust: spatial correlation sets per-pixel fuzzifiers.")
-        )
-      }
-    })
+        req(input$method)
+        if (input$method == "K-means") {
+          helpText("K-means partitions data into k distinct clusters.")
+        } else if (input$method == "VSClust") {
+          tagList(
+            numericInput(ns("Sds"),    "Fuzziness (Sds)",
+                        value = 1.3, min = 0.5, max = 3, step = 0.01),
+            numericInput(ns("minMem"), "Min membership",
+                        value = 0.5, min = 0.1, max = 1, step = 0.01),
+            helpText("VSClust: fuzzy clustering with membership scores.")
+          )
+        } else if (input$method == "MSIClust") {
+          tagList(
+            numericInput(ns("cor_radius"), "Correlation radius (px)",
+                        value = 1, min = 1, max = 5, step = 1),
+            numericInput(ns("cor_scale"),  "Correlation scale factor",
+                        value = 25, min = 1, max = 100, step = 1),
+            numericInput(ns("minMem"),     "Min membership",
+                        value = 0.5, min = 0.1, max = 1, step = 0.01),
+            tags$div(class = "alert alert-warning", style = "padding:6px; font-size:12px;",
+              tags$b("MSIClust requires normalization."),
+              " 'None' is not supported — TIC normalization will be applied automatically."
+            ),
+            helpText("MSIClust: spatial correlation sets per-pixel fuzzifiers.")
+          )
+        }
+      })
+      
+      # When MSIClust is selected, force normalize to TIC if currently "none"
+      observeEvent(input$method, {
+        if (input$method == "MSIClust" && input$normalize == "none") {
+          updateSelectInput(session, "normalize", selected = "tic")
+        }
+      }, ignoreInit = TRUE)
+      
+      # Prevent user from selecting "none" while MSIClust is active
+      observeEvent(input$normalize, {
+        if (input$method == "MSIClust" && input$normalize == "none") {
+          updateSelectInput(session, "normalize", selected = "tic")
+          showNotification(
+            "MSIClust requires normalization. Switched to TIC.",
+            type = "warning", duration = 4
+          )
+        }
+      }, ignoreInit = TRUE)
 
     # ── Run clustering (old logic, new reactiveVals) ───────────────────────────
 

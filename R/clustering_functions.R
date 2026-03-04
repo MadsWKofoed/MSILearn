@@ -267,6 +267,13 @@ run_msiclust <- function(full_df, k = 3,
   normalize_method <- match.arg(normalize_method)
   t0 <- Sys.time()
   
+  # MSIClust requires normalization — inv_cor_scaled fuzzifiers are not
+  # meaningful on raw unnormalized intensities. Default to TIC.
+  if (normalize_method == "none") {
+    message("[MSIClust] normalize_method='none' is not supported. Switching to 'tic'.")
+    normalize_method <- "tic"
+  }
+  
   mz_cols <- grep("^mz_", names(full_df), value = TRUE)
   if (length(mz_cols) == 0) stop("run_msiclust(): No mz_ columns found.")
   
@@ -284,7 +291,7 @@ run_msiclust <- function(full_df, k = 3,
     mz_cols = mz_cols, r = cor_radius, cores = cor_cores
   )
   cor_data$avg_corr_neighbors[is.nan(cor_data$avg_corr_neighbors)] <- NA_real_
-
+  
   t2 <- Sys.time()
   message(sprintf("[MSIClust] Neighbor correlations done (%.1f sec)", as.numeric(t2 - t1, units = "secs")))
   
@@ -298,29 +305,22 @@ run_msiclust <- function(full_df, k = 3,
   inv_cor_scaled <- inv_cor_scaled[has_neighbors]
   names(inv_cor_scaled) <- NULL
   
-  # Filter full_df to match using the SAME logical index — avoids key collision
-  full_df  <- full_df[has_neighbors, , drop = FALSE]
+  full_df <- full_df[has_neighbors, , drop = FALSE]
   row.names(full_df) <- NULL
   
   if (n_removed > 0) message(sprintf("[MSIClust] Removed %d pixels with no neighbors", n_removed))
   
-  # Normalize
-  if (normalize_method != "none") {
-    message(sprintf("[MSIClust] Normalizing (%s)...", normalize_method))
-    t3 <- Sys.time()
-    
-    cor_data_norm_xy <- normalize_pixels_wrapper(
-      data = cor_data[, c("x", "y", mz_cols), drop = FALSE],
-      method = normalize_method,
-      signal_prefix = "^mz_",
-      spatial_cols = c("x", "y")
-    )
-    
-    message(sprintf("[MSIClust] Normalization done (%.1f sec)", as.numeric(Sys.time() - t3, units = "secs")))
-  } else {
-    cor_data_norm_xy <- cor_data[, c("x", "y", mz_cols), drop = FALSE]
-    row.names(cor_data_norm_xy) <- NULL    # ← also reset here
-  }
+  message(sprintf("[MSIClust] Normalizing (%s)...", normalize_method))
+  t3 <- Sys.time()
+  
+  cor_data_norm_xy <- normalize_pixels_wrapper(
+    data = cor_data[, c("x", "y", mz_cols), drop = FALSE],
+    method = normalize_method,
+    signal_prefix = "^mz_",
+    spatial_cols = c("x", "y")
+  )
+  
+  message(sprintf("[MSIClust] Normalization done (%.1f sec)", as.numeric(Sys.time() - t3, units = "secs")))
   
   X_clust <- as.matrix(cor_data_norm_xy[, mz_cols, drop = FALSE])
   
@@ -349,27 +349,19 @@ run_msiclust <- function(full_df, k = 3,
   
   message(sprintf("[MSIClust] vsclust_algorithm done (%.1f sec)", as.numeric(Sys.time() - t5, units = "secs")))
   
-  message(sprintf("[MSIClust] X_clust rows: %d, full_df rows: %d, membership rows: %d",
-                  nrow(X_clust), nrow(full_df), nrow(msiclust_alg$membership)))
+  # Guard: vsclust_algorithm failed to converge (returns empty $cluster)
+  if (length(msiclust_alg$cluster) == 0 || all(is.nan(msiclust_alg$membership))) {
+    stop("vsclust_algorithm failed to converge. Try a different normalization method or number of clusters.")
+  }
   
-  # Force contiguous row names immediately before assignment
- row.names(full_df) <- NULL
+  row.names(full_df) <- NULL
   
   membership_cols <- paste0("membership_", seq_len(k))
-  
-  message(sprintf("[MSIClust] Assigning membership: full_df rows=%d, membership dim=%s",
-                  nrow(full_df), paste(dim(msiclust_alg$membership), collapse="x")))
-  
   full_df[, membership_cols] <- msiclust_alg$membership
-  
-  message(sprintf("[MSIClust] Assigning max_membership and raw_cluster"))
   full_df$max_membership <- matrixStats::rowMaxs(msiclust_alg$membership)
-  full_df$raw_cluster    <- msiclust_alg$cluster
+  full_df$raw_cluster <- msiclust_alg$cluster
   
-  message(sprintf("[MSIClust] Calling apply_minmem_threshold, full_df rows=%d", nrow(full_df)))
   full_df <- apply_minmem_threshold(full_df, minMem)
-  
-  message(sprintf("[MSIClust] apply_minmem_threshold done, full_df rows=%d", nrow(full_df)))
   
   n_no <- sum(full_df$cluster == "No_cluster")
   message(sprintf("[MSIClust] Complete: %.1f sec total, %d/%d pixels assigned (minMem=%.2f)",
