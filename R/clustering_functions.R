@@ -284,7 +284,7 @@ run_msiclust <- function(full_df, k = 3,
     mz_cols = mz_cols, r = cor_radius, cores = cor_cores
   )
   cor_data$avg_corr_neighbors[is.nan(cor_data$avg_corr_neighbors)] <- NA_real_
-  
+
   t2 <- Sys.time()
   message(sprintf("[MSIClust] Neighbor correlations done (%.1f sec)", as.numeric(t2 - t1, units = "secs")))
   
@@ -351,6 +351,13 @@ run_msiclust <- function(full_df, k = 3,
   
   message(sprintf("[MSIClust] X_clust rows: %d, full_df rows: %d, membership rows: %d",
                   nrow(X_clust), nrow(full_df), nrow(msiclust_alg$membership)))
+  
+  # Force contiguous row names immediately before assignment
+  row.names(full_df) <- NULL
+
+  # Assign results — row indices are now guaranteed contiguous
+  membership_cols <- paste0("membership_", seq_len(k))
+  full_df[, membership_cols] <- msiclust_alg$membership
   
   # Assign results — row indices are now guaranteed contiguous
   membership_cols <- paste0("membership_", seq_len(k))
