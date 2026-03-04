@@ -353,19 +353,23 @@ run_msiclust <- function(full_df, k = 3,
                   nrow(X_clust), nrow(full_df), nrow(msiclust_alg$membership)))
   
   # Force contiguous row names immediately before assignment
-  row.names(full_df) <- NULL
-
-  # Assign results — row indices are now guaranteed contiguous
+ row.names(full_df) <- NULL
+  
   membership_cols <- paste0("membership_", seq_len(k))
+  
+  message(sprintf("[MSIClust] Assigning membership: full_df rows=%d, membership dim=%s",
+                  nrow(full_df), paste(dim(msiclust_alg$membership), collapse="x")))
+  
   full_df[, membership_cols] <- msiclust_alg$membership
   
-  # Assign results — row indices are now guaranteed contiguous
-  membership_cols <- paste0("membership_", seq_len(k))
-  full_df[, membership_cols] <- msiclust_alg$membership
+  message(sprintf("[MSIClust] Assigning max_membership and raw_cluster"))
   full_df$max_membership <- matrixStats::rowMaxs(msiclust_alg$membership)
-  full_df$raw_cluster <- msiclust_alg$cluster
+  full_df$raw_cluster    <- msiclust_alg$cluster
   
+  message(sprintf("[MSIClust] Calling apply_minmem_threshold, full_df rows=%d", nrow(full_df)))
   full_df <- apply_minmem_threshold(full_df, minMem)
+  
+  message(sprintf("[MSIClust] apply_minmem_threshold done, full_df rows=%d", nrow(full_df)))
   
   n_no <- sum(full_df$cluster == "No_cluster")
   message(sprintf("[MSIClust] Complete: %.1f sec total, %d/%d pixels assigned (minMem=%.2f)",
