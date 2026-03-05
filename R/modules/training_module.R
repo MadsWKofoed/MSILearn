@@ -378,7 +378,8 @@ training_module_server <- function(id) {
 
       if (is.data.frame(m))  m  <- as.list(m[1,  , drop = FALSE])
       if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
-      
+
+      # ── All helpers defined here, before any tagList/fluidRow ────────────
       hp_val <- function(key) {
         v <- hp[[key]]
         if (is.null(v) || length(v) == 0) return("?")
@@ -389,16 +390,21 @@ training_module_server <- function(id) {
         if (is.null(v) || length(v) == 0) return("?")
         as.character(v[[1]])
       }
-
+      m_num <- function(key) {
+        v <- m[[key]]
+        if (is.null(v) || length(v) == 0) return(NA_real_)
+        suppressWarnings(as.numeric(v[[1]]))
+      }
       get_v <- function(key, digits = 4) {
         v <- m[[key]]
-        if (is.null(v) || length(v) == 0 || !is.finite(as.numeric(v[1])))
-          return(tags$span(style = "color:#aaa", "—"))
-        tags$b(round(as.numeric(v[1]), digits))
+        if (is.null(v) || length(v) == 0) return(tags$span(style = "color:#aaa", "—"))
+        num <- suppressWarnings(as.numeric(v[[1]]))
+        if (!is.finite(num))              return(tags$span(style = "color:#aaa", "—"))
+        tags$b(round(num, digits))
       }
 
-      # ── By-class table ────────────────────────────────────────────────
-      bc_keys   <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
+      # ── Per-class table ───────────────────────────────────────────────
+      bc_keys     <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
       class_names <- gsub("^byclass_Sensitivity__", "", bc_keys)
 
       metrics_table <- if (length(class_names) > 0) {
@@ -406,11 +412,12 @@ training_module_server <- function(id) {
           safe <- function(metric) {
             key <- paste0("byclass_", metric, "__", cls)
             v   <- m[[key]]
-            if (is.null(v) || !is.finite(as.numeric(v[1]))) "—"
-            else sprintf("%.4f", as.numeric(v[1]))
+            if (is.null(v) || length(v) == 0) return("—")
+            num <- suppressWarnings(as.numeric(v[[1]]))
+            if (!is.finite(num)) "—" else sprintf("%.4f", num)
           }
           tags$tr(
-            tags$td(tags$b(cls)),
+            tags$td(tags$b(gsub("_", " ", cls))),
             tags$td(safe("Sensitivity")),
             tags$td(safe("Specificity")),
             tags$td(safe("Precision")),
@@ -430,15 +437,15 @@ training_module_server <- function(id) {
           )),
           tags$tbody(rows)
         )
-      } else tags$p(style="color:#aaa", "No per-class metrics stored.")
+      } else tags$p(style = "color:#aaa", "No per-class metrics stored.")
 
+      # ── UI ───────────────────────────────────────────────────────────
       tagList(
         tags$div(
           style = "background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:14px; margin-bottom:12px;",
           tags$h5(style = "margin-top:0", tags$code(run_id)),
 
           fluidRow(
-            # Hyperparameters
             column(4,
               tags$h6(tags$b("Hyperparameters")),
               tags$table(class = "table table-condensed", style = "font-size:13px;",
@@ -454,29 +461,20 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("Features"),      tags$td(m_val("n_features")))
               )
             ),
-            # Test metrics
-            m_num <- function(key) {
-              v <- m[[key]]
-              if (is.null(v) || length(v) == 0) return(NA_real_)
-              suppressWarnings(as.numeric(v[1]))
-            }
             column(4,
               tags$h6(tags$b("Test Set Metrics")),
               tags$table(class = "table table-condensed", style = "font-size:13px;",
-                tags$tr(tags$td("Accuracy"),   tags$td(get_v("test_accuracy"))),
-                tags$tr(tags$td("95% CI"), tags$td({
+                tags$tr(tags$td("Accuracy"), tags$td(get_v("test_accuracy"))),
+                tags$tr(tags$td("95% CI"),   tags$td({
                   lo <- m_num("test_acc_lower")
                   hi <- m_num("test_acc_upper")
-                  if (is.finite(lo) && is.finite(hi)) {
+                  if (is.finite(lo) && is.finite(hi))
                     paste0("[", round(lo, 4), ", ", round(hi, 4), "]")
-                  } else {
-                    "—"
-                  }
-                }))
-                tags$tr(tags$td("Kappa"),      tags$td(get_v("test_kappa")))
+                  else "—"
+                })),
+                tags$tr(tags$td("Kappa"),    tags$td(get_v("test_kappa")))
               )
             ),
-            # CV metrics
             column(4,
               tags$h6(tags$b("Cross-Validation Metrics")),
               if (!is.null(m[["cv_mean_accuracy"]]))
@@ -486,7 +484,7 @@ training_module_server <- function(id) {
                   tags$tr(tags$td("CV Kappa"),    tags$td(get_v("cv_mean_kappa"))),
                   tags$tr(tags$td("CV Mean F1"),  tags$td(get_v("cv_mean_f1")))
                 )
-              else tags$p(style="color:#aaa; font-size:13px;", "No CV (cv_folds = 0)")
+              else tags$p(style = "color:#aaa; font-size:13px;", "No CV (cv_folds = 0)")
             )
           )
         ),
