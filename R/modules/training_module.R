@@ -338,19 +338,20 @@ training_module_server <- function(id) {
 
       extract_metric <- function(m, key) {
         tryCatch({
-          v <- if (is.data.frame(m))   m[[key]][1]
-               else if (is.list(m))    m[[key]]
-               else if (!is.null(names(m))) m[key]   # named atomic vector
-               else NA_real_
-          if (is.null(v) || length(v) == 0) NA_real_ else round(as.numeric(v[[1]]), 4)
+          # Flatten: metrics may be a data.frame row, list, or named vector
+          if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
+          v <- m[[key]]
+          if (is.null(v) || length(v) == 0) return(NA_real_)
+          round(as.numeric(v[[1]]), 4)
         }, error = function(e) NA_real_)
       }
 
+      n <- nrow(df)
       out <- data.frame(
         run_id     = df[["_id"]],
         model_type = df$model_type,
-        accuracy   = vapply(df$metrics, extract_metric, numeric(1), key = "accuracy"),
-        kappa      = vapply(df$metrics, extract_metric, numeric(1), key = "kappa"),
+        accuracy   = vapply(seq_len(n), function(i) extract_metric(df$metrics[[i]], "accuracy"), numeric(1)),
+        kappa      = vapply(seq_len(n), function(i) extract_metric(df$metrics[[i]], "kappa"),    numeric(1)),
         created_at = df$created_at,
         stringsAsFactors = FALSE
       )
@@ -362,14 +363,13 @@ training_module_server <- function(id) {
       req(last_run_id())
       tryCatch({
         runs <- list_model_runs(input$dataset_id)
-        row  <- runs[runs[["_id"]] == last_run_id(), ]
-        if (nrow(row) == 0) return("Run not found.")
-        m <- row$metrics[[1]]
+        idx  <- which(runs[["_id"]] == last_run_id())
+        if (length(idx) == 0) return("Run not found.")
+        m <- runs$metrics[[idx[1]]]
+        if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
 
         get_m <- function(key) {
-          v <- if (is.data.frame(m)) m[[key]][1]
-               else if (is.list(m))  m[[key]]
-               else m[key]
+          v <- m[[key]]
           if (is.null(v) || length(v) == 0) NA_real_ else as.numeric(v[[1]])
         }
 
