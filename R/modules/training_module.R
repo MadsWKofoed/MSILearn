@@ -80,7 +80,6 @@ training_module_server <- function(id) {
 
     log_val        <- reactiveVal("")
     last_run_id    <- reactiveVal(NULL)
-    selected_run   <- reactiveVal(NULL)   # full row from runs_rv()
     selected_run_id <- reactiveVal(NULL)
 
     add_log <- function(msg) {
@@ -203,14 +202,23 @@ training_module_server <- function(id) {
       })
     })
 
-    # ── Dataset list ──────────────────────────────────────────────────────
-    datasets_rv <- reactiveVal(data.frame())
+    # Update run list when dataset changes
+    observeEvent(input$dataset_id, {
+      req(input$dataset_id, nzchar(input$dataset_id))
+      tryCatch({
+        runs_rv(list_model_runs(input$dataset_id))
+        selected_run_id(NULL)  # reset selection når dataset skifter
+      }, error = function(e) {
+        runs_rv(data.frame())
+        selected_run_id(NULL)
+      })
+    }, ignoreInit = TRUE)
 
+    # ── Dataset list ──────────────────────────────────────────────────────
     observe({
       input$refresh_datasets
       tryCatch({
         ds <- list_datasets()
-        datasets_rv(ds)
         if (nrow(ds) == 0) {
           updateSelectInput(session, "dataset_id", choices = c("No datasets found" = ""))
         } else {
@@ -404,10 +412,8 @@ training_module_server <- function(id) {
 
     # Also auto-select last trained run
     observeEvent(last_run_id(), {
-      df <- runs_rv()
-      if (nrow(df) == 0 || !("_id" %in% names(df))) return()
-      row <- df[df[["_id"]] == last_run_id(), , drop = FALSE]
-      if (nrow(row) > 0) selected_run(row)
+      rid <- last_run_id()
+      if (!is.null(rid) && nzchar(rid)) selected_run_id(rid)
     })
 
     # ── Run details panel ─────────────────────────────────────────────────
