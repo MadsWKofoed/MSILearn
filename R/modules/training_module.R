@@ -81,6 +81,7 @@ training_module_server <- function(id) {
     log_val        <- reactiveVal("")
     last_run_id    <- reactiveVal(NULL)
     selected_run   <- reactiveVal(NULL)   # full row from runs_rv()
+    selected_run_id <- reactiveVal(NULL)
 
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
@@ -292,70 +293,83 @@ training_module_server <- function(id) {
     # ── Run table (DT, clickable) ─────────────────────────────────────────
     output$run_table <- DT::renderDataTable({
       df <- runs_rv()
-      if (nrow(df) == 0 || !("_id" %in% names(df)))
-        return(DT::datatable(data.frame(message = "No runs yet.")))
+      if (nrow(df) == 0 || !("_id" %in% names(df))) {
+        return(DT::datatable(data.frame(message = "No runs yet."), rownames = FALSE))
+      }
 
-    get_m <- function(m, key) {
-      tryCatch({
-        if (is.null(m)) return(NA_real_)
+      # ---- SAFE accessors (metrics/hyperparams kan være NULL eller mærkeligt formateret)
+      as_list1 <- function(x) {
+        if (is.null(x)) return(list())
+        if (is.data.frame(x)) return(as.list(x[1, , drop = FALSE]))
+        if (is.list(x)) return(x)
+        list(value = x)
+      }
 
-        if (is.data.frame(m)) {
-          if (!(key %in% names(m))) return(NA_real_)
-          v <- m[[key]][1]
-        } else {
-          if (!(key %in% names(m))) return(NA_real_)
-          v <- m[[key]]
-          if (length(v) == 0) return(NA_real_)
-          v <- v[1]
-        }
-
+      m_get <- function(m, key) {
+        m <- as_list1(m)
+        v <- m[[key]]
         if (is.null(v) || length(v) == 0) return(NA_real_)
-        round(as.numeric(v), 4)
-      }, error = function(e) NA_real_)
-    }
+        suppressWarnings(as.numeric(v[1]))
+      }
 
-      n <- nrow(df)
-      hp_str <- vapply(seq_len(n), function(i) {
-        hp <- df$hyperparams[[i]]
-        if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
-        paste0("mtry=",  hp[["mtry"]]          %||% "?",
-               " | trees=", hp[["num_trees"]]  %||% "?",
-               " | node=",  hp[["min_node_size"]] %||% "?",
-               " | rule=",  hp[["splitrule"]]  %||% "?",
-               " | cv=",    hp[["cv_folds"]]   %||% "?")
-      }, character(1))
+      hp_get <- function(hp, key) {
+        hp <- as_list1(hp)
+        v <- hp[[key]]
+        if (is.null(v) || length(v) == 0) return(NA_character_)
+        as.character(v[1])
+      }
+
+      # sortér runs “sikkert”
+      df_sorted <- df[order(df$created_at, decreasing = TRUE), , drop = FALSE]
+      n <- nrow(df_sorted)
 
       tbl <- data.frame(
-        run_id     = substr(df[["_id"]], 1, 30),
-        model_type = df$model_type,
-        hyperparams = hp_str,
-        test_acc   = vapply(seq_len(n), function(i) get_m(df$metrics[[i]], "test_accuracy"), numeric(1)),
-        test_kappa = vapply(seq_len(n), function(i) get_m(df$metrics[[i]], "test_kappa"),    numeric(1)),
-        cv_acc     = vapply(seq_len(n), function(i) get_m(df$metrics[[i]], "cv_mean_accuracy"), numeric(1)),
-        created_at = df$created_at,
+        run_id_full = df_sorted[["_id"]],
+        run_id      = substr(df_sorted[["_id"]], 1, 30),
+        model_type  = df_sorted$model_type,
+        mtry        = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "mtry"), character(1)),
+        trees       = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "num_trees"), character(1)),
+        node        = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "min_node_size"), character(1)),
+        rule        = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "splitrule"), character(1)),
+        cv          = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "cv_folds"), character(1)),
+        test_acc    = vapply(seq_len(n), \(i) m_get(df_sorted$metrics[[i]], "test_accuracy"), numeric(1)),
+        test_kappa  = vapply(seq_len(n), \(i) m_get(df_sorted$metrics[[i]], "test_kappa"), numeric(1)),
+        cv_acc      = vapply(seq_len(n), \(i) m_get(df_sorted$metrics[[i]], "cv_mean_accuracy"), numeric(1)),
+        created_at  = df_sorted$created_at,
         stringsAsFactors = FALSE
       )
-      tbl <- tbl[order(tbl$created_at, decreasing = TRUE), ]
 
       DT::datatable(
         tbl,
-        selection  = "single",
-        rownames   = FALSE,
-        options    = list(pageLength = 10, scrollX = TRUE,
-                          columnDefs = list(list(width = "300px", targets = 2))),
-        class      = "compact stripe hover"
+        selection = "single",
+        rownames  = FALSE,
+        options   = list(
+          pageLength = 10,
+          scrollX = TRUE,
+          # Skjul run_id_full i tabellen, men behold den i data
+          columnDefs = list(list(targets = 0, visible = FALSE))
+        ),
+        class = "compact stripe hover"
       ) |>
         DT::formatRound(c("test_acc", "test_kappa", "cv_acc"), digits = 4)
     })
 
     # ── Capture row click → selected_run ─────────────────────────────────
     observeEvent(input$run_table_rows_selected, {
-      df  <- runs_rv()
       idx <- input$run_table_rows_selected
-      if (is.null(idx) || nrow(df) == 0) { selected_run(NULL); return() }
-      # Table is sorted descending — re-sort to match
-      df_sorted <- df[order(df$created_at, decreasing = TRUE), ]
-      selected_run(df_sorted[idx, , drop = FALSE])
+      if (is.null(idx) || length(idx) == 0) {
+        selected_run_id(NULL)
+        return()
+      }
+
+      # hent den viste tabel igen (DT sender ikke row data),
+      # så vi bruger runs_rv() + samme sortering som i tabellen:
+      df <- runs_rv()
+      if (nrow(df) == 0) { selected_run_id(NULL); return() }
+
+      df_sorted <- df[order(df$created_at, decreasing = TRUE), , drop = FALSE]
+      rid <- df_sorted[["_id"]][idx]
+      selected_run_id(rid)
     })
 
     # Also auto-select last trained run
@@ -368,128 +382,123 @@ training_module_server <- function(id) {
 
     # ── Run details panel ─────────────────────────────────────────────────
     output$run_details_ui <- renderUI({
-      row <- selected_run()
-      if (is.null(row) || nrow(row) == 0)
+      rid <- selected_run_id()
+      if (is.null(rid) || !nzchar(rid)) {
         return(tags$p(style = "color:#888", "Click a row above to see details."))
+      }
 
-      run_id <- row[["_id"]][1]
-      m      <- row$metrics[[1]]
-      hp     <- row$hyperparams[[1]]
+      # Find run i runs_rv() (billigt). Alternativt: hent fra DB hvis du vil være 100% sikker.
+      df <- runs_rv()
+      row <- df[df[["_id"]] == rid, , drop = FALSE]
+      if (nrow(row) == 0) {
+        return(tags$p(style = "color:#c00", "Selected run not found in run list (refresh?)."))
+      }
+
+      m  <- row$metrics[[1]]
+      hp <- row$hyperparams[[1]]
 
       if (is.data.frame(m))  m  <- as.list(m[1,  , drop = FALSE])
       if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
+      if (is.null(m))  m  <- list()
+      if (is.null(hp)) hp <- list()
 
-      # ── All helpers defined here, before any tagList/fluidRow ────────────
-      hp_val <- function(key) {
-        v <- hp[[key]]
-        if (is.null(v) || length(v) == 0) return("?")
-        as.character(v[[1]])
+      first_chr <- function(x, default = "—") {
+        if (is.null(x) || length(x) == 0) return(default)
+        as.character(x[1])
       }
-      m_val <- function(key) {
-        v <- m[[key]]
-        if (is.null(v) || length(v) == 0) return("?")
-        as.character(v[[1]])
+      first_num <- function(x) {
+        if (is.null(x) || length(x) == 0) return(NA_real_)
+        suppressWarnings(as.numeric(x[1]))
       }
-      m_num <- function(key) {
-        v <- m[[key]]
-        if (is.null(v) || length(v) == 0) return(NA_real_)
-        suppressWarnings(as.numeric(v[[1]]))
-      }
-      get_v <- function(key, digits = 4) {
-        v <- m[[key]]
-        if (is.null(v) || length(v) == 0) return(tags$span(style = "color:#aaa", "—"))
-        num <- suppressWarnings(as.numeric(v[[1]]))
-        if (!is.finite(num))              return(tags$span(style = "color:#aaa", "—"))
-        tags$b(round(num, digits))
+      fmt_num <- function(x, digits = 4) {
+        v <- first_num(x)
+        if (!is.finite(v)) return(tags$span(style="color:#aaa", "—"))
+        tags$b(round(v, digits))
       }
 
-      # ── Per-class table ───────────────────────────────────────────────
-      bc_keys     <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
+      lo <- first_num(m[["test_acc_lower"]])
+      hi <- first_num(m[["test_acc_upper"]])
+
+      # Per-class keys (kan være 0)
+      bc_keys <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
       class_names <- gsub("^byclass_Sensitivity__", "", bc_keys)
 
-      metrics_table <- if (length(class_names) > 0) {
-        rows <- lapply(class_names, function(cls) {
-          safe <- function(metric) {
-            key <- paste0("byclass_", metric, "__", cls)
-            v   <- m[[key]]
-            if (is.null(v) || length(v) == 0) return("—")
-            num <- suppressWarnings(as.numeric(v[[1]]))
-            if (!is.finite(num)) "—" else sprintf("%.4f", num)
-          }
-          tags$tr(
-            tags$td(tags$b(gsub("_", " ", cls))),
-            tags$td(safe("Sensitivity")),
-            tags$td(safe("Specificity")),
-            tags$td(safe("Precision")),
-            tags$td(safe("Recall")),
-            tags$td(safe("F1")),
-            tags$td(safe("Balanced_Accuracy"))
-          )
-        })
+      perclass_tbl <- if (length(class_names) > 0) {
+        safe_key <- function(metric, cls) {
+          k <- paste0("byclass_", metric, "__", cls)
+          v <- first_num(m[[k]])
+          if (!is.finite(v)) "—" else sprintf("%.4f", v)
+        }
         tags$table(
-          class = "table table-condensed table-bordered",
-          style = "font-size:13px; margin-top:8px;",
+          class="table table-condensed table-bordered",
+          style="font-size:13px; margin-top:8px;",
           tags$thead(tags$tr(
             tags$th("Class"),
             tags$th("Sensitivity"), tags$th("Specificity"),
-            tags$th("Precision"),   tags$th("Recall"),
-            tags$th("F1"),          tags$th("Bal. Accuracy")
+            tags$th("Precision"), tags$th("Recall"),
+            tags$th("F1"), tags$th("Bal. Accuracy")
           )),
-          tags$tbody(rows)
+          tags$tbody(lapply(class_names, function(cls) {
+            tags$tr(
+              tags$td(tags$b(gsub("_"," ", cls))),
+              tags$td(safe_key("Sensitivity", cls)),
+              tags$td(safe_key("Specificity", cls)),
+              tags$td(safe_key("Precision", cls)),
+              tags$td(safe_key("Recall", cls)),
+              tags$td(safe_key("F1", cls)),
+              tags$td(safe_key("Balanced_Accuracy", cls))
+            )
+          }))
         )
-      } else tags$p(style = "color:#aaa", "No per-class metrics stored.")
+      } else {
+        tags$p(style="color:#aaa", "No per-class metrics stored.")
+      }
 
-      # ── UI ───────────────────────────────────────────────────────────
       tagList(
         tags$div(
-          style = "background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:14px; margin-bottom:12px;",
-          tags$h5(style = "margin-top:0", tags$code(run_id)),
+          style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:14px; margin-bottom:12px;",
+          tags$h5(style="margin-top:0", tags$code(rid)),
 
           fluidRow(
             column(4,
               tags$h6(tags$b("Hyperparameters")),
-              tags$table(class = "table table-condensed", style = "font-size:13px;",
-                tags$tr(tags$td("Model"),         tags$td(row$model_type[1])),
-                tags$tr(tags$td("mtry"),          tags$td(hp_val("mtry"))),
-                tags$tr(tags$td("num.trees"),     tags$td(hp_val("num_trees"))),
-                tags$tr(tags$td("min.node.size"), tags$td(hp_val("min_node_size"))),
-                tags$tr(tags$td("splitrule"),     tags$td(hp_val("splitrule"))),
-                tags$tr(tags$td("CV folds"),      tags$td(hp_val("cv_folds"))),
-                tags$tr(tags$td("Seed"),          tags$td(hp_val("seed"))),
-                tags$tr(tags$td("Train pixels"),  tags$td(m_val("n_train"))),
-                tags$tr(tags$td("Test pixels"),   tags$td(m_val("n_test"))),
-                tags$tr(tags$td("Features"),      tags$td(m_val("n_features")))
+              tags$table(class="table table-condensed", style="font-size:13px;",
+                tags$tr(tags$td("Model"), tags$td(first_chr(row$model_type))),
+                tags$tr(tags$td("mtry"), tags$td(first_chr(hp[["mtry"]]))),
+                tags$tr(tags$td("num.trees"), tags$td(first_chr(hp[["num_trees"]]))),
+                tags$tr(tags$td("min.node.size"), tags$td(first_chr(hp[["min_node_size"]]))),
+                tags$tr(tags$td("splitrule"), tags$td(first_chr(hp[["splitrule"]]))),
+                tags$tr(tags$td("CV folds"), tags$td(first_chr(hp[["cv_folds"]]))),
+                tags$tr(tags$td("Seed"), tags$td(first_chr(hp[["seed"]])))
               )
             ),
             column(4,
               tags$h6(tags$b("Test Set Metrics")),
-              tags$table(class = "table table-condensed", style = "font-size:13px;",
-                tags$tr(tags$td("Accuracy"), tags$td(get_v("test_accuracy"))),
-                tags$tr(tags$td("95% CI"),   tags$td({
-                  lo <- m_num("test_acc_lower")
-                  hi <- m_num("test_acc_upper")
-                  if (is.finite(lo) && is.finite(hi))
-                    paste0("[", round(lo, 4), ", ", round(hi, 4), "]")
-                  else "—"
+              tags$table(class="table table-condensed", style="font-size:13px;",
+                tags$tr(tags$td("Accuracy"), tags$td(fmt_num(m[["test_accuracy"]]))),
+                tags$tr(tags$td("95% CI"), tags$td({
+                  if (is.finite(lo) && is.finite(hi)) paste0("[", round(lo,4), ", ", round(hi,4), "]") else "—"
                 })),
-                tags$tr(tags$td("Kappa"),    tags$td(get_v("test_kappa")))
+                tags$tr(tags$td("Kappa"), tags$td(fmt_num(m[["test_kappa"]])))
               )
             ),
             column(4,
               tags$h6(tags$b("Cross-Validation Metrics")),
-              if (!is.null(m[["cv_mean_accuracy"]]))
-                tags$table(class = "table table-condensed", style = "font-size:13px;",
-                  tags$tr(tags$td("CV Accuracy"), tags$td(get_v("cv_mean_accuracy"))),
-                  tags$tr(tags$td("CV Acc SD"),   tags$td(get_v("cv_acc_sd"))),
-                  tags$tr(tags$td("CV Kappa"),    tags$td(get_v("cv_mean_kappa"))),
-                  tags$tr(tags$td("CV Mean F1"),  tags$td(get_v("cv_mean_f1")))
+              if (!is.null(m[["cv_mean_accuracy"]])) {
+                tags$table(class="table table-condensed", style="font-size:13px;",
+                  tags$tr(tags$td("CV Accuracy"), tags$td(fmt_num(m[["cv_mean_accuracy"]]))),
+                  tags$tr(tags$td("CV Acc SD"), tags$td(fmt_num(m[["cv_acc_sd"]]))),
+                  tags$tr(tags$td("CV Kappa"), tags$td(fmt_num(m[["cv_mean_kappa"]]))),
+                  tags$tr(tags$td("CV Mean F1"), tags$td(fmt_num(m[["cv_mean_f1"]])))
                 )
-              else tags$p(style = "color:#aaa; font-size:13px;", "No CV (cv_folds = 0)")
+              } else {
+                tags$p(style="color:#aaa; font-size:13px;", "No CV metrics stored.")
+              }
             )
           )
         ),
         tags$h6(tags$b("Per-Class Metrics (Test Set)")),
-        metrics_table
+        perclass_tbl
       )
     })
   })
