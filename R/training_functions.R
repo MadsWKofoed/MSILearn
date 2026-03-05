@@ -149,35 +149,37 @@ train_ranger_from_dataset <- function(
 
   message("\n=== metrics list (before save) ===")
   # Keep metrics flat — no nested lists — so mongolite round-trips cleanly
-  metrics <- list(
+  metrics_scalar <- list(
     accuracy = as.numeric(cm$overall["Accuracy"]),
     kappa    = as.numeric(cm$overall["Kappa"])
   )
 
+  if (cv_folds > 1L) {
+    best_row                        <- fit$results[which.max(fit$results$Accuracy), ]
+    metrics_scalar$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
+    metrics_scalar$cv_mean_kappa    <- as.numeric(best_row$Kappa)
+  }
+
+  # Store per-class stats separately as a flat named list (one key per class×metric)
   bc <- as.data.frame(cm$byClass)
   for (col in colnames(bc)) {
-    key <- paste0("byclass_", gsub("[^A-Za-z0-9]", "_", col))
-    metrics[[key]] <- setNames(as.numeric(bc[[col]]), rownames(bc))
+    for (cls in rownames(bc)) {
+      key <- paste0("byclass_",
+                    gsub("[^A-Za-z0-9]", "_", col), "__",
+                    gsub("[^A-Za-z0-9]", "_", cls))
+      metrics_scalar[[key]] <- as.numeric(bc[cls, col])
+    }
   }
 
-  if (cv_folds > 1L) {
-    best_row                 <- fit$results[which.max(fit$results$Accuracy), ]
-    metrics$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
-    metrics$cv_mean_kappa    <- as.numeric(best_row$Kappa)
-  }
-
-  message(paste(capture.output(print(str(metrics))), collapse = "\n"))
-  # ── End debug ─────────────────────────────────────────────────────────────
-
-  message("[train] Test accuracy: ", round(metrics$accuracy, 4),
-          " | Kappa: ", round(metrics$kappa, 4))
+  message("[train] Test accuracy: ", round(metrics_scalar$accuracy, 4),
+          " | Kappa: ", round(metrics_scalar$kappa, 4))
 
   # ── 6.  Persist run ──────────────────────────────────────────────────────
   run_id <- save_model_run(
     dataset_id  = dataset_id,
     model_type  = "ranger",
     hyperparams = hyperparams,
-    metrics     = metrics,
+    metrics     = metrics_scalar,   # <-- fully flat, no named vectors
     model_obj   = fit,
     db          = db,
     url         = url
