@@ -397,6 +397,9 @@ training_module_server <- function(id) {
       m  <- row$metrics[[1]]
       hp <- row$hyperparams[[1]]
 
+      cat("DEBUG metrics class:", class(row$metrics[[1]]), "\n")
+      cat("DEBUG hyperparams class:", class(row$hyperparams[[1]]), "\n")
+
       if (is.data.frame(m))  m  <- as.list(m[1,  , drop = FALSE])
       if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
       if (is.null(m))  m  <- list()
