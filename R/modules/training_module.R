@@ -295,13 +295,24 @@ training_module_server <- function(id) {
       if (nrow(df) == 0 || !("_id" %in% names(df)))
         return(DT::datatable(data.frame(message = "No runs yet.")))
 
-      get_m <- function(m, key) {
-        tryCatch({
-          v <- if (is.data.frame(m)) m[[key]][1] else m[[key]]
-          if (is.null(v) || length(v) == 0) NA_real_
-          else round(as.numeric(v[1]), 4)
-        }, error = function(e) NA_real_)
-      }
+    get_m <- function(m, key) {
+      tryCatch({
+        if (is.null(m)) return(NA_real_)
+
+        if (is.data.frame(m)) {
+          if (!(key %in% names(m))) return(NA_real_)
+          v <- m[[key]][1]
+        } else {
+          if (!(key %in% names(m))) return(NA_real_)
+          v <- m[[key]]
+          if (length(v) == 0) return(NA_real_)
+          v <- v[1]
+        }
+
+        if (is.null(v) || length(v) == 0) return(NA_real_)
+        round(as.numeric(v), 4)
+      }, error = function(e) NA_real_)
+    }
 
       n <- nrow(df)
       hp_str <- vapply(seq_len(n), function(i) {
@@ -444,17 +455,24 @@ training_module_server <- function(id) {
               )
             ),
             # Test metrics
+            m_num <- function(key) {
+              v <- m[[key]]
+              if (is.null(v) || length(v) == 0) return(NA_real_)
+              suppressWarnings(as.numeric(v[1]))
+            }
             column(4,
               tags$h6(tags$b("Test Set Metrics")),
               tags$table(class = "table table-condensed", style = "font-size:13px;",
                 tags$tr(tags$td("Accuracy"),   tags$td(get_v("test_accuracy"))),
                 tags$tr(tags$td("95% CI"), tags$td({
-                  lo <- suppressWarnings(as.numeric(m[["test_acc_lower"]][[1]]))
-                  hi <- suppressWarnings(as.numeric(m[["test_acc_upper"]][[1]]))
-                  if (is.finite(lo) && is.finite(hi))
+                  lo <- m_num("test_acc_lower")
+                  hi <- m_num("test_acc_upper")
+                  if (is.finite(lo) && is.finite(hi)) {
                     paste0("[", round(lo, 4), ", ", round(hi, 4), "]")
-                  else "—"
-                })),
+                  } else {
+                    "—"
+                  }
+                }))
                 tags$tr(tags$td("Kappa"),      tags$td(get_v("test_kappa")))
               )
             ),
