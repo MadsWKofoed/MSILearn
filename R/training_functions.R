@@ -130,56 +130,51 @@ train_ranger_from_dataset <- function(
     weights   = obs_w
   )
 
- # ── 5.  Evaluate on held-out test set ────────────────────────────────────
+  # ── 5.  Evaluate on held-out test set ────────────────────────────────────
   preds <- predict(fit, newdata = test_X)
   cm    <- caret::confusionMatrix(preds, test_y)
 
-  # ── Debug: print raw objects to console ──────────────────────────────────
-  message("\n=== fit$results ===")
-  message(paste(capture.output(print(fit$results)), collapse = "\n"))
-
-  message("\n=== cm$overall ===")
-  message(paste(capture.output(print(cm$overall)), collapse = "\n"))
-
-  message("\n=== cm$byClass (class = head) ===")
-  message(paste(capture.output(print(head(cm$byClass))), collapse = "\n"))
-
-  message("\n=== cm$table ===")
-  message(paste(capture.output(print(cm$table)), collapse = "\n"))
-
-  message("\n=== metrics list (before save) ===")
-  # Keep metrics flat — no nested lists — so mongolite round-trips cleanly
   metrics_scalar <- list(
-    accuracy = as.numeric(cm$overall["Accuracy"]),
-    kappa    = as.numeric(cm$overall["Kappa"])
+    # Test set
+    test_accuracy = as.numeric(cm$overall["Accuracy"]),
+    test_kappa    = as.numeric(cm$overall["Kappa"]),
+    test_acc_lower = as.numeric(cm$overall["AccuracyLower"]),
+    test_acc_upper = as.numeric(cm$overall["AccuracyUpper"]),
+    n_test        = nrow(test_X),
+    n_train       = nrow(train_X),
+    n_classes     = nlevels(train_y),
+    n_features    = ncol(train_X)
   )
 
+  # CV metrics
   if (cv_folds > 1L) {
-    best_row                        <- fit$results[which.max(fit$results$Accuracy), ]
+    best_row <- fit$results[which.max(fit$results$Accuracy), ]
     metrics_scalar$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
     metrics_scalar$cv_mean_kappa    <- as.numeric(best_row$Kappa)
+    metrics_scalar$cv_mean_f1       <- as.numeric(best_row$Mean_F1)
+    metrics_scalar$cv_acc_sd        <- as.numeric(best_row$AccuracySD)
   }
 
-  # Store per-class stats separately as a flat named list (one key per class×metric)
+  # Per-class stats — one scalar per class×metric
   bc <- as.data.frame(cm$byClass)
   for (col in colnames(bc)) {
     for (cls in rownames(bc)) {
       key <- paste0("byclass_",
                     gsub("[^A-Za-z0-9]", "_", col), "__",
-                    gsub("[^A-Za-z0-9]", "_", cls))
+                    gsub("[^A-Za-z0-9]", "_", gsub("^Class: ", "", cls)))
       metrics_scalar[[key]] <- as.numeric(bc[cls, col])
     }
   }
 
-  message("[train] Test accuracy: ", round(metrics_scalar$accuracy, 4),
-          " | Kappa: ", round(metrics_scalar$kappa, 4))
+  message("[train] Test accuracy: ", round(metrics_scalar$test_accuracy, 4),
+          " | Kappa: ", round(metrics_scalar$test_kappa, 4))
 
   # ── 6.  Persist run ──────────────────────────────────────────────────────
   run_id <- save_model_run(
     dataset_id  = dataset_id,
     model_type  = "ranger",
     hyperparams = hyperparams,
-    metrics     = metrics_scalar,   # <-- fully flat, no named vectors
+    metrics     = metrics_scalar,
     model_obj   = fit,
     db          = db,
     url         = url
