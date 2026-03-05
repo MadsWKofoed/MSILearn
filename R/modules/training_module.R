@@ -307,11 +307,11 @@ training_module_server <- function(id) {
       hp_str <- vapply(seq_len(n), function(i) {
         hp <- df$hyperparams[[i]]
         if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
-        paste0("mtry=", hp$mtry %||% "?",
-               " | trees=", hp$num_trees %||% "?",
-               " | node=", hp$min_node_size %||% "?",
-               " | rule=", hp$splitrule %||% "?",
-               " | cv=", hp$cv_folds %||% "?")
+        paste0("mtry=",  hp[["mtry"]]          %||% "?",
+               " | trees=", hp[["num_trees"]]  %||% "?",
+               " | node=",  hp[["min_node_size"]] %||% "?",
+               " | rule=",  hp[["splitrule"]]  %||% "?",
+               " | cv=",    hp[["cv_folds"]]   %||% "?")
       }, character(1))
 
       tbl <- data.frame(
@@ -367,6 +367,17 @@ training_module_server <- function(id) {
 
       if (is.data.frame(m))  m  <- as.list(m[1,  , drop = FALSE])
       if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
+      
+      hp_val <- function(key) {
+        v <- hp[[key]]
+        if (is.null(v) || length(v) == 0) return("?")
+        as.character(v[[1]])
+      }
+      m_val <- function(key) {
+        v <- m[[key]]
+        if (is.null(v) || length(v) == 0) return("?")
+        as.character(v[[1]])
+      }
 
       get_v <- function(key, digits = 4) {
         v <- m[[key]]
@@ -420,16 +431,16 @@ training_module_server <- function(id) {
             column(4,
               tags$h6(tags$b("Hyperparameters")),
               tags$table(class = "table table-condensed", style = "font-size:13px;",
-                tags$tr(tags$td("Model"),        tags$td(row$model_type[1])),
-                tags$tr(tags$td("mtry"),         tags$td(hp$mtry          %||% "?")),
-                tags$tr(tags$td("num.trees"),    tags$td(hp$num_trees     %||% "?")),
-                tags$tr(tags$td("min.node.size"),tags$td(hp$min_node_size %||% "?")),
-                tags$tr(tags$td("splitrule"),    tags$td(hp$splitrule     %||% "?")),
-                tags$tr(tags$td("CV folds"),     tags$td(hp$cv_folds      %||% "?")),
-                tags$tr(tags$td("Seed"),         tags$td(hp$seed          %||% "?")),
-                tags$tr(tags$td("Train pixels"), tags$td(m$n_train        %||% "?")),
-                tags$tr(tags$td("Test pixels"),  tags$td(m$n_test         %||% "?")),
-                tags$tr(tags$td("Features"),     tags$td(m$n_features     %||% "?"))
+                tags$tr(tags$td("Model"),         tags$td(row$model_type[1])),
+                tags$tr(tags$td("mtry"),          tags$td(hp_val("mtry"))),
+                tags$tr(tags$td("num.trees"),     tags$td(hp_val("num_trees"))),
+                tags$tr(tags$td("min.node.size"), tags$td(hp_val("min_node_size"))),
+                tags$tr(tags$td("splitrule"),     tags$td(hp_val("splitrule"))),
+                tags$tr(tags$td("CV folds"),      tags$td(hp_val("cv_folds"))),
+                tags$tr(tags$td("Seed"),          tags$td(hp_val("seed"))),
+                tags$tr(tags$td("Train pixels"),  tags$td(m_val("n_train"))),
+                tags$tr(tags$td("Test pixels"),   tags$td(m_val("n_test"))),
+                tags$tr(tags$td("Features"),      tags$td(m_val("n_features")))
               )
             ),
             # Test metrics
@@ -437,19 +448,20 @@ training_module_server <- function(id) {
               tags$h6(tags$b("Test Set Metrics")),
               tags$table(class = "table table-condensed", style = "font-size:13px;",
                 tags$tr(tags$td("Accuracy"),   tags$td(get_v("test_accuracy"))),
-                tags$tr(tags$td("95% CI"),     tags$td(
-                  if (!is.null(m$test_acc_lower))
-                    paste0("[", round(as.numeric(m$test_acc_lower), 4), ", ",
-                                round(as.numeric(m$test_acc_upper), 4), "]")
+                tags$tr(tags$td("95% CI"), tags$td({
+                  lo <- suppressWarnings(as.numeric(m[["test_acc_lower"]][[1]]))
+                  hi <- suppressWarnings(as.numeric(m[["test_acc_upper"]][[1]]))
+                  if (is.finite(lo) && is.finite(hi))
+                    paste0("[", round(lo, 4), ", ", round(hi, 4), "]")
                   else "—"
-                )),
+                })),
                 tags$tr(tags$td("Kappa"),      tags$td(get_v("test_kappa")))
               )
             ),
             # CV metrics
             column(4,
               tags$h6(tags$b("Cross-Validation Metrics")),
-              if (!is.null(m$cv_mean_accuracy))
+              if (!is.null(m[["cv_mean_accuracy"]]))
                 tags$table(class = "table table-condensed", style = "font-size:13px;",
                   tags$tr(tags$td("CV Accuracy"), tags$td(get_v("cv_mean_accuracy"))),
                   tags$tr(tags$td("CV Acc SD"),   tags$td(get_v("cv_acc_sd"))),
