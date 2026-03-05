@@ -391,6 +391,9 @@ training_module_server <- function(id) {
       if (is.null(row)) {
         return(tags$p(style="color:#c00", "Run not found. Try refresh."))
       }
+      
+      cat("RUN DOC NAMES:\n")
+      print(names(row))
 
       m  <- row$metrics[[1]]
       hp <- row$hyperparams[[1]]
