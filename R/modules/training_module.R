@@ -386,17 +386,53 @@ training_module_server <- function(id) {
       if (is.null(rid) || !nzchar(rid)) {
         return(tags$p(style="color:#888", "Click a run to see details."))
       }
+      
+      extract_subdoc <- function(row, field) {
+        x <- row[[field]]
+        
+        # Case 0: JSON string (character) -> parse
+        if (is.character(x) && length(x) == 1 && grepl("^\\s*\\{", x)) {
+          return(jsonlite::fromJSON(x, simplifyVector = TRUE))
+        }
 
-      row <- get_model_run(rid)
-      if (is.null(row)) {
-        return(tags$p(style="color:#c00", "Run not found. Try refresh."))
+        if (is.null(x)) return(list())
+
+        # Case 1: mongolite har lavet det til en data.frame (kolonner = keys)
+        if (is.data.frame(x)) {
+          return(as.list(x[1, , drop = FALSE]))
+        }
+
+        # Case 2: list-column med præcis 1 element (som er en list)
+        if (is.list(x) && length(x) == 1 && is.list(x[[1]])) {
+          return(x[[1]])
+        }
+
+        # Case 3: allerede en list (sjældnere)
+        if (is.list(x)) return(x)
+
+        # fallback: atomic -> pak ind
+        list(value = x)
       }
       
-      cat("RUN DOC NAMES:\n")
-      print(names(row))
+      row <- get_model_run(rid)
+        if (is.null(row) || nrow(row) == 0) {
+          return(tags$p(style="color:#c00", "Could not load run from DB. Try refresh."))
+        }
 
-      m  <- row$metrics[[1]]
-      hp <- row$hyperparams[[1]]
+      m  <- extract_subdoc(row, "metrics")
+      hp <- extract_subdoc(row, "hyperparams")
+
+      cat("DEBUG row classes:\n")
+      cat("  metrics:", class(row$metrics), "\n")
+      cat("  hyperparams:", class(row$hyperparams), "\n")
+
+      cat("DEBUG m class:", class(m), "\n")
+      cat("DEBUG hp class:", class(hp), "\n")
+
+      cat("DEBUG m names:\n")
+      print(names(m))
+      cat("DEBUG hp names:\n")
+      print(names(hp))
 
       # force to list (hvis mongo returner data.frame eller weird)
       if (is.data.frame(m))  m  <- as.list(m[1, , drop=FALSE])
