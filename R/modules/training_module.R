@@ -323,18 +323,48 @@ training_module_server <- function(id) {
       df_sorted <- df[order(df$created_at, decreasing = TRUE), , drop = FALSE]
       n <- nrow(df_sorted)
 
+      # --- hyperparams/metrics kan være data.frame (kolonner = keys) ELLER list-column ---
+      hp_obj <- df_sorted$hyperparams
+      m_obj  <- df_sorted$metrics
+
+      # Hyperparams kolonner
+      if (is.data.frame(hp_obj)) {
+        mtry  <- as.character(hp_obj$mtry %||% NA)
+        trees <- as.character(hp_obj$num_trees %||% NA)
+        node  <- as.character(hp_obj$min_node_size %||% NA)
+        rule  <- as.character(hp_obj$splitrule %||% NA)
+        cv    <- as.character(hp_obj$cv_folds %||% NA)
+      } else {
+        mtry  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "mtry"), character(1))
+        trees <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "num_trees"), character(1))
+        node  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "min_node_size"), character(1))
+        rule  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "splitrule"), character(1))
+        cv    <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "cv_folds"), character(1))
+      }
+
+      # Metrics kolonner
+      if (is.data.frame(m_obj)) {
+        test_acc   <- suppressWarnings(as.numeric(m_obj$test_accuracy %||% NA))
+        test_kappa <- suppressWarnings(as.numeric(m_obj$test_kappa %||% NA))
+        cv_acc     <- suppressWarnings(as.numeric(m_obj$cv_mean_accuracy %||% NA))
+      } else {
+        test_acc   <- vapply(seq_len(n), \(i) m_get(m_obj[[i]], "test_accuracy"), numeric(1))
+        test_kappa <- vapply(seq_len(n), \(i) m_get(m_obj[[i]], "test_kappa"), numeric(1))
+        cv_acc     <- vapply(seq_len(n), \(i) m_get(m_obj[[i]], "cv_mean_accuracy"), numeric(1))
+      }
+
       tbl <- data.frame(
         run_id_full = df_sorted[["_id"]],
         run_id      = substr(df_sorted[["_id"]], 1, 30),
         model_type  = df_sorted$model_type,
-        mtry        = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "mtry"), character(1)),
-        trees       = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "num_trees"), character(1)),
-        node        = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "min_node_size"), character(1)),
-        rule        = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "splitrule"), character(1)),
-        cv          = vapply(seq_len(n), \(i) hp_get(df_sorted$hyperparams[[i]], "cv_folds"), character(1)),
-        test_acc    = vapply(seq_len(n), \(i) m_get(df_sorted$metrics[[i]], "test_accuracy"), numeric(1)),
-        test_kappa  = vapply(seq_len(n), \(i) m_get(df_sorted$metrics[[i]], "test_kappa"), numeric(1)),
-        cv_acc      = vapply(seq_len(n), \(i) m_get(df_sorted$metrics[[i]], "cv_mean_accuracy"), numeric(1)),
+        mtry        = mtry,
+        trees       = trees,
+        node        = node,
+        rule        = rule,
+        cv          = cv,
+        test_acc    = test_acc,
+        test_kappa  = test_kappa,
+        cv_acc      = cv_acc,
         created_at  = df_sorted$created_at,
         stringsAsFactors = FALSE
       )
@@ -389,7 +419,7 @@ training_module_server <- function(id) {
       
       extract_subdoc <- function(row, field) {
         x <- row[[field]]
-        
+
         # Case 0: JSON string (character) -> parse
         if (is.character(x) && length(x) == 1 && grepl("^\\s*\\{", x)) {
           return(jsonlite::fromJSON(x, simplifyVector = TRUE))
