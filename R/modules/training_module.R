@@ -452,18 +452,6 @@ training_module_server <- function(id) {
       m  <- extract_subdoc(row, "metrics")
       hp <- extract_subdoc(row, "hyperparams")
 
-      cat("DEBUG row classes:\n")
-      cat("  metrics:", class(row$metrics), "\n")
-      cat("  hyperparams:", class(row$hyperparams), "\n")
-
-      cat("DEBUG m class:", class(m), "\n")
-      cat("DEBUG hp class:", class(hp), "\n")
-
-      cat("DEBUG m names:\n")
-      print(names(m))
-      cat("DEBUG hp names:\n")
-      print(names(hp))
-
       # force to list (hvis mongo returner data.frame eller weird)
       if (is.data.frame(m))  m  <- as.list(m[1, , drop=FALSE])
       if (is.data.frame(hp)) hp <- as.list(hp[1, , drop=FALSE])
