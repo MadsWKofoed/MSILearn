@@ -336,26 +336,25 @@ training_module_server <- function(id) {
       if (nrow(df) == 0 || !("_id" %in% names(df)))
         return(data.frame(message = "No runs yet for this dataset."))
 
-      extract_metric <- function(m, key) {
+      get_scalar <- function(m, key) {
         tryCatch({
-          # Flatten: metrics may be a data.frame row, list, or named vector
-          if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
-          v <- m[[key]]
-          if (is.null(v) || length(v) == 0) return(NA_real_)
-          round(as.numeric(v[[1]]), 4)
+          # mongolite may return a 1-row data.frame or a named list/vector
+          v <- if (is.data.frame(m)) m[[key]][1] else m[[key]]
+          if (is.null(v) || length(v) == 0) NA_real_
+          else round(as.numeric(v[1]), 4)
         }, error = function(e) NA_real_)
       }
 
       n <- nrow(df)
-      out <- data.frame(
+      data.frame(
         run_id     = df[["_id"]],
         model_type = df$model_type,
-        accuracy   = vapply(seq_len(n), function(i) extract_metric(df$metrics[[i]], "accuracy"), numeric(1)),
-        kappa      = vapply(seq_len(n), function(i) extract_metric(df$metrics[[i]], "kappa"),    numeric(1)),
+        accuracy   = vapply(seq_len(n), function(i) get_scalar(df$metrics[[i]], "accuracy"), numeric(1)),
+        kappa      = vapply(seq_len(n), function(i) get_scalar(df$metrics[[i]], "kappa"),    numeric(1)),
+        cv_acc     = vapply(seq_len(n), function(i) get_scalar(df$metrics[[i]], "cv_mean_accuracy"), numeric(1)),
         created_at = df$created_at,
         stringsAsFactors = FALSE
-      )
-      out[order(out$created_at, decreasing = TRUE), ]
+      ) |> (\(x) x[order(x$created_at, decreasing = TRUE), ])()
     }, striped = TRUE, hover = TRUE, bordered = TRUE)
 
     # ── Last metrics ──────────────────────────────────────────────────────
@@ -370,16 +369,20 @@ training_module_server <- function(id) {
 
         get_m <- function(key) {
           v <- m[[key]]
-          if (is.null(v) || length(v) == 0) NA_real_ else as.numeric(v[[1]])
+          if (is.null(v) || length(v) == 0) return(NA_real_)
+          as.numeric(v[1])
         }
 
-        paste0(
-          "Accuracy : ", round(get_m("accuracy"), 4), "\n",
-          "Kappa    : ", round(get_m("kappa"),    4), "\n",
-          if (!is.null(m[["cv_mean_accuracy"]]))
-            paste0("CV acc   : ", round(get_m("cv_mean_accuracy"), 4), "\n")
-          else ""
+        lines <- c(
+          sprintf("Test Accuracy : %.4f", get_m("accuracy")),
+          sprintf("Test Kappa    : %.4f", get_m("kappa"))
         )
+        if (!is.null(m[["cv_mean_accuracy"]]))
+          lines <- c(lines,
+            sprintf("CV Accuracy   : %.4f", get_m("cv_mean_accuracy")),
+            sprintf("CV Kappa      : %.4f", get_m("cv_mean_kappa"))
+          )
+        paste(lines, collapse = "\n")
       }, error = function(e) conditionMessage(e))
     })
   })

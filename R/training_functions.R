@@ -131,19 +131,27 @@ train_ranger_from_dataset <- function(
   )
 
   # ── 5.  Evaluate on held-out test set ────────────────────────────────────
-  preds   <- predict(fit, newdata = test_X)
-  cm      <- caret::confusionMatrix(preds, test_y)
+  preds <- predict(fit, newdata = test_X)
+  cm    <- caret::confusionMatrix(preds, test_y)
 
+  # Keep metrics flat — no nested lists — so mongolite round-trips cleanly
   metrics <- list(
-    accuracy    = as.numeric(cm$overall["Accuracy"]),
-    kappa       = as.numeric(cm$overall["Kappa"]),
-    by_class    = as.list(as.data.frame(cm$byClass))
+    accuracy = as.numeric(cm$overall["Accuracy"]),
+    kappa    = as.numeric(cm$overall["Kappa"])
   )
 
+  # Per-class stats: prefix column name with "byclass_" and store as scalars
+  bc <- as.data.frame(cm$byClass)
+  for (col in colnames(bc)) {
+    key <- paste0("byclass_", gsub("[^A-Za-z0-9]", "_", col))
+    # each row is a class; store as named vector collapsed to a single string
+    metrics[[key]] <- setNames(as.numeric(bc[[col]]), rownames(bc))
+  }
+
   if (cv_folds > 1L) {
-    best_row        <- fit$results[which.max(fit$results$Accuracy), ]
-    metrics$cv_mean_accuracy <- best_row$Accuracy
-    metrics$cv_mean_kappa    <- best_row$Kappa
+    best_row             <- fit$results[which.max(fit$results$Accuracy), ]
+    metrics$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
+    metrics$cv_mean_kappa    <- as.numeric(best_row$Kappa)
   }
 
   message("[train] Test accuracy: ", round(metrics$accuracy, 4),
