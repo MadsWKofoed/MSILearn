@@ -335,17 +335,22 @@ training_module_server <- function(id) {
       df <- runs_rv()
       if (nrow(df) == 0 || !("_id" %in% names(df)))
         return(data.frame(message = "No runs yet for this dataset."))
+
+      extract_metric <- function(m, key) {
+        tryCatch({
+          v <- if (is.data.frame(m))   m[[key]][1]
+               else if (is.list(m))    m[[key]]
+               else if (!is.null(names(m))) m[key]   # named atomic vector
+               else NA_real_
+          if (is.null(v) || length(v) == 0) NA_real_ else round(as.numeric(v[[1]]), 4)
+        }, error = function(e) NA_real_)
+      }
+
       out <- data.frame(
         run_id     = df[["_id"]],
         model_type = df$model_type,
-        accuracy   = vapply(df$metrics, function(m) {
-          v <- if (is.data.frame(m)) m$accuracy[1] else m$accuracy
-          if (is.null(v)) NA_real_ else round(as.numeric(v), 4)
-        }, numeric(1)),
-        kappa      = vapply(df$metrics, function(m) {
-          v <- if (is.data.frame(m)) m$kappa[1] else m$kappa
-          if (is.null(v)) NA_real_ else round(as.numeric(v), 4)
-        }, numeric(1)),
+        accuracy   = vapply(df$metrics, extract_metric, numeric(1), key = "accuracy"),
+        kappa      = vapply(df$metrics, extract_metric, numeric(1), key = "kappa"),
         created_at = df$created_at,
         stringsAsFactors = FALSE
       )
@@ -360,11 +365,19 @@ training_module_server <- function(id) {
         row  <- runs[runs[["_id"]] == last_run_id(), ]
         if (nrow(row) == 0) return("Run not found.")
         m <- row$metrics[[1]]
+
+        get_m <- function(key) {
+          v <- if (is.data.frame(m)) m[[key]][1]
+               else if (is.list(m))  m[[key]]
+               else m[key]
+          if (is.null(v) || length(v) == 0) NA_real_ else as.numeric(v[[1]])
+        }
+
         paste0(
-          "Accuracy : ", round(m$accuracy, 4), "\n",
-          "Kappa    : ", round(m$kappa,    4), "\n",
-          if (!is.null(m$cv_mean_accuracy))
-            paste0("CV acc   : ", round(m$cv_mean_accuracy, 4), "\n")
+          "Accuracy : ", round(get_m("accuracy"), 4), "\n",
+          "Kappa    : ", round(get_m("kappa"),    4), "\n",
+          if (!is.null(m[["cv_mean_accuracy"]]))
+            paste0("CV acc   : ", round(get_m("cv_mean_accuracy"), 4), "\n")
           else ""
         )
       }, error = function(e) conditionMessage(e))
