@@ -15,6 +15,7 @@ library(jpeg)
 library(vsclust)
 library(matrixStats)
 library(caret)
+library(ranger)
 
 source("global.R")
 
