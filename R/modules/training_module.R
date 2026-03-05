@@ -336,9 +336,17 @@ training_module_server <- function(id) {
       if (nrow(df) == 0 || !("_id" %in% names(df)))
         return(data.frame(message = "No runs yet for this dataset."))
 
+      # ── DEBUG: inspect what mongolite returns for metrics ──────────────
+      for (i in seq_len(nrow(df))) {
+        m <- df$metrics[[i]]
+        message("[run_table DEBUG] run ", i, " class=", class(m),
+                " names=", paste(names(m), collapse=","),
+                " accuracy=", m[["accuracy"]])
+      }
+      # ── END DEBUG ───────────────────────────────────────────────────────
+
       get_scalar <- function(m, key) {
         tryCatch({
-          # mongolite may return a 1-row data.frame or a named list/vector
           v <- if (is.data.frame(m)) m[[key]][1] else m[[key]]
           if (is.null(v) || length(v) == 0) NA_real_
           else round(as.numeric(v[1]), 4)
