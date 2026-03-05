@@ -1067,3 +1067,13 @@ load_clustering <- function(assignment_id, db_name = DB_NAME, mongo_url = MONGO_
   }
   load_clustering_by_id(assignment_id, db_name, mongo_url)
 }
+
+
+get_model_run <- function(run_id,
+                          db = "MSI_database_test",
+                          url = "mongodb://localhost:27018") {
+  con <- mongolite::mongo(collection = "model_runs", db = db, url = url)
+  doc <- con$find(query = sprintf('{"_id": "%s"}', run_id))
+  if (nrow(doc) == 0) return(NULL)
+  doc[1, , drop = FALSE]
+}

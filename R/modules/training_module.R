@@ -384,26 +384,24 @@ training_module_server <- function(id) {
     output$run_details_ui <- renderUI({
       rid <- selected_run_id()
       if (is.null(rid) || !nzchar(rid)) {
-        return(tags$p(style = "color:#888", "Click a row above to see details."))
+        return(tags$p(style="color:#888", "Click a run to see details."))
       }
 
-      # Find run i runs_rv() (billigt). Alternativt: hent fra DB hvis du vil være 100% sikker.
-      df <- runs_rv()
-      row <- df[df[["_id"]] == rid, , drop = FALSE]
-      if (nrow(row) == 0) {
-        return(tags$p(style = "color:#c00", "Selected run not found in run list (refresh?)."))
+      row <- get_model_run(rid)
+      if (is.null(row)) {
+        return(tags$p(style="color:#c00", "Run not found. Try refresh."))
       }
 
       m  <- row$metrics[[1]]
       hp <- row$hyperparams[[1]]
 
-      cat("DEBUG metrics class:", class(row$metrics[[1]]), "\n")
-      cat("DEBUG hyperparams class:", class(row$hyperparams[[1]]), "\n")
-
-      if (is.data.frame(m))  m  <- as.list(m[1,  , drop = FALSE])
-      if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
+      # force to list (hvis mongo returner data.frame eller weird)
+      if (is.data.frame(m))  m  <- as.list(m[1, , drop=FALSE])
+      if (is.data.frame(hp)) hp <- as.list(hp[1, , drop=FALSE])
       if (is.null(m))  m  <- list()
       if (is.null(hp)) hp <- list()
+      if (!is.list(m))  m  <- list(value = m)
+      if (!is.list(hp)) hp <- list(value = hp)
 
       first_chr <- function(x, default = "—") {
         if (is.null(x) || length(x) == 0) return(default)
@@ -429,8 +427,9 @@ training_module_server <- function(id) {
       perclass_tbl <- if (length(class_names) > 0) {
         safe_key <- function(metric, cls) {
           k <- paste0("byclass_", metric, "__", cls)
-          v <- first_num(m[[k]])
-          if (!is.finite(v)) "—" else sprintf("%.4f", v)
+          v <- tryCatch(m[[k]], error = function(e) NULL)
+          num <- first_num(v)
+          if (!is.finite(num)) "—" else sprintf("%.4f", num)
         }
         tags$table(
           class="table table-condensed table-bordered",
