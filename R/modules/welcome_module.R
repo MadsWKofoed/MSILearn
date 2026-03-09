@@ -1,320 +1,132 @@
 # R/modules/welcome_module.R
 
-welcome_module_ui <- function() {
+welcome_module_ui <- function(id) {
+  ns <- NS(id)
 
-  div(class = "welcome-wrap",
-
-    div(class = "hero-box",
-      h2("MSI Clustering & Prediction Platform"),
-      p(class = "hero-sub",
-        "This application provides a complete workflow for analysing mass spectrometry imaging (MSI) data. ",
-        "It guides you from raw data processing through clustering and annotation, all the way to ",
-        "machine learning model training and prediction. Each step stores structured, versioned data ",
-        "objects to ensure that analyses are reproducible and easy to track."
+  tabPanel(
+    "Welcome",
+    
+    div(class = "welcome-container",
+    
+      h1("MSI Clustering & Prediction Platform"),
+      
+      p(class="lead",
+        "An interactive workflow for analysing Mass Spectrometry Imaging (MSI) data."
       ),
-      div(
-        span(class = "mini-pill", "Processing"),
-        span(class = "mini-pill", "Clustering"),
-        span(class = "mini-pill", "Training"),
-        span(class = "mini-pill", "Prediction")
-      )
-    ),
-
-    fluidRow(
-      column(
-        12,
-        div(class = "welcome-card",
-          h4("How the application works"),
-          p(
-            "The application follows a structured workflow. First, MSI data is processed to generate ",
-            "feature representations for each pixel. These features can then be clustered and ",
-            "annotated with biological labels. Finally, annotated data can be used to build ",
-            "machine learning models that classify tissue regions or predict labels for new data."
-          ),
-          div(class = "quick-note",
-            strong("Key principle: "),
-            "Every step produces versioned objects stored in the database. ",
-            "This ensures that the same input data and parameters will always produce the same output, ",
-            "making the entire workflow fully reproducible."
+      
+      br(),
+      
+      # WORKFLOW CARDS
+      fluidRow(
+        
+        column(3,
+          div(class="welcome-card",
+              h4("1. Processing"),
+              icon("cogs", "fa-2x"),
+              p("Convert raw MSI data into feature matrices."),
+              actionButton(ns("show_processing"), "Learn more")
+          )
+        ),
+        
+        column(3,
+          div(class="welcome-card",
+              h4("2. Clustering"),
+              icon("project-diagram", "fa-2x"),
+              p("Explore spatial clusters and assign labels."),
+              actionButton(ns("show_clustering"), "Learn more")
+          )
+        ),
+        
+        column(3,
+          div(class="welcome-card",
+              h4("3. Training"),
+              icon("brain", "fa-2x"),
+              p("Train machine learning models."),
+              actionButton(ns("show_training"), "Learn more")
+          )
+        ),
+        
+        column(3,
+          div(class="welcome-card",
+              h4("4. Prediction"),
+              icon("chart-line", "fa-2x"),
+              p("Predict tissue classes in new data."),
+              actionButton(ns("show_prediction"), "Learn more")
           )
         )
-      )
-    ),
-
-    fluidRow(
-      column(
-        3,
-        div(class = "workflow-step",
-          div(class = "step-no", "Step 1"),
-          h5("Studies & Samples"),
-          p(
-            "A study represents a project or dataset collection. ",
-            "Each study contains one or more samples that represent individual MSI experiments."
-          ),
-          div(class = "data-chip", "Study"),
-          div(class = "data-chip", "Sample")
-        )
+        
       ),
-
-      column(
-        3,
-        div(class = "workflow-step",
-          div(class = "step-no", "Step 2"),
-          h5("Processing"),
-          p(
-            "Raw imzML and ibd files are processed into structured feature matrices ",
-            "where each pixel is represented by m/z bins."
-          ),
-          div(class = "data-chip", "Pipeline"),
-          div(class = "data-chip", "Artifact: binned_dataframe")
-        )
+      
+      br(),
+      br(),
+      
+      h3("Data Objects in the Platform"),
+      
+      tags$img(
+        src="workflow_diagram.png",
+        style="width:100%; max-width:800px;"
       ),
-
-      column(
-        3,
-        div(class = "workflow-step",
-          div(class = "step-no", "Step 3"),
-          h5("Clustering & Annotation"),
-          p(
-            "Processed MSI features can be clustered spatially. ",
-            "Clusters or pixel selections can then be assigned biological labels."
-          ),
-          div(class = "data-chip", "Clustering"),
-          div(class = "data-chip", "Annotation Set"),
-          div(class = "data-chip", "Annotations")
-        )
+      
+      br(),
+      
+      p(
+        "All analysis steps store structured objects in the database to ensure reproducibility."
       ),
-
-      column(
-        3,
-        div(class = "workflow-step",
-          div(class = "step-no", "Step 4"),
-          h5("Model Training"),
-          p(
-            "Frozen datasets combine features and annotations into reproducible ",
-            "training inputs for machine learning models."
-          ),
-          div(class = "data-chip", "Dataset"),
-          div(class = "data-chip", "Model Run")
-        )
-      )
-    ),
-
-    fluidRow(
-      column(
-        12,
-        div(class = "welcome-card",
-
-          h4("Key Data Objects in the Platform"),
-
-          tags$table(class = "object-table",
-
-            tags$thead(
-              tags$tr(
-                tags$th("Object"),
-                tags$th("Description"),
-                tags$th("Used In")
-              )
-            ),
-
-            tags$tbody(
-
-              tags$tr(
-                tags$td(tags$b("Study")),
-                tags$td("A top-level container representing a project or experiment collection."),
-                tags$td("Processing, Clustering, Training")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Sample")),
-                tags$td("An individual MSI experiment belonging to a study."),
-                tags$td("Processing, Clustering, Training")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Pipeline")),
-                tags$td("A versioned configuration describing parameters used for a specific analysis step."),
-                tags$td("Processing and Clustering")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Artifact")),
-                tags$td("Stored output generated by a pipeline step, such as processed MSI features."),
-                tags$td("Input to clustering and training")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Annotation Set")),
-                tags$td("A predefined set of biological labels (e.g. Healthy, HighGrade, LowGrade, Squamous)."),
-                tags$td("Clustering and Training")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Annotation")),
-                tags$td("Pixel-level labels assigned to a sample using an annotation set."),
-                tags$td("Training")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Dataset")),
-                tags$td("A frozen snapshot that combines samples, pipelines, annotations, and train/test splits."),
-                tags$td("Training")
-              ),
-
-              tags$tr(
-                tags$td(tags$b("Model Run")),
-                tags$td("A trained machine learning model together with hyperparameters and performance metrics."),
-                tags$td("Training and Prediction")
-              )
-
-            )
-          )
-        )
-      )
-    ),
-
-    fluidRow(
-      column(
-        6,
-        div(class = "welcome-card",
-
-          h4("Application Modules"),
-
-          fluidRow(
-
-            column(
-              6,
-              div(class = "module-box",
-                h5("Processing"),
-                p(
-                  "Upload or register MSI data and convert raw files into processed feature representations."
-                ),
-                p(
-                  "The output is a versioned processing artifact containing pixel features."
-                ),
-                span(class = "module-tag", "Feature Generation")
-              )
-            ),
-
-            column(
-              6,
-              div(class = "module-box",
-                h5("Clustering"),
-                p(
-                  "Explore spatial clustering results and assign biological labels to pixels or clusters."
-                ),
-                p(
-                  "Annotations created here become training labels for machine learning."
-                ),
-                span(class = "module-tag", "Annotation")
-              )
-            )
-
-          ),
-
-          fluidRow(
-
-            column(
-              6,
-              div(class = "module-box",
-                h5("Training"),
-                p(
-                  "Create reproducible training datasets and train machine learning models."
-                ),
-                p(
-                  "Multiple model runs can be compared using detailed evaluation metrics."
-                ),
-                span(class = "module-tag", "Model Development")
-              )
-            ),
-
-            column(
-              6,
-              div(class = "module-box",
-                h5("Prediction"),
-                p(
-                  "Apply trained models to new MSI data in order to generate predicted labels."
-                ),
-                p(
-                  "This module allows models to be used for inference and validation."
-                ),
-                span(class = "module-tag todo", "Future Extension")
-              )
-            )
-
-          )
-        )
-      ),
-
-      column(
-        6,
-        div(class = "welcome-card",
-
-          h4("Interactive Guide"),
-
-          tags$details(class = "guide-detail", open = NA,
-            tags$summary("Where should new users start?"),
-            p(
-              "Start with the Processing module. Upload MSI data, run the processing pipeline, ",
-              "and generate a processed artifact. Once features are available, you can move on to clustering."
-            )
-          ),
-
-          tags$details(class = "guide-detail",
-            tags$summary("When should clustering be used?"),
-            p(
-              "Clustering helps identify spatial patterns in MSI data. ",
-              "You can assign biological labels to clusters or selected pixels."
-            )
-          ),
-
-          tags$details(class = "guide-detail",
-            tags$summary("What is a dataset in the Training module?"),
-            p(
-              "A dataset is a frozen snapshot that combines samples, processing pipelines, ",
-              "annotations, and data splits. This ensures that training experiments ",
-              "are reproducible and comparable."
-            )
-          ),
-
-          tags$details(class = "guide-detail",
-            tags$summary("Why are frozen datasets important?"),
-            p(
-              "They ensure that machine learning experiments always use exactly the same ",
-              "features and labels, making results reproducible."
-            )
-          ),
-
-          tags$details(class = "guide-detail",
-            tags$summary("What is the difference between Artifact, Dataset, and Model Run?"),
-            p(
-              strong("Artifact: "), "Output from a pipeline step (e.g. processed MSI features). ",
-              strong("Dataset: "), "A frozen training input created from artifacts and annotations. ",
-              strong("Model Run: "), "A trained machine learning model with metrics and hyperparameters."
-            )
-          )
-
-        )
-      )
-    ),
-
-    fluidRow(
-      column(
-        12,
-        div(class = "welcome-card",
-          h4("Recommended Workflow"),
-          p(
-            strong("1. Processing → "),
-            "Generate pixel features from raw MSI files. ",
-            strong("2. Clustering → "),
-            "Identify spatial structures and annotate tissue regions. ",
-            strong("3. Training → "),
-            "Create datasets and train predictive models. ",
-            strong("4. Prediction → "),
-            "Apply trained models to new samples."
-          )
-        )
-      )
+      
+      br(),
+      
+      uiOutput(ns("details"))
+      
     )
   )
+}
+
+
+welcome_module_server <- function(id){
+  moduleServer(id, function(input, output, session){
+    
+    output$details <- renderUI({
+      
+      if(input$show_processing > 0){
+        return(
+          div(
+            h4("Processing"),
+            p("Raw imzML data is converted into feature matrices using configurable pipelines."),
+            p("Output: Artifact (binned_dataframe)")
+          )
+        )
+      }
+      
+      if(input$show_clustering > 0){
+        return(
+          div(
+            h4("Clustering"),
+            p("Spatial clustering identifies tissue structures."),
+            p("Clusters can be annotated using biological labels.")
+          )
+        )
+      }
+      
+      if(input$show_training > 0){
+        return(
+          div(
+            h4("Training"),
+            p("Frozen datasets combine features and annotations."),
+            p("Machine learning models are trained and evaluated.")
+          )
+        )
+      }
+      
+      if(input$show_prediction > 0){
+        return(
+          div(
+            h4("Prediction"),
+            p("Trained models can classify new MSI samples.")
+          )
+        )
+      }
+      
+    })
+    
+  })
 }

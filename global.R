@@ -14,18 +14,35 @@ msi_con <- mongo(
   url = "mongodb://localhost:27018"
 )
 
-# Custom CSS for font
-custom_css <- tags$head(
-  tags$link(
-    rel = "stylesheet",
-    href = "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap"
-  ),
-  tags$style(HTML("
-    * {
-      font-family: 'Roboto', sans-serif !important;
-    }
-  "))
-)
+# Custom CSS
+custom_css <- tags$style(HTML("
+
+/* Welcome cards */
+.welcome-card{
+  background:#f8f9fa;
+  padding:20px;
+  border-radius:10px;
+  text-align:center;
+  box-shadow:0 2px 6px rgba(0,0,0,0.1);
+  transition:0.2s;
+}
+
+.welcome-card:hover{
+  transform:translateY(-5px);
+  box-shadow:0 6px 12px rgba(0,0,0,0.15);
+}
+
+.welcome-container{
+  max-width:1200px;
+  margin:auto;
+}
+
+.lead{
+  font-size:18px;
+  color:#555;
+}
+
+"))
 
 # Source function files
 source("R/mongo_schema.R")        # schema initialisation (indexes)
