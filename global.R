@@ -42,6 +42,16 @@ custom_css <- tags$style(HTML("
   color:#555;
 }
 
+.welcome-detail-box{
+  background:#ffffff;
+  border:1px solid #e3e7ee;
+  border-radius:12px;
+  padding:18px 20px;
+  margin-top:10px;
+  margin-bottom:20px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.06);
+}
+
 "))
 
 # Source function files
