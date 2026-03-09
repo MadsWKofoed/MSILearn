@@ -41,6 +41,7 @@ tryCatch(
 )
 
 # Source modules
+source("R/modules/welcome_module.R")
 source("R/modules/clustering_module.R")
 source("R/modules/prediction_module.R")
 source("R/modules/processing_module.R")
@@ -50,10 +51,7 @@ source("R/modules/training_module.R")
 ui <- navbarPage(
   title  = "MSI Clustering & Prediction",
   header = tagList(custom_css, useShinyjs()),
-  tabPanel("Welcome",
-           h3("Welcome to the MSI Clustering App"),
-           p("Upload imzML + ibd files, perform clustering, and compare to histology.")
-  ),
+  tabPanel("Welcome", welcome_module_ui()),
   processing_module_ui("processing"),
   clustering_module_ui("clustering"),
   prediction_module_ui("prediction"),
