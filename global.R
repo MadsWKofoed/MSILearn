@@ -68,7 +68,7 @@ source("R/modules/training_module.R")
 ui <- navbarPage(
   title  = "MSI Clustering & Prediction",
   header = tagList(custom_css, useShinyjs()),
-  tabPanel("Welcome", welcome_module_ui()),
+  welcome_module_ui("welcome"),
   processing_module_ui("processing"),
   clustering_module_ui("clustering"),
   prediction_module_ui("prediction"),
@@ -77,6 +77,7 @@ ui <- navbarPage(
 
 
 server <- function(input, output, session) {
+  welcome_module_server("welcome")
   processing_module_server("processing")
   clustering_module_server("clustering")
   prediction_module_server("prediction")
