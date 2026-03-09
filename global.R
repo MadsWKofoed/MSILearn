@@ -31,6 +31,7 @@ custom_css <- tags$style(HTML("
 .lead-small{
   font-size: 15px;
   color: #666;
+  margin-bottom: 16px;
 }
 
 .welcome-card{
@@ -62,30 +63,69 @@ custom_css <- tags$style(HTML("
   box-shadow: 0 4px 12px rgba(0,0,0,0.06);
 }
 
-.small-box{
-  min-height: 120px;
+.soft-box{
+  background: #fafbfd;
 }
 
-.data-object-btn{
-  width: 100%;
+.object-flow-wrap{
   background: #ffffff;
-  border: 1px solid #d9e1ec;
-  border-radius: 10px;
-  padding: 14px 10px;
+  border: 1px solid #e3e7ee;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  margin-bottom: 12px;
+}
+
+.object-flow-row{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.flow-break{
+  height: 16px;
+}
+
+.flow-object-btn{
+  background: #f8fbff;
+  border: 1px solid #cfdceb;
+  border-radius: 12px;
+  padding: 12px 18px;
+  min-width: 145px;
   font-weight: 600;
-  color: #2c3e50;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  color: #24415f;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.04);
 }
 
-.data-object-btn:hover{
-  background: #f4f8fc;
-  border-color: #b8cbe2;
+.flow-object-btn:hover{
+  background: #edf5ff;
+  border-color: #a9c3e3;
 }
 
-.data-object-btn:focus,
-.data-object-btn:active{
+.flow-object-btn:focus,
+.flow-object-btn:active{
   outline: none !important;
   box-shadow: 0 0 0 2px rgba(70,130,180,0.15);
+}
+
+.flow-arrow{
+  font-size: 26px;
+  font-weight: 700;
+  color: #9aa9bb;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+@media (max-width: 992px){
+  .object-flow-row{
+    flex-direction: column;
+  }
+
+  .flow-arrow{
+    transform: rotate(90deg);
+  }
 }
 "))
 
