@@ -16,42 +16,77 @@ msi_con <- mongo(
 
 # Custom CSS
 custom_css <- tags$style(HTML("
-
-/* Welcome cards */
-.welcome-card{
-  background:#f8f9fa;
-  padding:20px;
-  border-radius:10px;
-  text-align:center;
-  box-shadow:0 2px 6px rgba(0,0,0,0.1);
-  transition:0.2s;
-}
-
-.welcome-card:hover{
-  transform:translateY(-5px);
-  box-shadow:0 6px 12px rgba(0,0,0,0.15);
-}
-
 .welcome-container{
-  max-width:1200px;
-  margin:auto;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 10px 30px 10px;
 }
 
 .lead{
-  font-size:18px;
-  color:#555;
+  font-size: 18px;
+  color: #555;
+  margin-bottom: 18px;
+}
+
+.lead-small{
+  font-size: 15px;
+  color: #666;
+}
+
+.welcome-card{
+  background: #f8f9fa;
+  padding: 22px 18px;
+  border-radius: 12px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  transition: 0.2s;
+  min-height: 170px;
+}
+
+.welcome-card:hover{
+  transform: translateY(-4px);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+}
+
+.welcome-card .btn{
+  margin-top: 8px;
 }
 
 .welcome-detail-box{
-  background:#ffffff;
-  border:1px solid #e3e7ee;
-  border-radius:12px;
-  padding:18px 20px;
-  margin-top:10px;
-  margin-bottom:20px;
-  box-shadow:0 4px 12px rgba(0,0,0,0.06);
+  background: #ffffff;
+  border: 1px solid #e3e7ee;
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-top: 10px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
 }
 
+.small-box{
+  min-height: 120px;
+}
+
+.data-object-btn{
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #d9e1ec;
+  border-radius: 10px;
+  padding: 14px 10px;
+  font-weight: 600;
+  color: #2c3e50;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.data-object-btn:hover{
+  background: #f4f8fc;
+  border-color: #b8cbe2;
+}
+
+.data-object-btn:focus,
+.data-object-btn:active{
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(70,130,180,0.15);
+}
 "))
 
 # Source function files
