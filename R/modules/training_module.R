@@ -628,12 +628,29 @@ training_module_server <- function(id) {
       roc_raw <- m[["roc_data"]]
       if (is.null(roc_raw)) return(NULL)
 
-      # Unpack all nesting layers
+      # Unpack outer nesting layers until we reach the list of per-class entries
       roc_list <- roc_raw
-      while (is.list(roc_list) && !is.list(roc_list[[1]])) roc_list <- roc_list[[1]]
-      # If mongolite flattened into a data.frame, convert back to list of lists
+      while (is.list(roc_list) &&
+             !is.null(roc_list[[1]]) &&
+             is.list(roc_list[[1]]) &&
+             is.list(roc_list[[1]][[1]])) {
+        roc_list <- roc_list[[1]]
+      }
+      # If mongolite returned a data.frame with list-columns, convert row by row
       if (is.data.frame(roc_list)) {
-        roc_list <- lapply(seq_len(nrow(roc_list)), function(i) as.list(roc_list[i, ]))
+        roc_list <- lapply(seq_len(nrow(roc_list)), function(i) {
+          r <- as.list(roc_list[i, ])
+          r$sensitivities <- unlist(r$sensitivities)
+          r$specificities <- unlist(r$specificities)
+          r
+        })
+      } else {
+        # Ensure sensitivities/specificities are plain numeric (not lists)
+        roc_list <- lapply(roc_list, function(r) {
+          r$sensitivities <- unlist(r$sensitivities)
+          r$specificities <- unlist(r$specificities)
+          r
+        })
       }
 
       # Build long data.frame from stored sensitivities/specificities
