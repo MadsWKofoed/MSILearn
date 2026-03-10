@@ -729,7 +729,7 @@ training_module_server <- function(id) {
           y = "True Positive Rate",
           color = NULL
         ) +
-        guides(color = guide_legend(nrow = 2)) +   # <-- NY
+        guides(color = guide_legend(nrow = 3)) +  
         theme_minimal(base_size = 13) +
         theme(
           plot.title = element_text(face = "bold", hjust = 0.5),
