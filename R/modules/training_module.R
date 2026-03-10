@@ -550,18 +550,38 @@ training_module_server <- function(id) {
             )
           )
         ),
+        
         tags$h6(tags$b("Per-Class Metrics (Test Set)")),
         perclass_tbl,
 
         tags$hr(),
 
-        tags$h6(tags$b("Confusion Matrix")),
-        plotOutput(ns("cm_plot"), height = "300px"),
+        tags$div(
+          style="max-width:1100px; margin:auto;",
 
-        tags$br(),
+          fluidRow(
+            column(2),
+            column(
+              8,
+              tags$h6(tags$b("Confusion Matrix")),
+              plotOutput(ns("cm_plot"), height = "260px")
+            ),
+            column(2)
+          ),
 
-        tags$h6(tags$b("ROC Curves")),
-        plotOutput(ns("roc_plot"), height = "520px")
+          tags$br(),
+
+          fluidRow(
+            column(1),
+            column(
+              10,
+              tags$h6(tags$b("ROC Curves")),
+              plotOutput(ns("roc_plot"), height = "520px")
+            ),
+            column(1)
+          )
+
+        )
       )
     })
 
