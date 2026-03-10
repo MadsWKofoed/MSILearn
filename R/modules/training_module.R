@@ -628,72 +628,104 @@ training_module_server <- function(id) {
       roc_raw <- m[["roc_data"]]
       if (is.null(roc_raw)) return(NULL)
 
-      # Unpack outer nesting layers until we reach the list of per-class entries
-      roc_list <- roc_raw
-      while (is.list(roc_list) &&
-             !is.null(roc_list[[1]]) &&
-             is.list(roc_list[[1]]) &&
-             is.list(roc_list[[1]][[1]])) {
-        roc_list <- roc_list[[1]]
-      }
-      # If mongolite returned a data.frame with list-columns, convert row by row
-      if (is.data.frame(roc_list)) {
-        roc_list <- lapply(seq_len(nrow(roc_list)), function(i) {
-          r <- as.list(roc_list[i, ])
-          r$sensitivities <- unlist(r$sensitivities)
-          r$specificities <- unlist(r$specificities)
-          r
-        })
-      } else {
-        # Ensure sensitivities/specificities are plain numeric (not lists)
-        roc_list <- lapply(roc_list, function(r) {
-          r$sensitivities <- unlist(r$sensitivities)
-          r$specificities <- unlist(r$specificities)
-          r
-        })
+      # --- robust unwrapping ---
+      unwrap_once <- function(x) {
+        if (is.list(x) && length(x) == 1) return(x[[1]])
+        x
       }
 
-      # Build long data.frame from stored sensitivities/specificities
-      roc_df <- do.call(rbind, lapply(roc_list, function(r) {
-        if (length(r$sensitivities) == 0) return(NULL)
+      roc_list <- roc_raw
+      repeat {
+        new_obj <- unwrap_once(roc_list)
+        if (identical(new_obj, roc_list)) break
+        roc_list <- new_obj
+      }
+
+      # Case 1: already a data.frame with one row per class
+      if (is.data.frame(roc_list)) {
+        roc_entries <- lapply(seq_len(nrow(roc_list)), function(i) {
+          list(
+            class = as.character(roc_list$class[i]),
+            auc   = suppressWarnings(as.numeric(roc_list$auc[i])),
+            sensitivities = unlist(roc_list$sensitivities[[i]]),
+            specificities = unlist(roc_list$specificities[[i]])
+          )
+        })
+
+      # Case 2: list of per-class objects
+      } else if (is.list(roc_list)) {
+        roc_entries <- lapply(roc_list, function(r) {
+
+          # if one entry is itself a 1-row data.frame
+          if (is.data.frame(r)) {
+            return(list(
+              class = as.character(r$class[1]),
+              auc   = suppressWarnings(as.numeric(r$auc[1])),
+              sensitivities = unlist(r$sensitivities[[1]]),
+              specificities = unlist(r$specificities[[1]])
+            ))
+          }
+
+          # if one entry is a plain list
+          if (is.list(r)) {
+            return(list(
+              class = as.character(r$class[1]),
+              auc   = suppressWarnings(as.numeric(r$auc[1])),
+              sensitivities = unlist(r$sensitivities),
+              specificities = unlist(r$specificities)
+            ))
+          }
+
+          NULL
+        })
+
+        roc_entries <- Filter(Negate(is.null), roc_entries)
+
+      } else {
+        return(NULL)
+      }
+
+      roc_df <- do.call(rbind, lapply(roc_entries, function(r) {
+        if (length(r$sensitivities) == 0 || length(r$specificities) == 0) return(NULL)
+
+        n <- min(length(r$sensitivities), length(r$specificities))
         data.frame(
-          class       = r$class,
-          fpr         = 1 - r$specificities,
-          tpr         = r$sensitivities,
-          auc         = r$auc,
+          class = r$class,
+          fpr   = 1 - as.numeric(r$specificities[seq_len(n)]),
+          tpr   = as.numeric(r$sensitivities[seq_len(n)]),
+          auc   = as.numeric(r$auc),
           stringsAsFactors = FALSE
         )
       }))
-      req(!is.null(roc_df) && nrow(roc_df) > 0)
 
-      # AUC labels for legend — aggregate first to guarantee one row per class
+      req(!is.null(roc_df), nrow(roc_df) > 0)
+
       auc_labels <- roc_df |>
         dplyr::group_by(class) |>
         dplyr::summarise(auc = dplyr::first(auc), .groups = "drop") |>
         dplyr::mutate(label = sprintf("%s (AUC = %.3f)", class, auc))
 
-      roc_df <- dplyr::left_join(roc_df, auc_labels[, c("class", "label")],
-                                 by = "class")
+      roc_df <- dplyr::left_join(roc_df, auc_labels[, c("class", "label")], by = "class")
 
-      ggplot2::ggplot(roc_df,
-                      ggplot2::aes(x = fpr, y = tpr, color = label)) +
+      ggplot2::ggplot(roc_df, ggplot2::aes(x = fpr, y = tpr, color = label)) +
         ggplot2::geom_line(linewidth = 1.1) +
         ggplot2::geom_abline(slope = 1, intercept = 0,
-                             linetype = "dashed", color = "grey60") +
+                            linetype = "dashed", color = "grey60") +
         ggplot2::scale_x_continuous(limits = c(0, 1),
                                     labels = scales::percent_format()) +
         ggplot2::scale_y_continuous(limits = c(0, 1),
                                     labels = scales::percent_format()) +
-        ggplot2::labs(title = "One-vs-All ROC Curves",
-                      x = "False Positive Rate",
-                      y = "True Positive Rate",
-                      color = NULL) +
+        ggplot2::labs(
+          title = "One-vs-All ROC Curves",
+          x = "False Positive Rate",
+          y = "True Positive Rate",
+          color = NULL
+        ) +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(
-          plot.title   = ggplot2::element_text(face = "bold", hjust = 0.5),
+          plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
           legend.position = "bottom"
         )
     })
-
   })
 }
