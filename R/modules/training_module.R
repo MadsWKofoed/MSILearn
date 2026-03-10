@@ -589,8 +589,8 @@ training_module_server <- function(id) {
           fluidRow(
             column(1),
             column(
-              10,
-              plotOutput(ns("roc_plot"), height = "520px")
+              8,
+              plotOutput(ns("roc_plot"), height = "650px")
             ),
             column(1)
           )
