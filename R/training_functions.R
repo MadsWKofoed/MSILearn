@@ -194,8 +194,8 @@ train_ranger_from_dataset <- function(
 
 
   # ── 4. Evaluate on test set ───────────────────────────────────────
-  preds <- predict(fit, test_X)
-  probs <- predict(fit, test_X, type = "prob")
+  preds <- predict(fit, newdata = test_X)
+  probs <- predict(fit, newdata = test_X, type = "prob")
 
 
   # ── 5. Compute metrics ────────────────────────────────────────────
