@@ -666,10 +666,14 @@ training_module_server <- function(id) {
       }))
       req(!is.null(roc_df) && nrow(roc_df) > 0)
 
-      # AUC labels for legend
-      auc_labels <- unique(roc_df[, c("class", "auc")])
-      auc_labels$label <- sprintf("%s (AUC = %.3f)", auc_labels$class, auc_labels$auc)
-      roc_df <- merge(roc_df, auc_labels[, c("class", "label")], by = "class")
+      # AUC labels for legend — aggregate first to guarantee one row per class
+      auc_labels <- roc_df |>
+        dplyr::group_by(class) |>
+        dplyr::summarise(auc = dplyr::first(auc), .groups = "drop") |>
+        dplyr::mutate(label = sprintf("%s (AUC = %.3f)", class, auc))
+
+      roc_df <- dplyr::left_join(roc_df, auc_labels[, c("class", "label")],
+                                 by = "class")
 
       ggplot2::ggplot(roc_df,
                       ggplot2::aes(x = fpr, y = tpr, color = label)) +
