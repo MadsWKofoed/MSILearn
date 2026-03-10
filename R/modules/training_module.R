@@ -707,33 +707,40 @@ training_module_server <- function(id) {
 
       roc_df <- dplyr::left_join(roc_df, auc_labels[, c("class", "label")], by = "class")
 
-      ggplot(roc_df, aes(x = fpr, y = tpr, color = label)) +
-        geom_line(linewidth = 1.1) +
-        geom_abline(
+      n_classes <- length(unique(roc_df$class))
+      legend_nrow <- ceiling(n_classes / 3)
+
+      ggplot2::ggplot(roc_df, ggplot2::aes(x = fpr, y = tpr, color = label)) +
+        ggplot2::geom_line(linewidth = 1.1) +
+        ggplot2::geom_abline(
           slope = 1,
           intercept = 0,
           linetype = "dashed",
           color = "grey60"
         ) +
-        scale_x_continuous(
+        ggplot2::scale_x_continuous(
           limits = c(0, 1),
           labels = scales::percent_format()
         ) +
-        scale_y_continuous(
+        ggplot2::scale_y_continuous(
           limits = c(0, 1),
           labels = scales::percent_format()
         ) +
-        labs(
+        ggplot2::labs(
           title = "One-vs-All ROC Curves",
           x = "False Positive Rate",
           y = "True Positive Rate",
           color = NULL
         ) +
-        guides(color = guide_legend(ncol = 3)) +  
-        theme_minimal(base_size = 13) +
-        theme(
-          plot.title = element_text(face = "bold", hjust = 0.5),
-          legend.position = "bottom"
+        ggplot2::guides(
+          color = ggplot2::guide_legend(nrow = legend_nrow, byrow = TRUE)
+        ) +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+          legend.position = "bottom",
+          legend.text = ggplot2::element_text(size = 10),
+          legend.key.width = grid::unit(1.2, "cm")
         )
     })
   })
