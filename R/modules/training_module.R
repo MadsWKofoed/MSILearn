@@ -78,6 +78,8 @@ training_module_ui <- function(id) {
 training_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
 
+    ns <- session$ns
+
     log_val        <- reactiveVal("")
     last_run_id    <- reactiveVal(NULL)
     selected_run_id <- reactiveVal(NULL)
