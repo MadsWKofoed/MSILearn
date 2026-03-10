@@ -559,28 +559,41 @@ training_module_server <- function(id) {
         tags$div(
           style="max-width:1100px; margin:auto;",
 
+          tags$div(
+            style="margin-bottom:10px;",
+            tags$h4(
+              "Confusion Matrix",
+              style="font-weight:600; margin-bottom:6px;"
+            )
+          ),
+
           fluidRow(
             column(3),
             column(
               6,
-              tags$h6(tags$b("Confusion Matrix")),
-              plotOutput(ns("cm_plot"), height = "300px")
+              plotOutput(ns("cm_plot"), height = "240px")
             ),
-            column(2)
+            column(3)
           ),
 
           tags$br(),
+
+          tags$div(
+            style="margin-bottom:10px;",
+            tags$h4(
+              "ROC Curves",
+              style="font-weight:600; margin-bottom:6px;"
+            )
+          ),
 
           fluidRow(
             column(1),
             column(
               10,
-              tags$h6(tags$b("ROC Curves")),
-              plotOutput(ns("roc_plot"), height = "700px")
+              plotOutput(ns("roc_plot"), height = "520px")
             ),
             column(1)
           )
-
         )
       )
     })
