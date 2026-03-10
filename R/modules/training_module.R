@@ -560,9 +560,9 @@ training_module_server <- function(id) {
           style="max-width:1100px; margin:auto;",
 
           fluidRow(
-            column(2),
+            column(3),
             column(
-              8,
+              6,
               tags$h6(tags$b("Confusion Matrix")),
               plotOutput(ns("cm_plot"), height = "300px")
             ),
@@ -622,8 +622,7 @@ training_module_server <- function(id) {
         ggplot2::scale_color_identity() +
         ggplot2::scale_fill_gradient(low = "white", high = "navy",
                                      name = "Relative\nFreq") +
-        ggplot2::labs(title = "Confusion Matrix (relative frequency)",
-                      x = "Predicted", y = "Actual") +
+        ggplot2::labs(x = "Predicted", y = "Actual") +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(
           axis.text.x  = ggplot2::element_text(face = "bold", size = 11),
@@ -729,7 +728,7 @@ training_module_server <- function(id) {
       legend_nrow <- ceiling(n_classes / 3)
 
       ggplot2::ggplot(roc_df, ggplot2::aes(x = fpr, y = tpr, color = label)) +
-        ggplot2::geom_line(linewidth = 1.1) +
+        ggplot2::geom_line(linewidth = 1.2) +
         ggplot2::geom_abline(
           slope = 1,
           intercept = 0,
@@ -745,20 +744,26 @@ training_module_server <- function(id) {
           labels = scales::percent_format()
         ) +
         ggplot2::labs(
-          title = "One-vs-All ROC Curves",
           x = "False Positive Rate",
           y = "True Positive Rate",
           color = NULL
         ) +
         ggplot2::guides(
-          color = ggplot2::guide_legend(nrow = legend_nrow, byrow = TRUE)
+          color = ggplot2::guide_legend(
+            nrow = legend_nrow,
+            byrow = TRUE
+          )
         ) +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(
-          plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
           legend.position = "bottom",
-          legend.text = ggplot2::element_text(size = 10),
-          legend.key.width = grid::unit(1.2, "cm")
+          legend.text = ggplot2::element_text(size = 13),
+          legend.title = ggplot2::element_blank(),
+          legend.key.width = grid::unit(1.6, "cm"),
+          legend.key.height = grid::unit(0.7, "cm"),
+          axis.title = ggplot2::element_text(size = 13),
+          axis.text = ggplot2::element_text(size = 11),
+          plot.margin = ggplot2::margin(10, 15, 10, 15)
         )
     })
   })
