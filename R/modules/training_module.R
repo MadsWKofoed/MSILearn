@@ -564,7 +564,7 @@ training_module_server <- function(id) {
             column(
               8,
               tags$h6(tags$b("Confusion Matrix")),
-              plotOutput(ns("cm_plot"), height = "320px")
+              plotOutput(ns("cm_plot"), height = "300px")
             ),
             column(2)
           ),
@@ -576,7 +576,7 @@ training_module_server <- function(id) {
             column(
               10,
               tags$h6(tags$b("ROC Curves")),
-              plotOutput(ns("roc_plot"), height = "800px")
+              plotOutput(ns("roc_plot"), height = "700px")
             ),
             column(1)
           )
