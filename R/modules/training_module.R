@@ -416,38 +416,24 @@ training_module_server <- function(id) {
       if (!is.null(rid) && nzchar(rid)) selected_run_id(rid)
     })
 
+    # ── Shared helper (used by run_details_ui, cm_plot, roc_plot) ─────────
+    extract_subdoc <- function(row, field) {
+      x <- row[[field]]
+      if (is.character(x) && length(x) == 1 && grepl("^\\s*\\{", x)) {
+        return(jsonlite::fromJSON(x, simplifyVector = TRUE))
+      }
+      if (is.null(x)) return(list())
+      if (is.data.frame(x)) return(as.list(x[1, , drop = FALSE]))
+      if (is.list(x) && length(x) == 1 && is.list(x[[1]])) return(x[[1]])
+      if (is.list(x)) return(x)
+      list(value = x)
+    }
+
     # ── Run details panel ─────────────────────────────────────────────────
     output$run_details_ui <- renderUI({
       rid <- selected_run_id()
       if (is.null(rid) || !nzchar(rid)) {
         return(tags$p(style="color:#888", "Click a run to see details."))
-      }
-      
-      extract_subdoc <- function(row, field) {
-        x <- row[[field]]
-
-        # Case 0: JSON string (character) -> parse
-        if (is.character(x) && length(x) == 1 && grepl("^\\s*\\{", x)) {
-          return(jsonlite::fromJSON(x, simplifyVector = TRUE))
-        }
-
-        if (is.null(x)) return(list())
-
-        # Case 1: mongolite har lavet det til en data.frame (kolonner = keys)
-        if (is.data.frame(x)) {
-          return(as.list(x[1, , drop = FALSE]))
-        }
-
-        # Case 2: list-column med præcis 1 element (som er en list)
-        if (is.list(x) && length(x) == 1 && is.list(x[[1]])) {
-          return(x[[1]])
-        }
-
-        # Case 3: allerede en list (sjældnere)
-        if (is.list(x)) return(x)
-
-        # fallback: atomic -> pak ind
-        list(value = x)
       }
       
       row <- get_model_run(rid)
@@ -563,8 +549,128 @@ training_module_server <- function(id) {
           )
         ),
         tags$h6(tags$b("Per-Class Metrics (Test Set)")),
-        perclass_tbl
+        perclass_tbl,
+
+        tags$hr(),
+        fluidRow(
+          column(6,
+            tags$h6(tags$b("Confusion Matrix")),
+            plotOutput(ns("cm_plot"), height = "340px")
+          ),
+          column(6,
+            tags$h6(tags$b("ROC Curves")),
+            plotOutput(ns("roc_plot"), height = "340px")
+          )
+        )
       )
     })
+
+        # ── Confusion matrix plot ─────────────────────────────────────────────
+    output$cm_plot <- renderPlot({
+      rid <- selected_run_id()
+      req(rid, nzchar(rid))
+      row <- get_model_run(rid)
+      req(!is.null(row) && nrow(row) > 0)
+
+      m <- extract_subdoc(row, "metrics")
+      if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
+
+      cm_raw <- m[["cm_table"]]
+      if (is.null(cm_raw)) return(NULL)
+
+      # Unpack all nesting layers mongolite may introduce
+      cm_df <- cm_raw
+      while (is.list(cm_df) && !is.data.frame(cm_df)) cm_df <- cm_df[[1]]
+      req(is.data.frame(cm_df))
+
+      # Recompute Rel_Freq in case it was lost during serialisation
+      if (!"Rel_Freq" %in% names(cm_df)) {
+        cm_df <- cm_df |>
+          dplyr::group_by(Reference) |>
+          dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
+          dplyr::ungroup()
+      }
+      cm_df$Text_Color <- ifelse(cm_df$Rel_Freq > 0.5, "white", "black")
+
+      ggplot2::ggplot(cm_df,
+                      ggplot2::aes(x = Prediction, y = Reference, fill = Rel_Freq)) +
+        ggplot2::geom_tile(color = "white", linewidth = 0.6) +
+        ggplot2::geom_text(
+          ggplot2::aes(label = sprintf("%.3f", Rel_Freq), color = Text_Color),
+          size = 5, fontface = "bold", show.legend = FALSE
+        ) +
+        ggplot2::scale_color_identity() +
+        ggplot2::scale_fill_gradient(low = "white", high = "navy",
+                                     name = "Relative\nFreq") +
+        ggplot2::labs(title = "Confusion Matrix (relative frequency)",
+                      x = "Predicted", y = "Actual") +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          axis.text.x  = ggplot2::element_text(face = "bold", size = 11),
+          axis.text.y  = ggplot2::element_text(face = "bold", size = 11),
+          plot.title   = ggplot2::element_text(face = "bold", hjust = 0.5),
+          panel.grid   = ggplot2::element_blank()
+        )
+    })
+
+    # ── ROC curve plot ────────────────────────────────────────────────────
+    output$roc_plot <- renderPlot({
+      rid <- selected_run_id()
+      req(rid, nzchar(rid))
+      row <- get_model_run(rid)
+      req(!is.null(row) && nrow(row) > 0)
+
+      m <- extract_subdoc(row, "metrics")
+      if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
+
+      roc_raw <- m[["roc_data"]]
+      if (is.null(roc_raw)) return(NULL)
+
+      # Unpack all nesting layers
+      roc_list <- roc_raw
+      while (is.list(roc_list) && !is.list(roc_list[[1]])) roc_list <- roc_list[[1]]
+      # If mongolite flattened into a data.frame, convert back to list of lists
+      if (is.data.frame(roc_list)) {
+        roc_list <- lapply(seq_len(nrow(roc_list)), function(i) as.list(roc_list[i, ]))
+      }
+
+      # Build long data.frame from stored sensitivities/specificities
+      roc_df <- do.call(rbind, lapply(roc_list, function(r) {
+        if (length(r$sensitivities) == 0) return(NULL)
+        data.frame(
+          class       = r$class,
+          fpr         = 1 - r$specificities,
+          tpr         = r$sensitivities,
+          auc         = r$auc,
+          stringsAsFactors = FALSE
+        )
+      }))
+      req(!is.null(roc_df) && nrow(roc_df) > 0)
+
+      # AUC labels for legend
+      auc_labels <- unique(roc_df[, c("class", "auc")])
+      auc_labels$label <- sprintf("%s (AUC = %.3f)", auc_labels$class, auc_labels$auc)
+      roc_df <- merge(roc_df, auc_labels[, c("class", "label")], by = "class")
+
+      ggplot2::ggplot(roc_df,
+                      ggplot2::aes(x = fpr, y = tpr, color = label)) +
+        ggplot2::geom_line(linewidth = 1.1) +
+        ggplot2::geom_abline(slope = 1, intercept = 0,
+                             linetype = "dashed", color = "grey60") +
+        ggplot2::scale_x_continuous(limits = c(0, 1),
+                                    labels = scales::percent_format()) +
+        ggplot2::scale_y_continuous(limits = c(0, 1),
+                                    labels = scales::percent_format()) +
+        ggplot2::labs(title = "One-vs-All ROC Curves",
+                      x = "False Positive Rate",
+                      y = "True Positive Rate",
+                      color = NULL) +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          plot.title   = ggplot2::element_text(face = "bold", hjust = 0.5),
+          legend.position = "bottom"
+        )
+    })
+
   })
 }

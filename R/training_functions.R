@@ -166,6 +166,38 @@ train_ranger_from_dataset <- function(
     }
   }
 
+  # ── NEW: Confusion matrix table (for heatmap) ────────────────────────────
+  cm_df <- as.data.frame(cm$table)
+  # Compute relative frequencies per Reference class
+  cm_df <- cm_df |>
+    dplyr::group_by(Reference) |>
+    dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
+    dplyr::ungroup()
+  metrics_scalar[["cm_table"]] <- list(cm_df)
+
+  # ── NEW: ROC data (one-vs-all per class) ─────────────────────────────────
+  if (requireNamespace("pROC", quietly = TRUE)) {
+    probs <- predict(fit, newdata = test_X, type = "prob")
+    class_levels <- levels(test_y)
+    roc_data <- lapply(class_levels, function(cls) {
+      binary <- as.integer(test_y == cls)
+      prob   <- probs[[cls]]
+      tryCatch({
+        r   <- pROC::roc(binary, prob, quiet = TRUE)
+        auc <- as.numeric(pROC::auc(r))
+        list(
+          class       = cls,
+          auc         = auc,
+          sensitivities = as.numeric(r$sensitivities),
+          specificities = as.numeric(r$specificities)
+        )
+      }, error = function(e) list(class = cls, auc = NA_real_,
+                                  sensitivities = numeric(0),
+                                  specificities = numeric(0)))
+    })
+    metrics_scalar[["roc_data"]] <- list(roc_data)
+  }
+
   message("[train] Test accuracy: ", round(metrics_scalar$test_accuracy, 4),
           " | Kappa: ", round(metrics_scalar$test_kappa, 4))
 
