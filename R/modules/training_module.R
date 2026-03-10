@@ -571,7 +571,7 @@ training_module_server <- function(id) {
             column(3),
             column(
               6,
-              plotOutput(ns("cm_plot"), height = "240px")
+              plotOutput(ns("cm_plot"), height = "300px")
             ),
             column(3)
           ),
@@ -587,12 +587,12 @@ training_module_server <- function(id) {
           ),
 
           fluidRow(
-            column(1),
+            column(2),
             column(
               8,
               plotOutput(ns("roc_plot"), height = "650px")
             ),
-            column(1)
+            column(2)
           )
         )
       )
