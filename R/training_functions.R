@@ -214,15 +214,18 @@ message("[train] Preparing metrics...")
 
 
   # ── 6. Save model run ─────────────────────────────────────────────
-    run_id <- save_model_run(
-      dataset_id   = dataset_id,
-      model_type   = "ranger",
-      hyperparams  = hyperparams,
-      metrics      = metrics_scalar,
-      model_obj    = fit,
-      db           = db,
-      url          = url
-    )
+  run_id <- save_model_run(
+    dataset_id   = dataset_id,
+    model_type   = "ranger",
+    hyperparams  = hyperparams,
+    metrics      = list(
+      test_accuracy = test_accuracy,
+      test_kappa    = test_kappa
+    ),
+    model_obj    = fit,
+    db           = db,
+    url          = url
+  )
 
   message("[train] Model stored with run_id: ", run_id)
 
