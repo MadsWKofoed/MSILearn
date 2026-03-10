@@ -53,17 +53,23 @@ train_ranger_from_dataset <- function(
     num_trees      = 500L,
     cv_folds       = 10L,
     seed           = 1234L,
+    workers        = NULL,
+    num_threads    = 2L,
     db             = DB_NAME,
     url            = MONGO_URL
 ) {
-  # ── 0.  Validate required packages ──────────────────────────────────────
+
   stopifnot(
-    requireNamespace("caret",  quietly = TRUE),
-    requireNamespace("ranger", quietly = TRUE)
+    requireNamespace("caret", quietly = TRUE),
+    requireNamespace("ranger", quietly = TRUE),
+    requireNamespace("parallel", quietly = TRUE),
+    requireNamespace("doParallel", quietly = TRUE),
+    requireNamespace("foreach", quietly = TRUE)
   )
 
-  # ── 1.  Load data via the frozen dataset snapshot ────────────────────────
+  # ── 1. Load dataset ───────────────────────────────────────────────
   message("[train] Loading dataset: ", dataset_id)
+
   data <- load_dataset_for_training(dataset_id, db, url)
 
   train_X <- data$train_X
@@ -76,22 +82,71 @@ train_ranger_from_dataset <- function(
           " | Features: ", ncol(train_X),
           " | Classes: ", nlevels(train_y))
 
-  # ── 2.  Class weights ────────────────────────────────────────────────────
   set.seed(seed)
-  cw   <- compute_class_weights(train_y)
+
+  # ── 2. Compute class weights ──────────────────────────────────────
+  cw    <- compute_class_weights(train_y)
   obs_w <- observation_weights_from_labels(train_y, cw)
 
   message("[train] Class weights: ",
-          paste(names(cw), round(cw, 4), sep = "=", collapse = ", "))
+          paste(names(cw), round(cw, 4), sep="=", collapse=", "))
 
-  # ── 3.  Build hyperparameter grid and trainControl ───────────────────────
+
+  # ── 2b. Setup parallel backend for CV ─────────────────────────────
+  cl <- NULL
+  used_parallel <- FALSE
+
+  if (is.null(workers)) {
+    workers <- min(as.integer(cv_folds), 15L)
+  } else {
+    workers <- as.integer(workers)
+  }
+
+  num_threads <- as.integer(num_threads)
+
+  if (cv_folds > 1L && workers > 1L) {
+
+    cl <- parallel::makePSOCKcluster(workers)
+    doParallel::registerDoParallel(cl)
+
+    used_parallel <- TRUE
+
+    message("[train] Parallel CV enabled: workers=",
+            workers,
+            " | ranger num.threads=",
+            num_threads)
+
+  } else {
+
+    message("[train] Parallel CV disabled | ranger num.threads=",
+            num_threads)
+
+  }
+
+  on.exit({
+
+    if (!is.null(cl)) {
+      try(parallel::stopCluster(cl), silent = TRUE)
+    }
+
+    if (used_parallel) {
+      try(foreach::registerDoSEQ(), silent = TRUE)
+    }
+
+  }, add = TRUE)
+
+
+  # ── 3. Train model ─────────────────────────────────────────────────
+
   hyperparams <- list(
     mtry          = as.integer(mtry),
     splitrule     = splitrule,
     min_node_size = as.integer(min_node_size),
     num_trees     = as.integer(num_trees),
     cv_folds      = as.integer(cv_folds),
-    seed          = as.integer(seed)
+    seed          = as.integer(seed),
+    workers       = as.integer(workers),
+    num_threads   = as.integer(num_threads)
   )
 
   tune_grid <- expand.grid(
@@ -101,119 +156,71 @@ train_ranger_from_dataset <- function(
   )
 
   ctrl <- if (cv_folds > 1L) {
+
     caret::trainControl(
       method          = "cv",
       number          = cv_folds,
       classProbs      = TRUE,
       summaryFunction = caret::multiClassSummary,
-      allowParallel   = TRUE
+      allowParallel   = workers > 1L
     )
+
   } else {
+
     caret::trainControl(
       method     = "none",
       classProbs = TRUE
     )
+
   }
 
-  # ── 4.  Train ────────────────────────────────────────────────────────────
   message("[train] Fitting ranger (num.trees=", num_trees,
-          ", cv_folds=", cv_folds, ")...")
+          ", cv_folds=", cv_folds,
+          ", workers=", workers,
+          ", num.threads=", num_threads, ")...")
+
   set.seed(seed)
 
   fit <- caret::train(
-    x         = train_X,
-    y         = train_y,
-    method    = "ranger",
-    trControl = ctrl,
-    tuneGrid  = tune_grid,
-    num.trees = num_trees,
-    weights   = obs_w
+    x            = train_X,
+    y            = train_y,
+    method       = "ranger",
+    trControl    = ctrl,
+    tuneGrid     = tune_grid,
+    num.trees    = num_trees,
+    weights      = obs_w,
+    num.threads  = num_threads
   )
 
-  # ── 5.  Evaluate on held-out test set ────────────────────────────────────
-  preds <- predict(fit, newdata = test_X)
-  cm    <- caret::confusionMatrix(preds, test_y)
 
-  metrics_scalar <- list(
-    # Test set
-    test_accuracy = as.numeric(cm$overall["Accuracy"]),
-    test_kappa    = as.numeric(cm$overall["Kappa"]),
-    test_acc_lower = as.numeric(cm$overall["AccuracyLower"]),
-    test_acc_upper = as.numeric(cm$overall["AccuracyUpper"]),
-    n_test        = nrow(test_X),
-    n_train       = nrow(train_X),
-    n_classes     = nlevels(train_y),
-    n_features    = ncol(train_X)
-  )
+  # ── 4. Evaluate on test set ───────────────────────────────────────
+  preds <- predict(fit, test_X)
+  probs <- predict(fit, test_X, type = "prob")
 
-  # CV metrics
-  if (cv_folds > 1L) {
-    best_row <- fit$results[which.max(fit$results$Accuracy), ]
-    metrics_scalar$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
-    metrics_scalar$cv_mean_kappa    <- as.numeric(best_row$Kappa)
-    metrics_scalar$cv_mean_f1       <- as.numeric(best_row$Mean_F1)
-    metrics_scalar$cv_acc_sd        <- as.numeric(best_row$AccuracySD)
-  }
 
-  # Per-class stats — one scalar per class×metric
-  bc <- as.data.frame(cm$byClass)
-  for (col in colnames(bc)) {
-    for (cls in rownames(bc)) {
-      key <- paste0("byclass_",
-                    gsub("[^A-Za-z0-9]", "_", col), "__",
-                    gsub("[^A-Za-z0-9]", "_", gsub("^Class: ", "", cls)))
-      metrics_scalar[[key]] <- as.numeric(bc[cls, col])
-    }
-  }
+  # ── 5. Compute metrics ────────────────────────────────────────────
+  cm <- caret::confusionMatrix(preds, test_y)
 
-  # ── NEW: Confusion matrix table (for heatmap) ────────────────────────────
-  cm_df <- as.data.frame(cm$table)
-  # Compute relative frequencies per Reference class
-  cm_df <- cm_df |>
-    dplyr::group_by(Reference) |>
-    dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
-    dplyr::ungroup()
-  metrics_scalar[["cm_table"]] <- list(cm_df)
+  test_accuracy <- unname(cm$overall["Accuracy"])
+  test_kappa    <- unname(cm$overall["Kappa"])
 
-  # ── NEW: ROC data (one-vs-all per class) ─────────────────────────────────
-  if (requireNamespace("pROC", quietly = TRUE)) {
-    probs <- predict(fit, newdata = test_X, type = "prob")
-    class_levels <- levels(test_y)
-    roc_data <- lapply(class_levels, function(cls) {
-      binary <- as.integer(test_y == cls)
-      prob   <- probs[[cls]]
-      tryCatch({
-        r   <- pROC::roc(binary, prob, quiet = TRUE)
-        auc <- as.numeric(pROC::auc(r))
-        list(
-          class       = cls,
-          auc         = auc,
-          sensitivities = as.numeric(r$sensitivities),
-          specificities = as.numeric(r$specificities)
-        )
-      }, error = function(e) list(class = cls, auc = NA_real_,
-                                  sensitivities = numeric(0),
-                                  specificities = numeric(0)))
-    })
-    metrics_scalar[["roc_data"]] <- list(roc_data)
-  }
 
-  message("[train] Test accuracy: ", round(metrics_scalar$test_accuracy, 4),
-          " | Kappa: ", round(metrics_scalar$test_kappa, 4))
-
-  # ── 6.  Persist run ──────────────────────────────────────────────────────
+  # ── 6. Save model run ─────────────────────────────────────────────
   run_id <- save_model_run(
-    dataset_id  = dataset_id,
-    model_type  = "ranger",
-    hyperparams = hyperparams,
-    metrics     = metrics_scalar,
-    model_obj   = fit,
-    db          = db,
-    url         = url
+    dataset_id   = dataset_id,
+    model        = fit,
+    hyperparams  = hyperparams,
+    metrics      = list(
+      test_accuracy = test_accuracy,
+      test_kappa    = test_kappa
+    ),
+    db            = db,
+    url           = url
   )
 
-  message("[train] Done. model_run_id: ", run_id)
-  invisible(run_id)
+  message("[train] Model stored with run_id: ", run_id)
+
+  return(run_id)
 }
 
 
