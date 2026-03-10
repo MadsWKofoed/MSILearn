@@ -191,21 +191,30 @@ train_ranger_from_dataset <- function(
     weights      = obs_w,
     num.threads  = num_threads
   )
-
+message("[train] Model fitting finished.")
+message("[train] Starting prediction on held-out test set...")
 
   # ── 4. Evaluate on test set ───────────────────────────────────────
   preds <- predict(fit, newdata = test_X)
-  probs <- predict(fit, newdata = test_X, type = "prob")
 
+  message("[train] Class prediction finished.")
+message("[train] Starting probability prediction...")
+
+  probs <- predict(fit, newdata = test_X, type = "prob")
+message("[train] Probability prediction finished.")
+message("[train] Building confusion matrix...")
 
   # ── 5. Compute metrics ────────────────────────────────────────────
   cm <- caret::confusionMatrix(preds, test_y)
+  message("[train] Confusion matrix finished.")
+message("[train] Preparing metrics...")
 
   test_accuracy <- unname(cm$overall["Accuracy"])
   test_kappa    <- unname(cm$overall["Kappa"])
 
 
   # ── 6. Save model run ─────────────────────────────────────────────
+  message("[train] Saving model run...")
   run_id <- save_model_run(
     dataset_id   = dataset_id,
     model        = fit,
