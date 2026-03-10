@@ -204,32 +204,100 @@ message("[train] Starting probability prediction...")
 message("[train] Probability prediction finished.")
 message("[train] Building confusion matrix...")
 
-  # ── 5. Compute metrics ────────────────────────────────────────────
-  cm <- caret::confusionMatrix(preds, test_y)
-  message("[train] Confusion matrix finished.")
-message("[train] Preparing metrics...")
 
-  test_accuracy <- unname(cm$overall["Accuracy"])
-  test_kappa    <- unname(cm$overall["Kappa"])
+  # ── 5.  Evaluate on held-out test set ────────────────────────────────────
+  preds <- predict(fit, newdata = test_X)
+  cm    <- caret::confusionMatrix(preds, test_y)
 
-
-  # ── 6. Save model run ─────────────────────────────────────────────
-  run_id <- save_model_run(
-    dataset_id   = dataset_id,
-    model_type   = "ranger",
-    hyperparams  = hyperparams,
-    metrics      = list(
-      test_accuracy = test_accuracy,
-      test_kappa    = test_kappa
-    ),
-    model_obj    = fit,
-    db           = db,
-    url          = url
+  metrics_scalar <- list(
+    # Test set
+    test_accuracy  = as.numeric(cm$overall["Accuracy"]),
+    test_kappa     = as.numeric(cm$overall["Kappa"]),
+    test_acc_lower = as.numeric(cm$overall["AccuracyLower"]),
+    test_acc_upper = as.numeric(cm$overall["AccuracyUpper"]),
+    n_test         = nrow(test_X),
+    n_train        = nrow(train_X),
+    n_classes      = nlevels(train_y),
+    n_features     = ncol(train_X)
   )
 
-  message("[train] Model stored with run_id: ", run_id)
+  # CV metrics
+  if (cv_folds > 1L) {
+    best_row <- fit$results[which.max(fit$results$Accuracy), ]
+    metrics_scalar$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
+    metrics_scalar$cv_mean_kappa    <- as.numeric(best_row$Kappa)
+    metrics_scalar$cv_mean_f1       <- as.numeric(best_row$Mean_F1)
+    metrics_scalar$cv_acc_sd        <- as.numeric(best_row$AccuracySD)
+  }
 
-  return(run_id)
+  # Per-class stats — one scalar per class×metric
+  bc <- as.data.frame(cm$byClass)
+  for (col in colnames(bc)) {
+    for (cls in rownames(bc)) {
+      key <- paste0(
+        "byclass_",
+        gsub("[^A-Za-z0-9]", "_", col), "__",
+        gsub("[^A-Za-z0-9]", "_", gsub("^Class: ", "", cls))
+      )
+      metrics_scalar[[key]] <- as.numeric(bc[cls, col])
+    }
+  }
+
+  # Confusion matrix table
+  cm_df <- as.data.frame(cm$table) |>
+    dplyr::group_by(Reference) |>
+    dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
+    dplyr::ungroup()
+  metrics_scalar[["cm_table"]] <- list(cm_df)
+
+  # ROC data
+  if (requireNamespace("pROC", quietly = TRUE)) {
+    probs <- predict(fit, newdata = test_X, type = "prob")
+    class_levels <- levels(test_y)
+
+    roc_data <- lapply(class_levels, function(cls) {
+      binary <- as.integer(test_y == cls)
+      prob   <- probs[[cls]]
+
+      tryCatch({
+        r   <- pROC::roc(binary, prob, quiet = TRUE)
+        auc <- as.numeric(pROC::auc(r))
+        list(
+          class         = cls,
+          auc           = auc,
+          sensitivities = as.numeric(r$sensitivities),
+          specificities = as.numeric(r$specificities)
+        )
+      }, error = function(e) {
+        list(
+          class         = cls,
+          auc           = NA_real_,
+          sensitivities = numeric(0),
+          specificities = numeric(0)
+        )
+      })
+    })
+
+    metrics_scalar[["roc_data"]] <- list(roc_data)
+  }
+
+  message("[train] Test accuracy: ", round(metrics_scalar$test_accuracy, 4),
+          " | Kappa: ", round(metrics_scalar$test_kappa, 4))
+    
+  
+  # ── 6. Save model run ─────────────────────────────────────────────
+  run_id <- save_model_run(
+    dataset_id  = dataset_id,
+    model_type  = "ranger",
+    hyperparams = hyperparams,
+    metrics     = metrics_scalar,
+    model_obj   = fit,
+    db          = db,
+    url         = url
+  )
+
+  message("[train] Done. model_run_id: ", run_id)
+  invisible(run_id)
 }
 
 
