@@ -554,16 +554,14 @@ training_module_server <- function(id) {
         perclass_tbl,
 
         tags$hr(),
-        fluidRow(
-          column(6,
-            tags$h6(tags$b("Confusion Matrix")),
-            plotOutput(ns("cm_plot"), height = "340px")
-          ),
-          column(6,
-            tags$h6(tags$b("ROC Curves")),
-            plotOutput(ns("roc_plot"), height = "340px")
-          )
-        )
+
+        tags$h6(tags$b("Confusion Matrix")),
+        plotOutput(ns("cm_plot"), height = "300px"),
+
+        tags$br(),
+
+        tags$h6(tags$b("ROC Curves")),
+        plotOutput(ns("roc_plot"), height = "520px")
       )
     })
 
