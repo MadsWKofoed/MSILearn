@@ -242,10 +242,19 @@ prediction_module_server <- function(id) {
 
     output$prediction_plot <- renderPlot({
       res <- pred_res()
-      validate(need(!is.null(res), "Run a prediction to see the map."))
+
+      req(!is.null(res))
+      req(!is.null(res$prediction_df))
 
       df <- res$prediction_df
-      validate(need(nrow(df) > 0, "No predicted pixels available."))
+
+      validate(
+        need(is.data.frame(df), "No prediction yet."),
+        need(nrow(df) > 0, "No prediction yet."),
+        need("runNames" %in% names(df), "Prediction data missing runNames."),
+        need(all(c("x", "y", "Predicted") %in% names(df)),
+            "Prediction data missing required columns.")
+      )
 
       ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, fill = Predicted)) +
         ggplot2::geom_tile() +
