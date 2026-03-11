@@ -156,8 +156,8 @@ ui <- navbarPage(
   welcome_module_ui("welcome"),
   processing_module_ui("processing"),
   clustering_module_ui("clustering"),
-  prediction_module_ui("prediction"),
-  training_module_ui("training")
+  training_module_ui("training"),
+  prediction_module_ui("prediction")
 )
 
 
@@ -165,6 +165,6 @@ server <- function(input, output, session) {
   welcome_module_server("welcome")
   processing_module_server("processing")
   clustering_module_server("clustering")
-  prediction_module_server("prediction")
   training_module_server("training")
+  prediction_module_server("prediction")
 }
