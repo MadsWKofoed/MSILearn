@@ -11,8 +11,9 @@ list_all_model_runs <- function(db = DB_NAME, url = MONGO_URL) {
   )
 }
 
-get_reference_mz_values <- function(reference_name, db = DB_NAME, url = MONGO_URL) {
-  con <- mongolite::mongo(collection = "mz_references", db = db, url = url)
+get_reference_mz_values <- function(reference_name) {
+
+  con <- .con("mz_references", db = "reference_database", url = MONGO_URL)
 
   ref_doc <- con$find(
     query  = sprintf('{"reference_name": "%s"}', reference_name),
@@ -27,6 +28,7 @@ get_reference_mz_values <- function(reference_name, db = DB_NAME, url = MONGO_UR
   vals <- as.numeric(vals)
 
   vals <- vals[is.finite(vals)]
+
   if (length(vals) == 0) {
     stop("Reference list contains no valid m/z values: ", reference_name)
   }
