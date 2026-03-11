@@ -29,6 +29,37 @@ observation_weights_from_labels <- function(labels, class_weights) {
 
 
 # ---------------------------------------------------------------------------
+# Pixel-wise normalisation of feature matrices used for training/prediction.
+# Same methods as clustering: none / tic / median / rms
+# Rows = pixels, columns = mz features
+# ---------------------------------------------------------------------------
+normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms"),
+                                     na.rm = TRUE) {
+  method <- match.arg(method)
+
+  X <- as.matrix(X)
+  storage.mode(X) <- "numeric"
+
+  if (method == "none") return(X)
+
+  denom <- switch(
+    method,
+    tic    = rowSums(X, na.rm = na.rm),
+    median = apply(X, 1, median, na.rm = na.rm),
+    rms    = sqrt(rowMeans(X^2, na.rm = na.rm))
+  )
+
+  denom[!is.finite(denom) | denom == 0] <- NA_real_
+
+  X_norm <- sweep(X, 1, denom, "/")
+  X_norm[!is.finite(X_norm)] <- 0
+
+  colnames(X_norm) <- colnames(X)
+  rownames(X_norm) <- rownames(X)
+  X_norm
+}
+
+# ---------------------------------------------------------------------------
 # train_ranger_from_dataset()
 #
 # The one authorised entry point for training a Random Forest model.
@@ -47,6 +78,7 @@ observation_weights_from_labels <- function(labels, class_weights) {
 # ---------------------------------------------------------------------------
 train_ranger_from_dataset <- function(
     dataset_id,
+    normalize_method = c("none", "tic", "median", "rms"),
     mtry           = 31L,
     splitrule      = "gini",
     min_node_size  = 10L,
@@ -67,6 +99,8 @@ train_ranger_from_dataset <- function(
     requireNamespace("foreach", quietly = TRUE)
   )
 
+  normalize_method <- match.arg(normalize_method)
+
   # ── 1. Load dataset ───────────────────────────────────────────────
   message("[train] Loading dataset: ", dataset_id)
 
@@ -76,6 +110,10 @@ train_ranger_from_dataset <- function(
   train_y <- data$train_y
   test_X  <- data$test_X
   test_y  <- data$test_y
+
+  message("[train] Applying normalization: ", normalize_method)
+  train_X <- normalize_feature_matrix(train_X, normalize_method)
+  test_X  <- normalize_feature_matrix(test_X,  normalize_method)
 
   message("[train] Train pixels: ", nrow(train_X),
           " | Test pixels: ", nrow(test_X),
@@ -139,13 +177,17 @@ train_ranger_from_dataset <- function(
   # ── 3. Train model ─────────────────────────────────────────────────
 
   hyperparams <- list(
+    normalize_method = normalize_method,
     mtry          = as.integer(mtry),
     splitrule     = splitrule,
     min_node_size = as.integer(min_node_size),
     num_trees     = as.integer(num_trees),
     cv_folds      = as.integer(cv_folds),
     seed          = as.integer(seed),
-    workers       = as.integer(workers),
+    workers          = if (cv_folds > 1 && !is.null(workers))
+                        as.integer(workers)
+                      else
+                        NA_integer_,
     num_threads   = as.integer(num_threads)
   )
 

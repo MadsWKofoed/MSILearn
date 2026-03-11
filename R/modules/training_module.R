@@ -44,6 +44,17 @@ training_module_ui <- function(id) {
 
         hr(),
         h4("2. Hyperparameters"),
+        selectInput(
+          ns("normalize"),
+          "Normalisation",
+          choices = c(
+            "None"   = "none",
+            "TIC"    = "tic",
+            "Median" = "median",
+            "RMS"    = "rms"
+          ),
+          selected = "none"
+        ),
         numericInput(ns("mtry"),          "mtry",                value = 31,   min = 1),
         numericInput(ns("num_trees"),     "num.trees",           value = 500,  min = 10),
         numericInput(ns("min_node_size"), "min.node.size",       value = 10,   min = 1),
@@ -265,13 +276,14 @@ training_module_server <- function(id) {
 
       tryCatch({
         run_id <- train_ranger_from_dataset(
-          dataset_id    = dataset_id,
-          mtry          = input$mtry,
-          splitrule     = input$splitrule,
-          min_node_size = input$min_node_size,
-          num_trees     = input$num_trees,
-          cv_folds      = input$cv_folds,
-          seed          = input$seed
+          dataset_id        = dataset_id,
+          normalize_method  = input$normalize,
+          mtry              = input$mtry,
+          splitrule         = input$splitrule,
+          min_node_size     = input$min_node_size,
+          num_trees         = input$num_trees,
+          cv_folds          = input$cv_folds,
+          seed              = input$seed
         )
         last_run_id(run_id)
         add_log(paste0("\u2713 Training complete. model_run_id: ", run_id))
@@ -339,12 +351,14 @@ training_module_server <- function(id) {
 
       # Hyperparams kolonner
       if (is.data.frame(hp_obj)) {
+        norm  <- as.character(hp_obj$normalize_method %||% NA)
         mtry  <- as.character(hp_obj$mtry %||% NA)
         trees <- as.character(hp_obj$num_trees %||% NA)
         node  <- as.character(hp_obj$min_node_size %||% NA)
         rule  <- as.character(hp_obj$splitrule %||% NA)
         cv    <- as.character(hp_obj$cv_folds %||% NA)
       } else {
+        norm  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "normalize_method"), character(1))
         mtry  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "mtry"), character(1))
         trees <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "num_trees"), character(1))
         node  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "min_node_size"), character(1))
@@ -367,6 +381,7 @@ training_module_server <- function(id) {
         run_id_full = df_sorted[["_id"]],
         run_id      = substr(df_sorted[["_id"]], 1, 30),
         model_type  = df_sorted$model_type,
+        normalisation = norm,
         mtry        = mtry,
         trees       = trees,
         node        = node,
@@ -517,6 +532,7 @@ training_module_server <- function(id) {
               tags$h6(tags$b("Hyperparameters")),
               tags$table(class="table table-condensed", style="font-size:13px;",
                 tags$tr(tags$td("Model"), tags$td(first_chr(row$model_type))),
+                tags$tr(tags$td("Normalisation"), tags$td(first_chr(hp[["normalize_method"]]))),
                 tags$tr(tags$td("mtry"), tags$td(first_chr(hp[["mtry"]]))),
                 tags$tr(tags$td("num.trees"), tags$td(first_chr(hp[["num_trees"]]))),
                 tags$tr(tags$td("min.node.size"), tags$td(first_chr(hp[["min_node_size"]]))),
