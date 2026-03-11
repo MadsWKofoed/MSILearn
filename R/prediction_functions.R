@@ -13,7 +13,11 @@ list_all_model_runs <- function(db = DB_NAME, url = MONGO_URL) {
 
 get_reference_mz_values <- function(reference_name) {
 
-  con <- .con("mz_references", db = "reference_database", url = MONGO_URL)
+  con <- mongolite::mongo(
+    collection = "mz_references",
+    db  = "msi_project",
+    url = "mongodb://localhost:27018"
+  )
 
   ref_doc <- con$find(
     query  = sprintf('{"reference_name": "%s"}', reference_name),
@@ -24,9 +28,7 @@ get_reference_mz_values <- function(reference_name) {
     stop("Reference list not found: ", reference_name)
   }
 
-  vals <- unlist(ref_doc$mz_values[[1]])
-  vals <- as.numeric(vals)
-
+  vals <- as.numeric(unlist(ref_doc$mz_values[[1]]))
   vals <- vals[is.finite(vals)]
 
   if (length(vals) == 0) {
