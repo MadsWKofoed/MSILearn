@@ -99,8 +99,8 @@ processing_module_ui <- function(id) {
         )
       ),
 
-      # ── CENTRE: Log / status (3 / 12) ─────────────────────────────────
-      column(3,
+      # ── CENTRE: Log / status (4 / 12) ─────────────────────────────────
+      column(4,
         h4("Existing Artifacts"),
         p(tags$small("Artifacts for the current study + sample.
                       Processing is blocked for exact duplicate pipeline_ids.")),
@@ -115,8 +115,8 @@ processing_module_ui <- function(id) {
         verbatimTextOutput(ns("cache_status"))
       ),
 
-      # ── RIGHT: Plots (6 / 12) ──────────────────────────────────────────
-      column(6,
+      # ── RIGHT: Plots (5 / 12) ──────────────────────────────────────────
+      column(5,
         uiOutput(ns("pipeline_status")),
         wellPanel(
           h4("MSI Images – Top 3 m/z (by variance)"),
