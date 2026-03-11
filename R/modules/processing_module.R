@@ -350,7 +350,7 @@ processing_module_server <- function(id) {
       pipes <- lapply(arts$pipeline_id, function(pid) {
         tryCatch({
           p <- get_pipeline(pid)
-          pa <- p$params[[1]]
+          pa <- extract_params(p$params)
           data.frame(
             pipeline_id  = substr(pid, 1, 12),
             snr          = pa$snr       %||% NA,

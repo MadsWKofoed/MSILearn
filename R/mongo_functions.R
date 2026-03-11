@@ -1077,3 +1077,12 @@ get_model_run <- function(run_id,
   if (nrow(doc) == 0) return(NULL)
   doc[1, , drop = FALSE]
 }
+
+
+extract_params <- function(x) {
+  if (is.null(x)) return(list())
+  if (is.data.frame(x)) return(as.list(x[1, , drop = FALSE]))
+  if (is.list(x) && length(x) == 1 && is.list(x[[1]])) return(x[[1]])
+  if (is.list(x)) return(x)
+  list()
+}
