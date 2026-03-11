@@ -256,12 +256,20 @@ run_prediction_from_upload <- function(run_id,
 #
 # @return Factor of predicted class labels.
 # ---------------------------------------------------------------------------
+
 predict_from_model_run <- function(run_id, new_X, db = DB_NAME, url = MONGO_URL) {
   message("[predict] Loading model run: ", run_id)
   fit <- load_model_run(run_id, db, url)
 
-  # Guard: column alignment
-  train_cols <- setdiff(colnames(fit$trainingData), ".outcome")
+  if (!is.null(fit$coefnames)) {
+    train_cols <- fit$coefnames
+  } else {
+    train_cols <- setdiff(
+      colnames(fit$trainingData),
+      c(".outcome", ".weights", ".rowIndex")
+    )
+  }
+
   missing_cols <- setdiff(train_cols, colnames(new_X))
   extra_cols   <- setdiff(colnames(new_X), train_cols)
 
