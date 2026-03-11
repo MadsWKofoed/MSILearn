@@ -135,6 +135,7 @@ source("R/mongo_functions.R")     # all DB helpers (provenance API + legacy)
 source("R/clustering_functions.R")
 source("R/processing_functions.R")
 source("R/training_functions.R")
+source("R/prediction_functions.R")
 
 # Enforce schema indexes on startup (idempotent)
 tryCatch(
