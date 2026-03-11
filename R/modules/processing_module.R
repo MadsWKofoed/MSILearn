@@ -104,7 +104,7 @@ processing_module_ui <- function(id) {
         h4("Existing Artifacts"),
         p(tags$small("Artifacts for the current study + sample.
                       Processing is blocked for exact duplicate pipeline_ids.")),
-        tableOutput(ns("artifact_table")),
+        DT::DTOutput(ns("artifact_table")),
         actionButton(ns("refresh_artifacts"), "Refresh",
                      class = "btn-xs btn-default"),
         hr(),
@@ -337,36 +337,92 @@ processing_module_server <- function(id) {
     })
 
     # ── Artifact table for current study + sample ──────────────────────────
-    output$artifact_table <- renderTable({
+    output$artifact_table <- DT::renderDT({
       input$refresh_artifacts
       sid <- active_study_id()
-      if (is.null(sid)) return(data.frame(message = "No study selected"))
+      
+      if (is.null(sid)) {
+        return(
+          DT::datatable(
+            data.frame(message = "No study selected"),
+            rownames = FALSE,
+            options = list(dom = "t", paging = FALSE, searching = FALSE)
+          )
+        )
+      }
+      
       nm <- tryCatch(current_sample_name_resolved(), error = function(e) NULL)
-      if (is.null(nm)) return(data.frame(message = "No sample name"))
+      if (is.null(nm)) {
+        return(
+          DT::datatable(
+            data.frame(message = "No sample name"),
+            rownames = FALSE,
+            options = list(dom = "t", paging = FALSE, searching = FALSE)
+          )
+        )
+      }
+      
       sample_id <- get_sample_id(sid, nm)
-      arts <- query_artifacts(sample_id  = sample_id,
-                               stage_type = "binned_dataframe")
-      if (nrow(arts) == 0) return(data.frame(message = "No artifacts yet"))
+      arts <- query_artifacts(
+        sample_id  = sample_id,
+        stage_type = "binned_dataframe"
+      )
+      
+      if (nrow(arts) == 0) {
+        return(
+          DT::datatable(
+            data.frame(message = "No artifacts yet"),
+            rownames = FALSE,
+            options = list(dom = "t", paging = FALSE, searching = FALSE)
+          )
+        )
+      }
+      
       pipes <- lapply(arts$pipeline_id, function(pid) {
         tryCatch({
-          p <- get_pipeline(pid)
+          p  <- get_pipeline(pid)
           pa <- extract_params(p$params)
+          
           data.frame(
-            pipeline_id  = substr(pid, 1, 12),
-            snr          = pa$snr       %||% NA,
-            tolerance    = pa$tolerance %||% NA,
-            resolution   = pa$resolution %||% NA,
-            reference    = pa$reference_name %||% NA,
-            created_at   = arts$created_at[arts$pipeline_id == pid][1],
+            pipeline_id = substr(pid, 1, 12),
+            snr         = pa$snr %||% NA,
+            tolerance   = pa$tolerance %||% NA,
+            resolution  = pa$resolution %||% NA,
+            reference   = pa$reference_name %||% NA,
+            created_at  = arts$created_at[arts$pipeline_id == pid][1],
             stringsAsFactors = FALSE
           )
-        }, error = function(e) data.frame(pipeline_id = substr(pid,1,12),
-                                          snr=NA, tolerance=NA,
-                                          resolution=NA, reference=NA,
-                                          created_at=NA))
+        }, error = function(e) {
+          data.frame(
+            pipeline_id = substr(pid, 1, 12),
+            snr         = NA,
+            tolerance   = NA,
+            resolution  = NA,
+            reference   = NA,
+            created_at  = NA,
+            stringsAsFactors = FALSE
+          )
+        })
       })
-      do.call(rbind, pipes)
-    }, striped = TRUE, hover = TRUE, bordered = TRUE, na = "–")
+      
+      df <- do.call(rbind, pipes)
+      
+      DT::datatable(
+        df,
+        rownames = FALSE,
+        class = "compact stripe hover",
+        options = list(
+          scrollX = TRUE,
+          scrollY = "220px",
+          paging = FALSE,
+          searching = FALSE,
+          info = FALSE,
+          autoWidth = TRUE,
+          fixedHeader = TRUE,
+          dom = "t"
+        )
+      )
+    }, server = FALSE)
 
     # ── Clear cache ────────────────────────────────────────────────────────
     observeEvent(input$clear_cache, {
