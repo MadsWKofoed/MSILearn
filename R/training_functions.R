@@ -343,38 +343,3 @@ message("[train] Building confusion matrix...")
 }
 
 
-# ---------------------------------------------------------------------------
-# predict_from_model_run()
-#
-# Load a persisted model and predict on new features.
-# Feature matrix must come from an artifact loaded via pipeline_id,
-# NOT from ad-hoc file loading.
-#
-# @param run_id      model_run_id (from save_model_run / train_ranger_from_dataset).
-# @param new_X       Numeric matrix. Column names must match training features.
-#
-# @return Factor of predicted class labels.
-# ---------------------------------------------------------------------------
-predict_from_model_run <- function(run_id, new_X, db = DB_NAME, url = MONGO_URL) {
-  message("[predict] Loading model run: ", run_id)
-  fit <- load_model_run(run_id, db, url)
-
-  # Guard: column alignment
-  train_cols <- colnames(fit$trainingData)[-ncol(fit$trainingData)]   # caret adds .outcome
-  missing_cols <- setdiff(train_cols, colnames(new_X))
-  extra_cols   <- setdiff(colnames(new_X), train_cols)
-
-  if (length(missing_cols) > 0) {
-    stop("[predict] New data is missing columns present during training: ",
-         paste(missing_cols, collapse = ", "))
-  }
-  if (length(extra_cols) > 0) {
-    message("[predict] Extra columns in new_X will be dropped: ",
-            paste(extra_cols, collapse = ", "))
-    new_X <- new_X[, train_cols, drop = FALSE]
-  }
-
-  preds <- predict(fit, newdata = new_X)
-  message("[predict] Predicted ", length(preds), " pixels.")
-  preds
-}
