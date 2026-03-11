@@ -262,7 +262,7 @@ prediction_module_server <- function(id) {
         ggplot2::geom_tile() +
         ggplot2::scale_y_reverse() +
         ggplot2::coord_fixed() +
-        ggplot2::facet_wrap(~ runNames, scales = "free") +
+        ggplot2::facet_wrap(~ runNames) +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(
           legend.position = "bottom",
