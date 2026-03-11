@@ -280,4 +280,4 @@ predict_from_model_run <- function(run_id, new_X, db = DB_NAME, url = MONGO_URL)
   preds <- predict(fit, newdata = new_X)
   message("[predict] Predicted ", length(preds), " pixels.")
   preds
-}Moved 
+}
