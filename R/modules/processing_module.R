@@ -410,10 +410,10 @@ processing_module_server <- function(id) {
       DT::datatable(
         df,
         rownames = FALSE,
-        class = "compact stripe hover",
+        class = "display cell-border",
         options = list(
           scrollX = TRUE,
-          scrollY = "220px",
+          scrollY = "180px",
           paging = FALSE,
           searching = FALSE,
           info = FALSE,
