@@ -96,7 +96,7 @@ process_uploaded_data_for_prediction <- function(imzml_path,
   ref_name   <- as.character(first_scalar(pipeline_params$reference_name, ""))
 
   if (!nzchar(ref_name)) stop("Pipeline has no reference_name.")
-  ref_mz_values <- get_reference_mz_values(ref_name, db, url)
+  ref_mz_values <- get_reference_mz_values(ref_name)
 
   work_dir <- tempfile("prediction_run_")
   dir.create(work_dir, recursive = TRUE)
