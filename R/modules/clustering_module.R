@@ -266,7 +266,7 @@ clustering_module_server <- function(id) {
       if (!nzchar(pid %||% "")) return(NULL)
       tryCatch({
         meta   <- get_pipeline(pid)
-        params <- meta$params[[1]]
+        params <- extract_params(meta$params)
         tags$div(style = "font-family:monospace; font-size:11px; color:#555; word-break:break-all;",
           tags$b("Params: "),
           paste(names(params), unlist(params), sep = "=", collapse = ", ")
