@@ -4,7 +4,7 @@ options(shiny.maxRequestSize = 5000 * 1024^2)
 options(shiny.launch.browser = TRUE)
 
 # Parallel settings
-bp <- parallel::detectCores() - 1
+bp <- parallel::detectCores() - 22
 setCardinalParallel(workers = bp)
 
 # Custom CSS
