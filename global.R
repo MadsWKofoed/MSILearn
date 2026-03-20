@@ -7,13 +7,6 @@ options(shiny.launch.browser = TRUE)
 bp <- parallel::detectCores() - 1
 setCardinalParallel(workers = bp)
 
-# MongoDB connections
-msi_con <- mongo(
-  collection = "msi_data",
-  db = "MSI_database_test",  
-  url = "mongodb://localhost:27018"
-)
-
 # Custom CSS
 custom_css <- tags$style(HTML("
 .welcome-container{

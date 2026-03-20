@@ -128,10 +128,7 @@ get_pipeline <- function(pipeline_id, db = DB_NAME, url = MONGO_URL) {
   res
 }
 
-list_pipelines <- function(type = NULL, db = DB_NAME, url = MONGO_URL) {
-  q <- if (is.null(type)) "{}" else sprintf('{"type": "%s"}', type)
-  .con("pipelines", db, url)$find(q, fields = '{"name":1,"type":1,"code_version":1,"created_at":1}')
-}
+
 
 
 # ----------------------------------------------------------------------------
@@ -298,12 +295,6 @@ load_artifact_by_pipeline <- function(sample_id, stage_type, pipeline_id,
   .download_rds(res$gridfs_name[1], db, url)
 }
 
-#' Load an artifact by its _id.
-load_artifact_by_id <- function(artifact_id, db = DB_NAME, url = MONGO_URL) {
-  res <- .con("artifacts", db, url)$find(sprintf('{"_id": "%s"}', artifact_id))
-  if (nrow(res) == 0) stop("Artifact not found: ", artifact_id)
-  .download_rds(res$gridfs_name[1], db, url)
-}
 
 #' Query artifact metadata (returns data.frame of metadata rows, not the data).
 query_artifacts <- function(study_id = NULL, sample_id = NULL,
@@ -344,40 +335,6 @@ upsert_annotation_set <- function(study_id, name, label_schema,
   ann_id
 }
 
-#' Save pixel-level annotations for one sample.
-#' annotation_df must contain at least columns: x, y, Class.
-save_annotation <- function(annotation_df, sample_id, annotation_set_id,
-                            format = "dataframe_rds",
-                            db = DB_NAME, url = MONGO_URL) {
-  col   <- .con("annotations", db, url)
-  dup_q <- jsonlite::toJSON(
-    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
-    auto_unbox = TRUE
-  )
-  if (col$count(dup_q) > 0) {
-    stop("Annotation already exists for sample_id=", sample_id,
-         ", annotation_set_id=", annotation_set_id,
-         ". Delete the existing entry first.")
-  }
-
-  ann_doc_id <- digest::digest(
-    list(sample_id = sample_id, annotation_set_id = annotation_set_id),
-    algo = "sha256", serialize = TRUE
-  )
-  filename <- paste0(ann_doc_id, "_annotation.rds")
-  .upload_rds(annotation_df, filename, db, url)
-
-  .insert(col, list(
-    `_id`             = ann_doc_id,
-    sample_id         = sample_id,
-    annotation_set_id = annotation_set_id,
-    format            = format,
-    gridfs_name       = filename,
-    created_at        = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
-  ))
-  message("✓ Annotation saved: ", ann_doc_id)
-  invisible(ann_doc_id)
-}
 
 #' Load annotation data.frame by (sample_id, annotation_set_id). No fallback.
 load_annotation <- function(sample_id, annotation_set_id,
@@ -426,7 +383,7 @@ list_annotation_sets <- function(study_id, db = DB_NAME, url = MONGO_URL) {
 
 #' Save or REPLACE pixel-level annotations for one sample.
 #'
-#' Unlike save_annotation(), this function uses upsert semantics:
+#' This function uses upsert semantics:
 #' if an annotation already exists for (sample_id, annotation_set_id) it is
 #' deleted and re-written with the new data.  This allows the user to
 #' re-commit after re-labelling pixels without errors.
@@ -513,13 +470,7 @@ get_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
   list_samples(study_id, db, url)  # already returns a well-formed data.frame
 }
 
-#' Create (or idempotently retrieve) a sample and return its _id.
-create_sample <- function(study_id, sample_name,
-                          raw_refs         = list(),
-                          acquisition_meta = list(),
-                          db = DB_NAME, url = MONGO_URL) {
-  upsert_sample(study_id, sample_name, raw_refs, acquisition_meta, db, url)
-}
+
 
 #' Check whether a sample_name already exists within a study.
 sample_name_exists <- function(study_id, sample_name, db = DB_NAME, url = MONGO_URL) {
@@ -565,19 +516,6 @@ save_clustering_artifact <- function(clustered_df,
     stage_type  = "clustering_result",
     extra_meta  = list(input_artifact_id = input_artifact_id),
     db          = db,
-    url         = url
-  )
-}
-
-#' List clustering artifacts for a sample + input pipeline combination.
-list_clustering_artifacts <- function(study_id   = NULL,
-                                      sample_id  = NULL,
-                                      db = DB_NAME, url = MONGO_URL) {
-  query_artifacts(
-    study_id   = study_id,
-    sample_id  = sample_id,
-    stage_type = "clustering_result",
-    db         = db,
     url         = url
   )
 }
@@ -971,35 +909,6 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
   invisible(grid_id)
 }
 
-# IMPORTANT: run_id is now MANDATORY. The "most recent" fallback is gone.
-load_stage_from_mongo <- function(sample_name, stage_type, run_id,
-                                  db_name   = DB_NAME,
-                                  mongo_url = MONGO_URL) {
-  if (missing(run_id) || is.null(run_id)) {
-    stop(
-      "load_stage_from_mongo() requires an explicit run_id. ",
-      "No fallback to 'most recent' is permitted. ",
-      "Retrieve run_id from query_legacy_artifacts() first."
-    )
-  }
-
-  meta      <- .con("processing_artifacts_metadata", db_name, mongo_url)
-  artifacts <- meta$find(jsonlite::toJSON(
-    list(sample_name = sample_name, stage_type = stage_type, run_id = run_id),
-    auto_unbox = TRUE
-  ))
-  if (nrow(artifacts) == 0) {
-    stop("No artifact: sample=", sample_name, ", stage=", stage_type, ", run_id=", run_id)
-  }
-  if (nrow(artifacts) > 1) {
-    stop("Integrity error: multiple matches for run_id=", run_id, ", stage=", stage_type)
-  }
-  grid  <- mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)
-  fname <- as.character(artifacts$filename[1])
-  tmp   <- file.path(tempdir(), fname)
-  if (!file.exists(tmp)) grid$download(fname, tmp)
-  readRDS(tmp)
-}
 
 # Legacy artifact query (wraps old collection; used by processing_module.R).
 query_legacy_artifacts <- function(sample_name    = NULL,
@@ -1021,52 +930,6 @@ query_legacy_artifacts <- function(sample_name    = NULL,
   .con("processing_artifacts_metadata", db_name, mongo_url)$find(q)
 }
 
-# Clustering artifact helpers (used by clustering_module.R).
-query_clustering_artifacts <- function(sample_name       = NULL,
-                                       assignment_id     = NULL,
-                                       clustering_method = NULL,
-                                       snr               = NULL,
-                                       tolerance         = NULL,
-                                       reference_name    = NULL,
-                                       db_name           = DB_NAME,
-                                       mongo_url         = MONGO_URL) {
-  parts <- list()
-  if (!is.null(sample_name))       parts$sample_name       <- sample_name
-  if (!is.null(assignment_id))     parts$assignment_id     <- assignment_id
-  if (!is.null(clustering_method)) parts$clustering_method <- clustering_method
-  if (!is.null(snr))               parts$snr               <- snr
-  if (!is.null(tolerance))         parts$tolerance         <- tolerance
-  if (!is.null(reference_name))    parts$reference_name    <- reference_name
-  q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
-  .con("clustering_metadata", db_name, mongo_url)$find(q)
-}
-
-load_clustering_by_id <- function(assignment_id,
-                                  db_name   = DB_NAME,
-                                  mongo_url = MONGO_URL) {
-  artifacts <- query_clustering_artifacts(assignment_id = assignment_id,
-                                          db_name = db_name, mongo_url = mongo_url)
-  if (nrow(artifacts) == 0) stop("No clustering: assignment_id=", assignment_id)
-
-  fname    <- as.character(artifacts$gridfs_name[1] %||% artifacts$filename[1])
-  tmp_path <- file.path(tempdir(), fname)
-  if (!file.exists(tmp_path)) {
-    mongolite::gridfs(db = db_name, prefix = "fs", url = mongo_url)$download(fname, tmp_path)
-  }
-  message("Loaded clustering: ", assignment_id)
-  readRDS(tmp_path)
-}
-
-# REMOVED most_recent parameter. Callers must supply assignment_id explicitly.
-load_clustering <- function(assignment_id, db_name = DB_NAME, mongo_url = MONGO_URL) {
-  if (missing(assignment_id) || is.null(assignment_id)) {
-    stop(
-      "load_clustering() requires an explicit assignment_id. ",
-      "Use query_clustering_artifacts() to list available IDs."
-    )
-  }
-  load_clustering_by_id(assignment_id, db_name, mongo_url)
-}
 
 
 get_model_run <- function(run_id,
