@@ -86,7 +86,7 @@ train_ranger_from_dataset <- function(
     cv_folds       = 10L,
     seed           = 1234L,
     workers        = NULL,
-    num_threads    = 2L,
+    num_threads    = 1L,
     db             = DB_NAME,
     url            = MONGO_URL
 ) {
