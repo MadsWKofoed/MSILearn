@@ -571,7 +571,7 @@ processing_module_server <- function(id) {
           ref       = Cardinal::mz(control_MSI_ref),
           tolerance = input$tolerance,
           units     = "mz",
-          BPPARAM   = BiocParallel::bpparam()
+          BPPARAM   = msi_bpparam
         ) |> Cardinal::process()
         add_log("✓ Data binned")
 

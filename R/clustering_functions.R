@@ -176,93 +176,106 @@ compute_neighbor_cor <- function(dat,
                                  mz_cols = NULL,
                                  r = 1,
                                  cores = 1) {
-  
+
   if (is.null(mz_cols)) {
     mz_cols <- setdiff(colnames(dat), c(x_col, y_col))
   }
-  
+
   xy <- as.matrix(dat[, c(x_col, y_col)])
-  intens <- as.matrix(dat[, mz_cols])
+  intens <- as.matrix(dat[, mz_cols, drop = FALSE])
   n <- nrow(dat)
-  
-  # Build spatial lookup: key -> row index
+
   key_vec <- paste(xy[, 1], xy[, 2], sep = "_")
   index_lookup <- setNames(seq_len(n), key_vec)
-  
-  # Generate all offset vectors within radius r (excluding origin)
+
   offsets <- as.matrix(expand.grid(
     dx = (-r):r,
     dy = (-r):r
   ))
   offsets <- offsets[!(offsets[, 1] == 0 & offsets[, 2] == 0), , drop = FALSE]
-  
-  # Chebyshev distance for each offset (= weight denominator)
+
   offset_step <- pmax(abs(offsets[, 1]), abs(offsets[, 2]))
   offset_weight <- 1 / offset_step
-  
-  weighted_cor_sum <- numeric(n)
-  weight_sum <- numeric(n)
-  
-  for (k in seq_len(nrow(offsets))) {
+
+  workers <- max(1L, as.integer(cores))
+  max_cores <- parallel::detectCores(logical = FALSE)
+  if (is.finite(max_cores)) {
+    workers <- min(workers, max_cores)
+  }
+
+  compute_one_offset <- function(k) {
     nx <- xy[, 1] + offsets[k, 1]
     ny <- xy[, 2] + offsets[k, 2]
     nkey <- paste(nx, ny, sep = "_")
-    
+
     j <- index_lookup[nkey]
     has_neighbor <- !is.na(j)
-    
-    if (!any(has_neighbor)) next
-    
+    if (!any(has_neighbor)) {
+      return(list(i = integer(0), wc = numeric(0), w = numeric(0)))
+    }
+
     idx_i <- which(has_neighbor)
-    idx_j <- j[has_neighbor]
-    
-    # Per-pair Pearson correlation, matching cor(v, z, use="pairwise.complete.obs")
+    idx_j <- as.integer(j[has_neighbor])
+
     mat_i <- intens[idx_i, , drop = FALSE]
     mat_j <- intens[idx_j, , drop = FALSE]
-    
-    # Pairwise: exclude positions where either is NA
+
     valid <- !is.na(mat_i) & !is.na(mat_j)
-    
-    # Replace invalid with NA so they don't contribute
-    mat_i[!valid] <- NA
-    mat_j[!valid] <- NA
-    
-    # Per-row means (only over valid pairs)
+    mat_i[!valid] <- NA_real_
+    mat_j[!valid] <- NA_real_
+
     n_valid <- rowSums(valid)
     mean_i <- rowSums(mat_i, na.rm = TRUE) / n_valid
     mean_j <- rowSums(mat_j, na.rm = TRUE) / n_valid
-    
-    # Center
+
     mat_i_c <- mat_i - mean_i
     mat_j_c <- mat_j - mean_j
-    
-    # Dot product and norms
+
     dot <- rowSums(mat_i_c * mat_j_c, na.rm = TRUE)
     ss_i <- sqrt(rowSums(mat_i_c^2, na.rm = TRUE))
     ss_j <- sqrt(rowSums(mat_j_c^2, na.rm = TRUE))
-    
+
     cors <- dot / (ss_i * ss_j)
     cors[!is.finite(cors) | n_valid < 2] <- NA_real_
-    
+
     w <- offset_weight[k]
     ok <- !is.na(cors)
-    
-    weighted_cor_sum[idx_i[ok]] <- weighted_cor_sum[idx_i[ok]] + w * cors[ok]
-    weight_sum[idx_i[ok]] <- weight_sum[idx_i[ok]] + w
+
+    list(
+      i  = idx_i[ok],
+      wc = w * cors[ok],
+      w  = rep(w, sum(ok))
+    )
   }
-  
+
+  results <- if (workers > 1L) {
+    parallel::mclapply(seq_len(nrow(offsets)), compute_one_offset, mc.cores = workers)
+  } else {
+    lapply(seq_len(nrow(offsets)), compute_one_offset)
+  }
+
+  weighted_cor_sum <- numeric(n)
+  weight_sum <- numeric(n)
+
+  for (res in results) {
+    if (length(res$i) == 0L) next
+    weighted_cor_sum[res$i] <- weighted_cor_sum[res$i] + res$wc
+    weight_sum[res$i] <- weight_sum[res$i] + res$w
+  }
+
   avg_cor <- rep(NA_real_, n)
   has_any <- weight_sum > 0
   avg_cor[has_any] <- weighted_cor_sum[has_any] / weight_sum[has_any]
-  
+
   avg_cor
 }
+
 
 
 # MSIClust clustering
 run_msiclust <- function(full_df, k = 3,
                          normalize_method = c("none", "tic", "median", "rms"),
-                         cor_radius = 1, cor_scale = 25, cor_cores = parallel::detectCores() - 1,
+                         cor_radius = 1, cor_scale = 25, cor_cores = parallel::detectCores() - 22,
                          minMem = 0.5) {
   
   normalize_method <- match.arg(normalize_method)

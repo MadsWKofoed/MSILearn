@@ -3,8 +3,14 @@
 options(shiny.maxRequestSize = 5000 * 1024^2)
 options(shiny.launch.browser = TRUE)
 
-# Parallel settings
-bp <- parallel::detectCores() - 22
+# Parallel settings (shared across app)
+bp <- max(1L, parallel::detectCores(logical = FALSE) - 22L)
+
+# One canonical BiocParallel backend for the whole app
+msi_bpparam <- BiocParallel::MulticoreParam(workers = bp)
+BiocParallel::register(msi_bpparam, default = TRUE)
+
+# Cardinal parallel workers
 setCardinalParallel(workers = bp)
 
 # Custom CSS

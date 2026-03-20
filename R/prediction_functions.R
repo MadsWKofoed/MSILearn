@@ -91,7 +91,8 @@ process_uploaded_data_for_prediction <- function(imzml_path,
                                                  imzml_name,
                                                  pipeline_params,
                                                  db = DB_NAME,
-                                                 url = MONGO_URL) {
+                                                 url = MONGO_URL,
+                                                BPPARAM = msi_bpparam) {
   snr        <- as.numeric(first_scalar(pipeline_params$snr))
   tolerance  <- as.numeric(first_scalar(pipeline_params$tolerance))
   resolution <- as.numeric(first_scalar(pipeline_params$resolution, 10))
@@ -126,7 +127,7 @@ process_uploaded_data_for_prediction <- function(imzml_path,
     parse.only = FALSE,
     verbose    = Cardinal::getCardinalVerbose(),
     chunkopts  = list(),
-    BPPARAM    = BiocParallel::bpparam()
+    BPPARAM    = BPPARAM
   )
 
   message("[predict] Computing mean spectrum...")
@@ -145,7 +146,7 @@ process_uploaded_data_for_prediction <- function(imzml_path,
     ref       = Cardinal::mz(control_MSI_ref),
     tolerance = tolerance,
     units     = "mz",
-    BPPARAM   = BiocParallel::bpparam()
+    BPPARAM   = BPPARAM
   ) |>
     Cardinal::process()
 
@@ -211,7 +212,8 @@ run_prediction_from_upload <- function(run_id,
     imzml_name       = imzml_name,
     pipeline_params  = ctx$pipeline_params,
     db               = db,
-    url              = url
+    url              = url,
+    BPPARAM          = msi_bpparam
   )
 
   norm_method <- first_scalar(ctx$hyperparams$normalize_method, "none")

@@ -233,26 +233,14 @@ train_ranger_from_dataset <- function(
     weights      = obs_w,
     num.threads  = num_threads
   )
-message("[train] Model fitting finished.")
-message("[train] Starting prediction on held-out test set...")
+  message("[train] Model fitting finished.")
+  message("[train] Starting prediction on held-out test set...")
 
-  # ── 4. Evaluate on test set ───────────────────────────────────────
-  preds <- predict(fit, newdata = test_X)
-
-  message("[train] Class prediction finished.")
-message("[train] Starting probability prediction...")
-
-  probs <- predict(fit, newdata = test_X, type = "prob")
-message("[train] Probability prediction finished.")
-message("[train] Building confusion matrix...")
-
-
-  # ── 5.  Evaluate on held-out test set ────────────────────────────────────
+  # ── 4. Evaluate on held-out test set ─────────────────────────────
   preds <- predict(fit, newdata = test_X)
   cm    <- caret::confusionMatrix(preds, test_y)
 
   metrics_scalar <- list(
-    # Test set
     test_accuracy  = as.numeric(cm$overall["Accuracy"]),
     test_kappa     = as.numeric(cm$overall["Kappa"]),
     test_acc_lower = as.numeric(cm$overall["AccuracyLower"]),
