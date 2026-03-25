@@ -200,9 +200,10 @@ clustering_module_server <- function(id) {
       ndpi_slide_name = NULL
     ))
 
-    ndpi_proc <- reactiveVal(NULL)
-    ndpi_port <- reactiveVal(NULL)
-    ndpi_output_dir <- reactiveVal(NULL)
+    ndpi_runtime <- new.env(parent = emptyenv())
+    ndpi_runtime$proc <- proc
+    ndpi_runtime$port <- port
+    ndpi_runtime$output_dir <- out_dir
 
     ensure_class_colors <- function(class_vec) {
       labs <- sort(unique(class_vec))
@@ -246,10 +247,7 @@ clustering_module_server <- function(id) {
     }
 
     find_free_port <- function() {
-      con <- socketConnection(host = "127.0.0.1", port = 0, server = TRUE, blocking = TRUE, open = "r+")
-      port <- summary(con)$port
-      close(con)
-      as.integer(port)
+      httpuv::randomPort()
     }
 
     read_status_json <- function(port) {
@@ -262,12 +260,13 @@ clustering_module_server <- function(id) {
     }
 
     stop_ndpi_server <- function() {
-      p <- ndpi_proc()
+      p <- ndpi_runtime$proc
       if (!is.null(p) && p$is_alive()) {
         try(p$kill(), silent = TRUE)
       }
-      ndpi_proc(NULL)
-      ndpi_port(NULL)
+      ndpi_runtime$proc <- NULL
+      ndpi_runtime$port <- NULL
+      ndpi_runtime$output_dir <- NULL
     }
 
     locate_preprocess_script <- function() {
@@ -1061,7 +1060,8 @@ clustering_module_server <- function(id) {
             inherit = FALSE
           )
       }
-
+      p <- event_register(p, "plotly_click")
+      p <- event_register(p, "plotly_relayout")
       p
     })
 
