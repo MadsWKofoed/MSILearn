@@ -201,9 +201,9 @@ clustering_module_server <- function(id) {
     ))
 
     ndpi_runtime <- new.env(parent = emptyenv())
-    ndpi_runtime$proc <- proc
-    ndpi_runtime$port <- port
-    ndpi_runtime$output_dir <- out_dir
+    ndpi_runtime$proc <- NULL
+    ndpi_runtime$port <- NULL
+    ndpi_runtime$output_dir <- NULL
 
     ensure_class_colors <- function(class_vec) {
       labs <- sort(unique(class_vec))
@@ -825,9 +825,9 @@ clustering_module_server <- function(id) {
         cleanup = TRUE
       )
 
-      ndpi_proc(proc)
-      ndpi_port(port)
-      ndpi_output_dir(out_dir)
+      ndpi_runtime$proc <- proc
+      ndpi_runtime$port <- port
+      ndpi_runtime$output_dir <- out_dir
 
       t0 <- Sys.time()
       ready <- FALSE
