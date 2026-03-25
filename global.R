@@ -135,6 +135,7 @@ source("R/clustering_functions.R")
 source("R/processing_functions.R")
 source("R/training_functions.R")
 source("R/prediction_functions.R")
+source("R/ndpi_registration_utils.R")
 
 # Enforce schema indexes on startup (idempotent)
 tryCatch(
