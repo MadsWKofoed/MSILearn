@@ -57,6 +57,25 @@ window.ndpiSyncViewer = (() => {
     updatePointerMode(state);
   }
 
+  function imageToScreenPoint(state, x, y) {
+  const vp = state.viewer.viewport.imageToViewportCoordinates(
+    new OpenSeadragon.Point(x, y)
+  );
+  const px = state.viewer.viewport.viewportToViewerElementCoordinates(vp);
+  return { x: px.x, y: px.y };
+}
+
+function redrawTempPolyline(state) {
+  if (!state || !state.polyline) return;
+  const pts = state.points
+    .map((p) => {
+      const s = imageToScreenPoint(state, p.x, p.y);
+      return `${s.x},${s.y}`;
+    })
+    .join(" ");
+  state.polyline.setAttribute("points", pts);
+}
+
   function cancelPolygon(state) {
     if (!state) return;
     state.pointerDown = false;
@@ -65,6 +84,10 @@ window.ndpiSyncViewer = (() => {
     state.drawing = false;
     state.viewer.setMouseNavEnabled(true);
     updatePointerMode(state);
+    state.viewer.addHandler("animation", () => redrawTempPolyline(state));
+    state.viewer.addHandler("zoom", () => redrawTempPolyline(state));
+    state.viewer.addHandler("pan", () => redrawTempPolyline(state));
+    state.viewer.addHandler("resize", () => redrawTempPolyline(state));
   }
 
   function ensureOverlay(state) {

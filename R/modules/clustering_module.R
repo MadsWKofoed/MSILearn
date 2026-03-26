@@ -737,11 +737,6 @@ clustering_module_server <- function(id) {
       }
       sync_annotated_from_state()
 
-      st <- registration_state()
-      if (isTRUE(st$valid) && !identical(st$orientation_at_fit, input$orientation)) {
-        invalidate_registration_fit()
-        showNotification("Orientation changed. Registration invalidated; refit required.", type = "warning")
-      }
     }) |> bindEvent(input$orientation)
 
     observeEvent(input$ann_set_select, {
@@ -817,7 +812,15 @@ clustering_module_server <- function(id) {
         return()
       }
 
-      poly_xy <- cbind(shape$x, shape$y)
+      base_df <- original_clustered()
+      req(base_df)
+
+      poly_xy_disp <- cbind(shape$x, shape$y)
+      poly_xy <- to_original_polygon(
+        poly_xy_disp,
+        input$orientation %||% "Default",
+        base_df
+      )
       st <- registration_state()
       st$msi_reg_polys[[rid]] <- poly_xy
       st$fit <- NULL
@@ -848,10 +851,7 @@ clustering_module_server <- function(id) {
         showNotification("Fit registration first.", type = "warning")
         return()
       }
-      if (!identical(st$orientation_at_fit, input$orientation %||% "Default")) {
-        showNotification("Orientation changed since fit. Refit registration.", type = "warning")
-        return()
-      }
+      
       ndpi_draw_mode("annotation")
       session$sendCustomMessage(ns("ndpiStartPolygon"), list())
     })
@@ -1027,8 +1027,7 @@ clustering_module_server <- function(id) {
           return()
         }
 
-        msi_oriented <- apply_affine_xy(pts, st$fit$A, st$fit$b)
-        poly_orig <- to_original_polygon(msi_oriented, st$orientation_at_fit, base_df)
+        poly_orig <- apply_affine_xy(pts, st$fit$A, st$fit$b)
 
         cls <- pixel_class_state()
         if (is.null(cls) || length(cls) != nrow(base_df)) cls <- rep("Unassigned", nrow(base_df))
