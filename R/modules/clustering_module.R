@@ -80,18 +80,6 @@ extract_polygon_from_relayout <- function(ev) {
   NULL
 }
 
-get_latest_msi_polygon <- function() {
-  # 1) latest event_data
-  shp <- extract_polygon_from_relayout(event_data("plotly_relayout", source = ns("cluster_src")))
-  if (!is.null(shp)) return(shp)
-
-  # 2) fallback: direct shiny input payload
-  shp <- extract_polygon_from_relayout(input$cluster_plot_relayout)
-  if (!is.null(shp)) return(shp)
-
-  # 3) last cached
-  sel_shape()
-}
 
 clustering_module_ui <- function(id) {
   ns <- NS(id)
@@ -241,6 +229,18 @@ clustering_module_server <- function(id) {
     class_colors <- reactiveVal(c())
     next_color_i <- reactiveVal(1L)
     sel_shape <- reactiveVal(NULL)
+
+    get_latest_msi_polygon <- function() {
+      shp <- extract_polygon_from_relayout(
+        event_data("plotly_relayout", source = ns("cluster_src"))
+      )
+      if (!is.null(shp)) return(shp)
+
+      shp <- extract_polygon_from_relayout(input$cluster_plot_relayout)
+      if (!is.null(shp)) return(shp)
+
+      sel_shape()
+    }
 
     pixel_class_state <- reactiveVal(NULL)
 
