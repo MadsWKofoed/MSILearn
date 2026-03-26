@@ -1,16 +1,4 @@
 # R/modules/clustering_module.R
-#
-# Clustering tab — provenance-aware, with original plotting/annotation logic.
-#
-# Provenance chain enforced:
-#   study → sample → pipeline_id (binned_dataframe artifact)
-#     → clustering params → clustering artifact
-#     → annotation set → annotation
-#
-# Plotting logic: raster-based PNG overlay (from old version).
-# Lasso selection: drawclosedpath + SVG path parsing (from old version).
-# Annotation state: annotated_data() separate from clustered_data() (from old version).
-# DB layer: fully new-schema provenance API.
 
 library(shiny)
 library(plotly)
@@ -83,15 +71,15 @@ clustering_module_ui <- function(id) {
 
         conditionalPanel(
           condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-          tags$h5("NDPI", style = "font-weight:bold; margin-bottom:4px;"),
+          tags$h5("NDPI Polygon Registration", style = "font-weight:bold; margin-bottom:4px;"),
           fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
           numericInput(ns("ndpi_workers"), "NDPI workers", value = 6, min = 1, max = 10, step = 1),
-          actionButton(ns("start_reg_mode"), "1) Start NDPI landmarks", class = "btn-sm"),
-          actionButton(ns("start_msi_landmarks"), "2) Start MSI landmarks", class = "btn-sm"),
-          actionButton(ns("fit_registration"), "3) Fit NDPI→MSI", class = "btn-sm btn-primary"),
-          actionButton(ns("stop_reg_mode"), "Stop landmark mode", class = "btn-sm"),
-          actionButton(ns("draw_ndpi_polygon"), "Draw NDPI polygon", class = "btn-sm"),
+          textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
+          actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon to Region ID", class = "btn-sm"),
+          actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI polygon for Region ID", class = "btn-sm"),
+          actionButton(ns("fit_registration"), "Fit NDPI→MSI (5 anchors / region)", class = "btn-sm btn-primary"),
           actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning"),
+          actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm"),
           verbatimTextOutput(ns("registration_status")),
           tags$hr()
         ),
@@ -149,17 +137,11 @@ clustering_module_ui <- function(id) {
               });
               Shiny.addCustomMessageHandler('%s', function(msg){
                 if(window.ndpiSyncViewer){
-                  window.ndpiSyncViewer.setRegistrationMode(!!msg.enabled);
-                }
-              });
-              Shiny.addCustomMessageHandler('%s', function(msg){
-                if(window.ndpiSyncViewer){
                   window.ndpiSyncViewer.startPolygon();
                 }
               });
               ",
               ns("ndpiLoadSlide"),
-              ns("ndpiSetRegistrationMode"),
               ns("ndpiStartPolygon")
             )
           ))
@@ -174,7 +156,7 @@ clustering_module_ui <- function(id) {
             )
           )
         ),
-      uiOutput(ns("cluster_layout")),
+        uiOutput(ns("cluster_layout")),
         textOutput(ns("status_text"))
       )
     )
@@ -191,32 +173,44 @@ clustering_module_server <- function(id) {
     active_artifact_id <- reactiveVal(NULL)
     active_ann_set_id  <- reactiveVal(NULL)
 
-    processed_data            <- reactiveVal(NULL)
-    clustered_data            <- reactiveVal(NULL)
-    annotated_data            <- reactiveVal(NULL)
-    original_clustered        <- reactiveVal(NULL)
-    histology_image           <- reactiveVal(NULL)
-    vsclust_membership_data   <- reactiveVal(NULL)
-    current_method            <- reactiveVal(NULL)
+    processed_data          <- reactiveVal(NULL)
+    clustered_data          <- reactiveVal(NULL)
+    annotated_data          <- reactiveVal(NULL)
+    original_clustered      <- reactiveVal(NULL)
+    histology_image         <- reactiveVal(NULL)
+    vsclust_membership_data <- reactiveVal(NULL)
+    current_method          <- reactiveVal(NULL)
 
     class_colors <- reactiveVal(c())
     next_color_i <- reactiveVal(1L)
-
     sel_shape <- reactiveVal(NULL)
 
     pixel_class_state <- reactiveVal(NULL)
 
-    reg_mode <- reactiveVal(FALSE)
-    registration_phase <- reactiveVal("idle") # idle | collect_ndpi | collect_msi | ready
+    # registration by polygon pairs only
+    ndpi_draw_mode <- reactiveVal(NULL) # "registration" or "annotation"
     registration_state <- reactiveVal(list(
-      ndpi_points = data.frame(x = numeric(), y = numeric()),
-      msi_points = data.frame(x = numeric(), y = numeric()),
+      ndpi_reg_polys = list(),
+      msi_reg_polys = list(),
       fit = NULL,
       valid = FALSE,
       rms = NA_real_,
       orientation_at_fit = NULL,
-      ndpi_slide_name = NULL
+      ndpi_slide_name = NULL,
+      matched_region_ids = character(0),
+      n_anchor_pairs = 0L
     ))
+
+    ndpi_runtime <- new.env(parent = emptyenv())
+    ndpi_runtime$proc <- NULL
+    ndpi_runtime$port <- NULL
+    ndpi_runtime$output_dir <- NULL
+
+    normalize_region_id <- function(x) {
+      y <- trimws(as.character(x %||% ""))
+      if (!nzchar(y)) return(NA_character_)
+      y
+    }
 
     get_ann_set_labels <- function(ann_set_id) {
       if (is.null(ann_set_id) || !nzchar(ann_set_id)) return(character(0))
@@ -237,27 +231,22 @@ clustering_module_server <- function(id) {
       labs <- get_ann_set_labels(active_ann_set_id())
       if (length(labs) == 0) {
         updateSelectInput(session, "class_label", choices = c(), selected = character(0))
-      } else updateSelectInput(session, "class_label", choices = labs, selected = labs[1])
+      } else {
+        updateSelectInput(session, "class_label", choices = labs, selected = labs[1])
+      }
     }
-
-    ndpi_runtime <- new.env(parent = emptyenv())
-    ndpi_runtime$proc <- NULL
-    ndpi_runtime$port <- NULL
-    ndpi_runtime$output_dir <- NULL
 
     ensure_class_colors <- function(class_vec) {
       labs <- sort(unique(class_vec))
       labs <- labs[!is.na(labs) & labs != "Unassigned"]
       cols <- class_colors()
       idx <- next_color_i()
-
       for (lab in labs) {
         if (!(lab %in% names(cols))) {
           cols[lab] <- MY_PALETTE[((idx - 1) %% length(MY_PALETTE)) + 1]
           idx <- idx + 1L
         }
       }
-
       class_colors(cols)
       next_color_i(idx)
     }
@@ -286,9 +275,7 @@ clustering_module_server <- function(id) {
       py
     }
 
-    find_free_port <- function() {
-      httpuv::randomPort()
-    }
+    find_free_port <- function() httpuv::randomPort()
 
     read_status_json <- function(port) {
       txt <- tryCatch(
@@ -321,6 +308,8 @@ clustering_module_server <- function(id) {
       st$fit <- NULL
       st$valid <- FALSE
       st$rms <- NA_real_
+      st$matched_region_ids <- character(0)
+      st$n_anchor_pairs <- 0L
       registration_state(st)
     }
 
@@ -331,6 +320,43 @@ clustering_module_server <- function(id) {
         xy = poly_xy,
         orientation = orientation,
         x_min = xr[1], x_max = xr[2], y_min = yr[1], y_max = yr[2]
+      )
+    }
+
+    extract_poly_anchors5 <- function(poly_xy) {
+      stopifnot(ncol(poly_xy) == 2, nrow(poly_xy) >= 3)
+      cx <- mean(poly_xy[, 1], na.rm = TRUE)
+      cy <- mean(poly_xy[, 2], na.rm = TRUE)
+      i_left  <- which.min(poly_xy[, 1])
+      i_right <- which.max(poly_xy[, 1])
+      i_top   <- which.min(poly_xy[, 2])
+      i_bot   <- which.max(poly_xy[, 2])
+
+      out <- rbind(
+        c(cx, cy),
+        poly_xy[i_left, ],
+        poly_xy[i_right, ],
+        poly_xy[i_top, ],
+        poly_xy[i_bot, ]
+      )
+      colnames(out) <- c("x", "y")
+      out
+    }
+
+    build_anchor_pairs_from_regions <- function(st) {
+      ids <- intersect(names(st$ndpi_reg_polys), names(st$msi_reg_polys))
+      if (length(ids) == 0) {
+        return(list(ndpi = NULL, msi = NULL, ids = character(0), n = 0L))
+      }
+
+      ndpi_pts <- do.call(rbind, lapply(ids, function(id) extract_poly_anchors5(st$ndpi_reg_polys[[id]])))
+      msi_pts  <- do.call(rbind, lapply(ids, function(id) extract_poly_anchors5(st$msi_reg_polys[[id]])))
+
+      list(
+        ndpi = ndpi_pts,
+        msi = msi_pts,
+        ids = ids,
+        n = nrow(ndpi_pts)
       )
     }
 
@@ -710,8 +736,8 @@ clustering_module_server <- function(id) {
       })
     })
 
+    # MSI drawclosedpath capture
     observeEvent(event_data("plotly_relayout", source = ns("cluster_src")), {
-      req(registration_phase() != "collect_msi")
       ev <- event_data("plotly_relayout", source = ns("cluster_src"))
       req(ev)
 
@@ -724,22 +750,270 @@ clustering_module_server <- function(id) {
           sel_shape(list(type = "polygon", x = as.numeric(xy[, 1]), y = as.numeric(xy[, 2])))
           showNotification(paste0("✓ Polygon captured (", nrow(xy), " points)"), type = "message", duration = 2)
         }
+      }
+    })
+
+    # save MSI registration polygon under region id
+    observeEvent(input$save_msi_reg_polygon, {
+      req(input$annotation_mode == "msi_ndpi")
+      rid <- normalize_region_id(input$reg_region_id)
+      if (is.na(rid)) {
+        showNotification("Enter a Region ID.", type = "warning")
         return()
       }
 
-      if ("shapes" %in% names(ev)) {
-        shapes_data <- ev$shapes
-        if (is.data.frame(shapes_data) && nrow(shapes_data) > 0) {
-          last_row <- shapes_data[nrow(shapes_data), ]
-          if (!is.null(last_row$path) && nchar(last_row$path) > 0) {
-            path <- last_row$path
-            coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
-            xy <- do.call(rbind, strsplit(coords, ","))
-            sel_shape(list(type = "polygon", x = as.numeric(xy[, 1]), y = as.numeric(xy[, 2])))
-            showNotification(paste0("✓ Polygon captured (", nrow(xy), " points)"), type = "message", duration = 2)
-          }
-        }
+      shape <- sel_shape()
+      if (is.null(shape) || !identical(shape$type, "polygon")) {
+        showNotification("Draw a polygon on MSI cluster plot first.", type = "warning")
+        return()
       }
+
+      poly_xy <- cbind(shape$x, shape$y)
+      st <- registration_state()
+      st$msi_reg_polys[[rid]] <- poly_xy
+      st$fit <- NULL
+      st$valid <- FALSE
+      st$rms <- NA_real_
+      registration_state(st)
+
+      showNotification(sprintf("Saved MSI registration polygon for %s", rid), type = "message")
+    })
+
+    # trigger NDPI registration polygon drawing
+    observeEvent(input$draw_ndpi_reg_polygon, {
+      req(input$annotation_mode == "msi_ndpi")
+      rid <- normalize_region_id(input$reg_region_id)
+      if (is.na(rid)) {
+        showNotification("Enter a Region ID.", type = "warning")
+        return()
+      }
+      ndpi_draw_mode("registration")
+      session$sendCustomMessage(ns("ndpiStartPolygon"), list())
+    })
+
+    # trigger NDPI annotation polygon drawing
+    observeEvent(input$draw_ndpi_polygon, {
+      req(input$annotation_mode == "msi_ndpi")
+      st <- registration_state()
+      if (!isTRUE(st$valid) || is.null(st$fit)) {
+        showNotification("Fit registration first.", type = "warning")
+        return()
+      }
+      if (!identical(st$orientation_at_fit, input$orientation %||% "Default")) {
+        showNotification("Orientation changed since fit. Refit registration.", type = "warning")
+        return()
+      }
+      ndpi_draw_mode("annotation")
+      session$sendCustomMessage(ns("ndpiStartPolygon"), list())
+    })
+
+    observeEvent(input$reset_registration, {
+      st <- registration_state()
+      st$ndpi_reg_polys <- list()
+      st$msi_reg_polys <- list()
+      st$fit <- NULL
+      st$valid <- FALSE
+      st$rms <- NA_real_
+      st$orientation_at_fit <- NULL
+      st$matched_region_ids <- character(0)
+      st$n_anchor_pairs <- 0L
+      registration_state(st)
+      showNotification("Registration reset.", type = "message")
+    })
+
+    observeEvent(input$fit_registration, {
+      req(input$annotation_mode == "msi_ndpi")
+
+      st <- registration_state()
+      pairs <- build_anchor_pairs_from_regions(st)
+      if (pairs$n < 3) {
+        showNotification("Need at least one matched region polygon pair (5 anchor points).", type = "warning")
+        return()
+      }
+
+      fit <- fit_affine_ndpi_to_msi(pairs$ndpi, pairs$msi)
+      if (!isTRUE(fit$valid)) {
+        st$fit <- NULL
+        st$valid <- FALSE
+        st$rms <- NA_real_
+        st$matched_region_ids <- pairs$ids
+        st$n_anchor_pairs <- pairs$n
+        registration_state(st)
+        showNotification(fit$reason %||% "Registration fit failed.", type = "error")
+        return()
+      }
+
+      st$fit <- fit
+      st$valid <- TRUE
+      st$rms <- fit$rms
+      st$orientation_at_fit <- input$orientation %||% "Default"
+      st$matched_region_ids <- pairs$ids
+      st$n_anchor_pairs <- pairs$n
+      registration_state(st)
+
+      showNotification(sprintf("Registration valid. RMS = %.4f (%d anchor pairs)", fit$rms, pairs$n), type = "message")
+    })
+
+    observeEvent(input$ndpi_file, {
+      req(input$annotation_mode == "msi_ndpi")
+      req(input$ndpi_file$datapath)
+
+      stop_ndpi_server()
+
+      out_dir <- tempfile("ndpi_tiles_")
+      dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+      py <- find_python_bin()
+      script <- locate_preprocess_script()
+      port <- find_free_port()
+
+      args <- c(
+        script,
+        "--slide", normalizePath(input$ndpi_file$datapath, mustWork = TRUE),
+        "--output-dir", normalizePath(out_dir, mustWork = TRUE),
+        "--host", "127.0.0.1",
+        "--port", as.character(port),
+        "--workers", as.character(input$ndpi_workers %||% 6)
+      )
+
+      proc <- processx::process$new(
+        command = py,
+        args = args,
+        stdout = "|",
+        stderr = "|",
+        cleanup = TRUE
+      )
+
+      ndpi_runtime$proc <- proc
+      ndpi_runtime$port <- port
+      ndpi_runtime$output_dir <- out_dir
+
+      t0 <- Sys.time()
+      ready <- FALSE
+      repeat {
+        st <- read_status_json(port)
+        if (!is.null(st) && isTRUE(st$ready)) {
+          ready <- TRUE
+          break
+        }
+        if (!proc$is_alive()) break
+        if (as.numeric(difftime(Sys.time(), t0, units = "secs")) > 240) break
+        Sys.sleep(0.5)
+      }
+
+      if (!ready) {
+        err_tail <- tryCatch(paste(proc$read_error_lines(), collapse = "\n"), error = function(e) "")
+        showNotification(paste("NDPI preprocessing failed or timed out.", err_tail), type = "error", duration = 10)
+        return()
+      }
+
+      st_reg <- registration_state()
+      st_reg$ndpi_slide_name <- input$ndpi_file$name
+      registration_state(st_reg)
+
+      session$sendCustomMessage(ns("ndpiLoadSlide"), list(
+        containerId = ns("ndpi_viewer"),
+        dziUrl = sprintf("http://127.0.0.1:%d/slide.dzi?ts=%d", port, as.integer(Sys.time())),
+        inputPrefix = session$ns("")
+      ))
+
+      showNotification("NDPI ready.", type = "message")
+    })
+
+    # NDPI polygon finished: registration OR annotation mode
+    observeEvent(input$ndpi_polygon_finished, {
+      req(input$annotation_mode == "msi_ndpi")
+
+      pts_list <- input$ndpi_polygon_finished$points
+      if (is.null(pts_list) || length(pts_list) < 3) {
+        showNotification("Polygon needs at least 3 points.", type = "warning")
+        return()
+      }
+
+      pts <- do.call(rbind, lapply(pts_list, function(p) c(as.numeric(p$x), as.numeric(p$y))))
+      colnames(pts) <- c("x", "y")
+
+      mode <- ndpi_draw_mode()
+
+      if (identical(mode, "registration")) {
+        rid <- normalize_region_id(input$reg_region_id)
+        if (is.na(rid)) {
+          showNotification("Enter a Region ID before drawing NDPI registration polygon.", type = "warning")
+          ndpi_draw_mode(NULL)
+          return()
+        }
+
+        st <- registration_state()
+        st$ndpi_reg_polys[[rid]] <- pts
+        st$fit <- NULL
+        st$valid <- FALSE
+        st$rms <- NA_real_
+        registration_state(st)
+
+        ndpi_draw_mode(NULL)
+        showNotification(sprintf("Saved NDPI registration polygon for %s", rid), type = "message")
+        return()
+      }
+
+      if (identical(mode, "annotation")) {
+        st <- registration_state()
+        base_df <- original_clustered()
+        req(base_df)
+
+        if (!isTRUE(st$valid) || is.null(st$fit)) {
+          showNotification("Registration is not valid.", type = "warning")
+          ndpi_draw_mode(NULL)
+          return()
+        }
+
+        if (!identical(st$orientation_at_fit, input$orientation %||% "Default")) {
+          showNotification("Orientation changed since fit. Refit registration.", type = "warning")
+          ndpi_draw_mode(NULL)
+          return()
+        }
+
+        if (is.null(input$class_label) || !nzchar(input$class_label)) {
+          showNotification("Select a class from the annotation set.", type = "warning")
+          ndpi_draw_mode(NULL)
+          return()
+        }
+
+        msi_oriented <- apply_affine_xy(pts, st$fit$A, st$fit$b)
+        poly_orig <- to_original_polygon(msi_oriented, st$orientation_at_fit, base_df)
+
+        cls <- pixel_class_state()
+        if (is.null(cls) || length(cls) != nrow(base_df)) cls <- rep("Unassigned", nrow(base_df))
+
+        res <- assign_polygon_to_pixel_classes(
+          base_df = base_df,
+          poly_xy_original = poly_orig,
+          class_label = input$class_label,
+          class_vec = cls
+        )
+
+        pixel_class_state(res$class_vec)
+        sync_annotated_from_state()
+        ndpi_draw_mode(NULL)
+        showNotification(sprintf("NDPI polygon assigned '%s' to %d MSI pixels.", input$class_label, res$n_updated), type = "message")
+      }
+    })
+
+    output$registration_status <- renderText({
+      st <- registration_state()
+      ndpi_ids <- names(st$ndpi_reg_polys)
+      msi_ids <- names(st$msi_reg_polys)
+      matched <- intersect(ndpi_ids, msi_ids)
+
+      paste0(
+        "NDPI registration polygons: ", length(ndpi_ids), "\n",
+        "MSI registration polygons: ", length(msi_ids), "\n",
+        "Matched Region IDs: ", ifelse(length(matched) > 0, paste(matched, collapse = ", "), "None"), "\n",
+        "Anchor pairs used: ", st$n_anchor_pairs, "\n",
+        "Valid: ", isTRUE(st$valid), "\n",
+        "RMS: ", ifelse(is.finite(st$rms), format(round(st$rms, 4), nsmall = 4), "NA"), "\n",
+        "Orientation at fit: ", st$orientation_at_fit %||% "NA", "\n",
+        "Slide: ", st$ndpi_slide_name %||% "NA"
+      )
     })
 
     observeEvent(input$assign_class, {
@@ -813,278 +1087,6 @@ clustering_module_server <- function(id) {
       showNotification(sprintf("Assigned '%s' to %d pixels.", input$class_label, n_unassigned), type = "message", duration = 3)
     })
 
-     observeEvent(input$start_reg_mode, {
-      req(input$annotation_mode == "msi_ndpi")
-      reg_mode(TRUE)
-      registration_phase("collect_ndpi")
-      st <- registration_state()
-      st$ndpi_points <- data.frame(x = numeric(), y = numeric())
-      st$msi_points <- data.frame(x = numeric(), y = numeric())
-      st$fit <- NULL
-      st$valid <- FALSE
-      st$rms <- NA_real_
-      registration_state(st)
-      session$sendCustomMessage(ns("ndpiSetRegistrationMode"), list(enabled = TRUE))
-      showNotification("NDPI landmark collection enabled.", type = "message")
-    })
-
-    observeEvent(input$start_msi_landmarks, {
-      req(input$annotation_mode == "msi_ndpi")
-      reg_mode(TRUE)
-      registration_phase("collect_msi")
-      session$sendCustomMessage(ns("ndpiSetRegistrationMode"), list(enabled = FALSE))
-      showNotification("MSI landmark collection enabled. Click points in cluster plot.", type = "message")
-     })
-
-    observeEvent(input$stop_reg_mode, {
-      reg_mode(FALSE)
-      registration_phase("idle")
-      session$sendCustomMessage(ns("ndpiSetRegistrationMode"), list(enabled = FALSE))
-      showNotification("Landmark mode disabled.", type = "message")
-    })
-
-    observeEvent(input$annotation_mode, {
-      if (identical(input$annotation_mode, "msi_only")) {
-        reg_mode(FALSE)
-        registration_phase("idle")
-        session$sendCustomMessage(ns("ndpiSetRegistrationMode"), list(enabled = FALSE))
-      }
-    }, ignoreInit = TRUE)
-    
-
-     observeEvent(input$reset_registration, {
-      registration_phase("idle")
-      reg_mode(FALSE)
-       registration_state(list(
-         ndpi_points = data.frame(x = numeric(), y = numeric()),
-         msi_points = data.frame(x = numeric(), y = numeric()),
-         fit = NULL,
-         valid = FALSE,
-         rms = NA_real_,
-         orientation_at_fit = NULL,
-         ndpi_slide_name = registration_state()$ndpi_slide_name %||% NULL
-       ))
-       session$sendCustomMessage(ns("ndpiSetRegistrationMode"), list(enabled = FALSE))
-       showNotification("Registration reset.", type = "message")
-     })
-
-    observeEvent(input$draw_ndpi_polygon, {
-      req(input$annotation_mode == "msi_ndpi")
-      st <- registration_state()
-      if (!isTRUE(st$valid) || is.null(st$fit)) {
-        showNotification("Fit registration first.", type = "warning")
-        return()
-      }
-      if (!identical(st$orientation_at_fit, input$orientation %||% "Default")) {
-        showNotification("Orientation changed since fit. Refit registration.", type = "warning")
-        return()
-      }
-      session$sendCustomMessage(ns("ndpiStartPolygon"), list())
-    })
-
-    observeEvent(input$ndpi_file, {
-      req(input$annotation_mode == "msi_ndpi")
-      req(input$ndpi_file$datapath)
-
-      stop_ndpi_server()
-
-      out_dir <- tempfile("ndpi_tiles_")
-      dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-      py <- find_python_bin()
-      script <- locate_preprocess_script()
-      port <- find_free_port()
-
-      args <- c(
-        script,
-        "--slide", normalizePath(input$ndpi_file$datapath, mustWork = TRUE),
-        "--output-dir", normalizePath(out_dir, mustWork = TRUE),
-        "--host", "127.0.0.1",
-        "--port", as.character(port),
-        "--workers", as.character(input$ndpi_workers %||% 6)
-      )
-
-      proc <- processx::process$new(
-        command = py,
-        args = args,
-        stdout = "|",
-        stderr = "|",
-        cleanup = TRUE
-      )
-
-      ndpi_runtime$proc <- proc
-      ndpi_runtime$port <- port
-      ndpi_runtime$output_dir <- out_dir
-
-      t0 <- Sys.time()
-      ready <- FALSE
-      repeat {
-        st <- read_status_json(port)
-        if (!is.null(st) && isTRUE(st$ready)) {
-          ready <- TRUE
-          break
-        }
-        if (!proc$is_alive()) break
-        if (as.numeric(difftime(Sys.time(), t0, units = "secs")) > 240) break
-        Sys.sleep(0.5)
-      }
-
-      if (!ready) {
-        err_tail <- tryCatch(paste(proc$read_error_lines(), collapse = "\n"), error = function(e) "")
-        showNotification(paste("NDPI preprocessing failed or timed out.", err_tail), type = "error", duration = 10)
-        return()
-      }
-
-      st_reg <- registration_state()
-      st_reg$ndpi_slide_name <- input$ndpi_file$name
-      registration_state(st_reg)
-
-      session$sendCustomMessage(ns("ndpiLoadSlide"), list(
-        containerId = ns("ndpi_viewer"),
-        dziUrl = sprintf("http://127.0.0.1:%d/slide.dzi?ts=%d", port, as.integer(Sys.time())),
-        inputPrefix = session$ns("")
-      ))
-
-      showNotification("NDPI ready.", type = "message")
-    })
-
-    observeEvent(input$ndpi_landmark_click, {
-      req(input$annotation_mode == "msi_ndpi")
-      req(reg_mode())
-      req(registration_phase() == "collect_ndpi")
-      x <- as.numeric(input$ndpi_landmark_click$x %||% NA_real_)
-      y <- as.numeric(input$ndpi_landmark_click$y %||% NA_real_)
-      if (!is.finite(x) || !is.finite(y)) return()
-
-      st <- registration_state()
-      st$ndpi_points <- rbind(st$ndpi_points, data.frame(x = x, y = y))
-      registration_state(st)
-
-      if (nrow(st$ndpi_points) >= 4) {
-        showNotification("Now click 'Start MSI landmarks' and pick matching points.", type = "message")
-      }
-    })
-
-    observeEvent(event_data("plotly_click", source = ns("cluster_src")), {
-      req(input$annotation_mode == "msi_ndpi")
-      req(reg_mode())
-      req(registration_phase() == "collect_msi")
-      ev <- event_data("plotly_click", source = ns("cluster_src"))
-      req(!is.null(ev$x), !is.null(ev$y))
-
-      st <- registration_state()
-      st$msi_points <- rbind(st$msi_points, data.frame(x = as.numeric(ev$x), y = as.numeric(ev$y)))
-      registration_state(st)
-    })
-
-    observeEvent(input$fit_registration, {
-      req(input$annotation_mode == "msi_ndpi")
-      req(registration_phase() == "collect_msi")
-      st <- registration_state()
-      n_ndpi <- nrow(st$ndpi_points)
-      n_msi <- nrow(st$msi_points)
-
-      if (n_ndpi < 3 || n_msi < 3) {
-        showNotification("Need at least 3 NDPI and 3 MSI landmarks.", type = "warning")
-        return()
-      }
-
-      n <- min(n_ndpi, n_msi)
-      if (n_ndpi != n_msi) {
-        showNotification("Landmark counts differ. Using first matched pairs by order.", type = "warning")
-      }
-
-      ndpi_xy <- as.matrix(st$ndpi_points[seq_len(n), c("x", "y"), drop = FALSE])
-      msi_xy <- as.matrix(st$msi_points[seq_len(n), c("x", "y"), drop = FALSE])
-
-      fit <- fit_affine_ndpi_to_msi(ndpi_xy, msi_xy)
-      if (!isTRUE(fit$valid)) {
-        st$fit <- NULL
-        st$valid <- FALSE
-        st$rms <- NA_real_
-        registration_state(st)
-        showNotification(fit$reason %||% "Registration fit failed.", type = "error")
-        return()
-      }
-
-      st$fit <- fit
-      st$valid <- TRUE
-      st$rms <- fit$rms
-      st$orientation_at_fit <- input$orientation %||% "Default"
-      registration_state(st)
-
-      registration_phase("ready")
-      reg_mode(FALSE)
-      session$sendCustomMessage(ns("ndpiSetRegistrationMode"), list(enabled = FALSE))
-      showNotification(sprintf("Registration valid. RMS = %.4f", fit$rms), type = "message")
-    })
-
-    observeEvent(input$ndpi_polygon_finished, {
-      req(input$annotation_mode == "msi_ndpi")
-      req(registration_phase() == "ready")
-      st <- registration_state()
-      base_df <- original_clustered()
-      req(base_df)
-
-      if (!isTRUE(st$valid) || is.null(st$fit)) {
-        showNotification("Registration is not valid.", type = "warning")
-        return()
-      }
-
-      if (!identical(st$orientation_at_fit, input$orientation %||% "Default")) {
-        showNotification("Orientation changed since fit. Refit registration.", type = "warning")
-        return()
-      }
-
-      pts_list <- input$ndpi_polygon_finished$points
-      if (is.null(pts_list) || length(pts_list) < 3) {
-        showNotification("Polygon needs at least 3 points.", type = "warning")
-        return()
-      }
-
-      pts <- do.call(
-        rbind,
-        lapply(pts_list, function(p) c(as.numeric(p$x), as.numeric(p$y)))
-      )
-      colnames(pts) <- c("x", "y")
-
-      msi_oriented <- apply_affine_xy(pts, st$fit$A, st$fit$b)
-      poly_orig <- to_original_polygon(msi_oriented, st$orientation_at_fit, base_df)
-
-      cls <- pixel_class_state()
-      if (is.null(cls) || length(cls) != nrow(base_df)) cls <- rep("Unassigned", nrow(base_df))
-
-
-      if (is.null(input$class_label) || !nzchar(input$class_label)) {
-        showNotification("Select a class from the annotation set.", type = "warning")
-        return()
-      }
-      res <- assign_polygon_to_pixel_classes(
-        base_df = base_df,
-        poly_xy_original = poly_orig,
-        class_label = input$class_label %||% "Class1",
-        class_vec = cls
-      )
-
-      pixel_class_state(res$class_vec)
-      sync_annotated_from_state()
-
-      showNotification(sprintf("NDPI polygon assigned '%s' to %d MSI pixels.", input$class_label, res$n_updated), type = "message")
-    })
-
-    output$registration_status <- renderText({
-      st <- registration_state()
-      paste0(
-        "Phase: ", registration_phase(), "\n",
-        "NDPI points: ", nrow(st$ndpi_points), "\n",
-        "MSI points: ", nrow(st$msi_points), "\n",
-        "Valid: ", isTRUE(st$valid), "\n",
-        "RMS: ", ifelse(is.finite(st$rms), format(round(st$rms, 4), nsmall = 4), "NA"), "\n",
-        "Orientation at fit: ", st$orientation_at_fit %||% "NA", "\n",
-        "Slide: ", st$ndpi_slide_name %||% "NA"
-      )
-    })
-
     output$cluster_plot <- renderPlotly({
       df <- clustered_data()
       req(df)
@@ -1141,7 +1143,7 @@ clustering_module_server <- function(id) {
             sizex = img_sizex, sizey = img_sizey,
             sizing = "stretch", layer = "below"
           )),
-          dragmode = if (registration_phase() == "collect_msi") "zoom" else "drawclosedpath",
+          dragmode = "drawclosedpath",
           newshape = list(line = list(color = "black", width = 1), fillcolor = "rgba(0,0,0,0.05)"),
           title = "MSI Clustering Result",
           xaxis = list(range = x_range, title = "x"),
@@ -1151,11 +1153,7 @@ clustering_module_server <- function(id) {
         ) |>
         config(
           displaylogo = FALSE,
-          modeBarButtonsToAdd = if (registration_phase() == "collect_msi") {
-            list()
-          } else {
-            list("drawclosedpath", "eraseshape")
-          },
+          modeBarButtonsToAdd = list("drawclosedpath", "eraseshape"),
           modeBarButtonsToRemove = c("hoverClosestCartesian", "hoverCompareCartesian", "toggleSpikelines", "toImage", "select2d", "lasso2d")
         )
 
@@ -1172,7 +1170,7 @@ clustering_module_server <- function(id) {
             inherit = FALSE
           )
       }
-      p <- event_register(p, "plotly_click")
+
       p <- event_register(p, "plotly_relayout")
       p
     })
@@ -1319,30 +1317,12 @@ clustering_module_server <- function(id) {
       base_df <- original_clustered()
       cls <- pixel_class_state()
 
-      if (is.null(study_id)) {
-        showNotification("No study selected.", type = "error")
-        return()
-      }
-      if (is.null(sample_id)) {
-        showNotification("No sample selected.", type = "error")
-        return()
-      }
-      if (is.null(pid)) {
-        showNotification("No pipeline selected.", type = "error")
-        return()
-      }
-      if (is.null(base_df)) {
-        showNotification("Run clustering first.", type = "error")
-        return()
-      }
-      if (is.null(ann_set_id)) {
-        showNotification("Select or create an annotation set.", type = "error")
-        return()
-      }
-      if (is.null(cls) || length(cls) != nrow(base_df)) {
-        showNotification("Annotation state is not initialized.", type = "error")
-        return()
-      }
+      if (is.null(study_id)) return(showNotification("No study selected.", type = "error"))
+      if (is.null(sample_id)) return(showNotification("No sample selected.", type = "error"))
+      if (is.null(pid)) return(showNotification("No pipeline selected.", type = "error"))
+      if (is.null(base_df)) return(showNotification("Run clustering first.", type = "error"))
+      if (is.null(ann_set_id)) return(showNotification("Select or create an annotation set.", type = "error"))
+      if (is.null(cls) || length(cls) != nrow(base_df)) return(showNotification("Annotation state is not initialized.", type = "error"))
 
       df_to_save <- base_df
       df_to_save$Class <- as.character(cls)
@@ -1429,8 +1409,10 @@ clustering_module_server <- function(id) {
               ndpi_slide_name = st$ndpi_slide_name %||% NA_character_,
               orientation = st$orientation_at_fit %||% NA_character_,
               rms = st$rms,
-              ndpi_landmarks = st$ndpi_points,
-              msi_landmarks = st$msi_points,
+              matched_region_ids = st$matched_region_ids,
+              n_anchor_pairs = st$n_anchor_pairs,
+              ndpi_reg_polys = st$ndpi_reg_polys,
+              msi_reg_polys = st$msi_reg_polys,
               affine_A = unname(as.vector(st$fit$A)),
               affine_b = unname(st$fit$b),
               created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
