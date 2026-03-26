@@ -36,6 +36,63 @@ make_raster_png <- function(df, fill_var, colors) {
   base64enc::dataURI(file = tmp, mime = "image/png")
 }
 
+# r
+parse_plotly_path_to_shape <- function(path) {
+  if (is.null(path) || !nzchar(path)) return(NULL)
+  coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
+  if (length(coords) < 3) return(NULL)
+  xy <- do.call(rbind, strsplit(coords, ","))
+  list(type = "polygon", x = as.numeric(xy[, 1]), y = as.numeric(xy[, 2]))
+}
+
+extract_polygon_from_relayout <- function(ev) {
+  if (is.null(ev)) return(NULL)
+  nms <- names(ev)
+
+  # format: shapes[0].path
+  path_keys <- grep("^shapes\\[[0-9]+\\]\\.path$", nms, value = TRUE)
+  if (length(path_keys) > 0) {
+    path <- ev[[tail(path_keys, 1)]]
+    shp <- parse_plotly_path_to_shape(path)
+    if (!is.null(shp)) return(shp)
+  }
+
+  # format: shapes as data.frame/list
+  if ("shapes" %in% nms) {
+    sh <- ev$shapes
+
+    if (is.data.frame(sh) && "path" %in% names(sh) && nrow(sh) > 0) {
+      path <- sh$path[nrow(sh)]
+      shp <- parse_plotly_path_to_shape(path)
+      if (!is.null(shp)) return(shp)
+    }
+
+    if (is.list(sh) && length(sh) > 0) {
+      for (i in rev(seq_along(sh))) {
+        if (!is.null(sh[[i]]$path)) {
+          shp <- parse_plotly_path_to_shape(sh[[i]]$path)
+          if (!is.null(shp)) return(shp)
+        }
+      }
+    }
+  }
+
+  NULL
+}
+
+get_latest_msi_polygon <- function() {
+  # 1) latest event_data
+  shp <- extract_polygon_from_relayout(event_data("plotly_relayout", source = ns("cluster_src")))
+  if (!is.null(shp)) return(shp)
+
+  # 2) fallback: direct shiny input payload
+  shp <- extract_polygon_from_relayout(input$cluster_plot_relayout)
+  if (!is.null(shp)) return(shp)
+
+  # 3) last cached
+  sel_shape()
+}
+
 clustering_module_ui <- function(id) {
   ns <- NS(id)
 
@@ -738,18 +795,9 @@ clustering_module_server <- function(id) {
 
     # MSI drawclosedpath capture
     observeEvent(event_data("plotly_relayout", source = ns("cluster_src")), {
-      ev <- event_data("plotly_relayout", source = ns("cluster_src"))
-      req(ev)
-
-      if (any(grepl("shapes\\[\\d+\\]\\.path$", names(ev)))) {
-        path_key <- grep("shapes\\[\\d+\\]\\.path$", names(ev), value = TRUE)[1]
-        path <- ev[[path_key]]
-        if (!is.null(path) && nchar(path) > 0) {
-          coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
-          xy <- do.call(rbind, strsplit(coords, ","))
-          sel_shape(list(type = "polygon", x = as.numeric(xy[, 1]), y = as.numeric(xy[, 2])))
-          showNotification(paste0("✓ Polygon captured (", nrow(xy), " points)"), type = "message", duration = 2)
-        }
+      shp <- extract_polygon_from_relayout(event_data("plotly_relayout", source = ns("cluster_src")))
+      if (!is.null(shp)) {
+        sel_shape(shp)
       }
     })
 
@@ -762,7 +810,8 @@ clustering_module_server <- function(id) {
         return()
       }
 
-      shape <- sel_shape()
+      shape <- get_latest_msi_polygon()
+      if (!is.null(shape)) sel_shape(shape)
       if (is.null(shape) || !identical(shape$type, "polygon")) {
         showNotification("Draw a polygon on MSI cluster plot first.", type = "warning")
         return()
@@ -1017,7 +1066,8 @@ clustering_module_server <- function(id) {
     })
 
     observeEvent(input$assign_class, {
-      shape <- sel_shape()
+      shape <- get_latest_msi_polygon()
+      if (!is.null(shape)) sel_shape(shape)
       if (is.null(shape)) {
         showNotification("No selection drawn.", type = "warning", duration = 4)
         return()
