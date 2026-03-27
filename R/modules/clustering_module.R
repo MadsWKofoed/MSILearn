@@ -122,7 +122,7 @@ clustering_module_ui <- function(id) {
           textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
           actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon to Region ID", class = "btn-sm"),
           actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI polygon for Region ID", class = "btn-sm"),
-          actionButton(ns("fit_registration"), "Fit NDPI→MSI (polygon-based)", class = "btn-sm btn-primary"),
+          actionButton(ns("fit_registration"), "Fit NDPI→MSI (bbox from MSI pixels)", class = "btn-sm btn-primary")
           actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning"),
           actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm"),
           verbatimTextOutput(ns("registration_status")),
@@ -393,73 +393,93 @@ clustering_module_server <- function(id) {
       poly_xy
     }
 
-    polygon_signed_area <- function(poly_xy) {
-      p <- close_polygon_xy(poly_xy)
-      x <- p[, 1]
-      y <- p[, 2]
-      sum(x[-length(x)] * y[-1] - x[-1] * y[-length(y)]) / 2
+    get_pixels_in_polygon <- function(base_df, poly_xy_original) {
+      poly_xy_original <- close_polygon_xy(poly_xy_original)
+
+      inside <- sp::point.in.polygon(
+        point.x = base_df$x,
+        point.y = base_df$y,
+        pol.x = poly_xy_original[, 1],
+        pol.y = poly_xy_original[, 2]
+      ) > 0
+
+      base_df[inside, c("x", "y"), drop = FALSE]
     }
 
-    ensure_ccw_polygon <- function(poly_xy) {
-      p <- close_polygon_xy(poly_xy)
-      if (polygon_signed_area(p) < 0) {
-        p <- p[nrow(p):1, , drop = FALSE]
-      }
-      p
-    }
+    bbox_from_xy <- function(xy) {
+      xy <- as.matrix(xy)
+      storage.mode(xy) <- "double"
 
-    extract_poly_anchors_pca <- function(poly_xy) {
-      p <- close_polygon_xy(poly_xy)
-      p_open <- p[-nrow(p), , drop = FALSE]
+      if (nrow(xy) < 1 || ncol(xy) != 2) return(NULL)
 
-      ctr <- colMeans(p_open)
-
-      X <- sweep(p_open, 2, ctr, FUN = "-")
-      sv <- svd(X)
-
-      # hovedretninger
-      v1 <- sv$v[, 1]
-      v2 <- sv$v[, 2]
-
-      # projicér punkter på hovedakserne
-      s1 <- as.vector(X %*% v1)
-      s2 <- as.vector(X %*% v2)
-
-      p1_pos <- p_open[which.max(s1), , drop = FALSE]
-      p1_neg <- p_open[which.min(s1), , drop = FALSE]
-      p2_pos <- p_open[which.max(s2), , drop = FALSE]
-      p2_neg <- p_open[which.min(s2), , drop = FALSE]
-
-      out <- rbind(
-        ctr,
-        p1_pos,
-        p1_neg,
-        p2_pos,
-        p2_neg
+      list(
+        xmin = min(xy[, 1], na.rm = TRUE),
+        xmax = max(xy[, 1], na.rm = TRUE),
+        ymin = min(xy[, 2], na.rm = TRUE),
+        ymax = max(xy[, 2], na.rm = TRUE)
       )
+    }
 
-      out <- as.matrix(out)
+    bbox_to_corner_matrix <- function(bb) {
+      out <- rbind(
+        c(bb$xmin, bb$ymin),
+        c(bb$xmax, bb$ymin),
+        c(bb$xmin, bb$ymax),
+        c(bb$xmax, bb$ymax)
+      )
       colnames(out) <- c("x", "y")
       storage.mode(out) <- "double"
       out
     }
 
-    build_anchor_pairs_from_regions <- function(st) {
+    build_bbox_pairs_from_regions <- function(st, base_df) {
       ids <- intersect(names(st$ndpi_reg_polys), names(st$msi_reg_polys))
       if (length(ids) == 0) {
-        return(list(ndpi = NULL, msi = NULL, ids = character(0), n = 0L))
+        return(list(
+          ndpi = NULL,
+          msi = NULL,
+          ids = character(0),
+          n = 0L,
+          region_pixel_counts = integer(0)
+        ))
       }
 
-      ndpi_list <- lapply(ids, function(id) {
-        extract_poly_anchors_pca(st$ndpi_reg_polys[[id]])
-      })
+      ndpi_pts_list <- list()
+      msi_pts_list  <- list()
+      used_ids <- character(0)
+      region_pixel_counts <- integer(0)
 
-      msi_list <- lapply(ids, function(id) {
-        extract_poly_anchors_pca(st$msi_reg_polys[[id]])
-      })
+      for (id in ids) {
+        ndpi_poly <- st$ndpi_reg_polys[[id]]
+        msi_poly  <- st$msi_reg_polys[[id]]
 
-      ndpi_pts <- do.call(rbind, ndpi_list)
-      msi_pts  <- do.call(rbind, msi_list)
+        msi_pixels <- get_pixels_in_polygon(base_df, msi_poly)
+        if (nrow(msi_pixels) < 3) next
+
+        ndpi_bb <- bbox_from_xy(ndpi_poly)
+        msi_bb  <- bbox_from_xy(msi_pixels[, c("x", "y"), drop = FALSE])
+
+        if (is.null(ndpi_bb) || is.null(msi_bb)) next
+
+        ndpi_pts_list[[id]] <- bbox_to_corner_matrix(ndpi_bb)
+        msi_pts_list[[id]]  <- bbox_to_corner_matrix(msi_bb)
+
+        used_ids <- c(used_ids, id)
+        region_pixel_counts[id] <- nrow(msi_pixels)
+      }
+
+      if (length(used_ids) == 0) {
+        return(list(
+          ndpi = NULL,
+          msi = NULL,
+          ids = character(0),
+          n = 0L,
+          region_pixel_counts = integer(0)
+        ))
+      }
+
+      ndpi_pts <- do.call(rbind, ndpi_pts_list)
+      msi_pts  <- do.call(rbind, msi_pts_list)
 
       colnames(ndpi_pts) <- c("x", "y")
       colnames(msi_pts)  <- c("x", "y")
@@ -467,8 +487,9 @@ clustering_module_server <- function(id) {
       list(
         ndpi = ndpi_pts,
         msi = msi_pts,
-        ids = ids,
-        n = nrow(ndpi_pts)
+        ids = used_ids,
+        n = nrow(ndpi_pts),
+        region_pixel_counts = region_pixel_counts
       )
     }
 
@@ -929,13 +950,18 @@ clustering_module_server <- function(id) {
       req(input$annotation_mode == "msi_ndpi")
 
       st <- registration_state()
-      pairs <- build_anchor_pairs_from_regions(st)
-      if (pairs$n < 3) {
-        showNotification("Need at least one matched region polygon pair.", type = "warning")
+      base_df <- original_clustered()
+      req(base_df)
+
+      pairs <- build_bbox_pairs_from_regions(st, base_df)
+
+      if (pairs$n < 4) {
+        showNotification("Need at least one matched region pair with MSI pixels inside the MSI polygon.", type = "warning")
         return()
       }
 
       fit <- fit_affine_ndpi_to_msi(pairs$ndpi, pairs$msi)
+
       if (!isTRUE(fit$valid)) {
         st$fit <- NULL
         st$valid <- FALSE
@@ -955,7 +981,11 @@ clustering_module_server <- function(id) {
       st$n_anchor_pairs <- pairs$n
       registration_state(st)
 
-      showNotification(sprintf("Registration valid. RMS = %.4f (%d anchor pairs)", fit$rms, pairs$n), type = "message")
+      showNotification(
+        sprintf("Registration valid. RMS = %.4f (%d bbox corner pairs across %d region(s))",
+                fit$rms, pairs$n, length(pairs$ids)),
+        type = "message"
+      )
     })
 
     observeEvent(input$ndpi_file, {
@@ -1111,7 +1141,7 @@ clustering_module_server <- function(id) {
         "NDPI registration polygons: ", length(ndpi_ids), "\n",
         "MSI registration polygons: ", length(msi_ids), "\n",
         "Matched Region IDs: ", ifelse(length(matched) > 0, paste(matched, collapse = ", "), "None"), "\n",
-        "Anchor pairs used: ", st$n_anchor_pairs, "\n",
+        "BBox corner pairs used: ", st$n_anchor_pairs, "\n",
         "Valid: ", isTRUE(st$valid), "\n",
         "RMS: ", ifelse(is.finite(st$rms), format(round(st$rms, 4), nsmall = 4), "NA"), "\n",
         "Orientation at fit: ", st$orientation_at_fit %||% "NA", "\n",
