@@ -892,13 +892,9 @@ clustering_module_server <- function(id) {
       req(base_df)
 
       poly_xy_disp <- cbind(shape$x, shape$y)
-      poly_xy <- to_original_polygon(
-        poly_xy_disp,
-        input$orientation %||% "Default",
-        base_df
-      )
+
       st <- registration_state()
-      st$msi_reg_polys[[rid]] <- poly_xy
+      st$msi_reg_polys[[rid]] <- poly_xy_disp
       st$fit <- NULL
       st$valid <- FALSE
       st$rms <- NA_real_
@@ -950,7 +946,7 @@ clustering_module_server <- function(id) {
       req(input$annotation_mode == "msi_ndpi")
 
       st <- registration_state()
-      base_df <- original_clustered()
+      base_df <- clustered_data()
       req(base_df)
 
       pairs <- build_bbox_pairs_from_regions(st, base_df)
@@ -1112,7 +1108,13 @@ clustering_module_server <- function(id) {
           return()
         }
 
-        poly_orig <- apply_affine_xy(pts, st$fit$A, st$fit$b)
+        poly_disp <- apply_affine_xy(pts, st$fit$A, st$fit$b)
+
+        poly_orig <- to_original_polygon(
+          poly_disp,
+          input$orientation %||% "Default",
+          base_df
+        )
 
         cls <- pixel_class_state()
         if (is.null(cls) || length(cls) != nrow(base_df)) cls <- rep("Unassigned", nrow(base_df))
