@@ -54,6 +54,16 @@ oriented_to_original_xy <- function(xy, orientation, x_min, x_max, y_min, y_max)
 }
 
 assign_polygon_to_pixel_classes <- function(base_df, poly_xy_original, class_label, class_vec) {
+  poly_xy_original <- as.matrix(poly_xy_original)
+
+  if (nrow(poly_xy_original) < 3) {
+    return(list(class_vec = class_vec, n_updated = 0L))
+  }
+
+  if (!all(poly_xy_original[1, ] == poly_xy_original[nrow(poly_xy_original), ])) {
+    poly_xy_original <- rbind(poly_xy_original, poly_xy_original[1, , drop = FALSE])
+  }
+
   inside <- sp::point.in.polygon(
     point.x = base_df$x,
     point.y = base_df$y,

@@ -122,7 +122,7 @@ clustering_module_ui <- function(id) {
           textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
           actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon to Region ID", class = "btn-sm"),
           actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI polygon for Region ID", class = "btn-sm"),
-          actionButton(ns("fit_registration"), "Fit NDPI→MSI (5 anchors / region)", class = "btn-sm btn-primary"),
+          actionButton(ns("fit_registration"), "Fit NDPI→MSI (polygon-based)", class = "btn-sm btn-primary"),
           actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning"),
           actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm"),
           verbatimTextOutput(ns("registration_status")),
@@ -380,34 +380,91 @@ clustering_module_server <- function(id) {
       )
     }
 
-    extract_poly_anchors5 <- function(poly_xy) {
-      stopifnot(ncol(poly_xy) == 2, nrow(poly_xy) >= 3)
-      cx <- mean(poly_xy[, 1], na.rm = TRUE)
-      cy <- mean(poly_xy[, 2], na.rm = TRUE)
-      i_left  <- which.min(poly_xy[, 1])
-      i_right <- which.max(poly_xy[, 1])
-      i_top   <- which.min(poly_xy[, 2])
-      i_bot   <- which.max(poly_xy[, 2])
+    close_polygon_xy <- function(poly_xy) {
+      poly_xy <- as.matrix(poly_xy)
+      if (nrow(poly_xy) < 3) return(poly_xy)
+      if (!all(poly_xy[1, ] == poly_xy[nrow(poly_xy), ])) {
+        poly_xy <- rbind(poly_xy, poly_xy[1, , drop = FALSE])
+      }
+      poly_xy
+    }
 
-      out <- rbind(
-        c(cx, cy),
-        poly_xy[i_left, ],
-        poly_xy[i_right, ],
-        poly_xy[i_top, ],
-        poly_xy[i_bot, ]
-      )
+    polygon_signed_area <- function(poly_xy) {
+      p <- close_polygon_xy(poly_xy)
+      x <- p[, 1]
+      y <- p[, 2]
+      sum(x[-length(x)] * y[-1] - x[-1] * y[-length(y)]) / 2
+    }
+
+    ensure_ccw_polygon <- function(poly_xy) {
+      p <- close_polygon_xy(poly_xy)
+      if (polygon_signed_area(p) < 0) {
+        p <- p[nrow(p):1, , drop = FALSE]
+      }
+      p
+    }
+
+    resample_polygon_boundary <- function(poly_xy, n = 80) {
+      p <- ensure_ccw_polygon(poly_xy)
+      seg_dx <- diff(p[, 1])
+      seg_dy <- diff(p[, 2])
+      seg_len <- sqrt(seg_dx^2 + seg_dy^2)
+
+      keep <- seg_len > 0
+      if (!any(keep)) stop("Polygon has zero boundary length.")
+
+      p0 <- p[cbind(which(keep), 1:2)]
+      p1 <- p[cbind(which(keep) + 1, 1:2)]
+      seg_len <- seg_len[keep]
+
+      cum <- c(0, cumsum(seg_len))
+      total <- tail(cum, 1)
+
+      s <- seq(0, total, length.out = n + 1)[-(n + 1)]
+
+      out <- matrix(NA_real_, nrow = n, ncol = 2)
       colnames(out) <- c("x", "y")
+
+      for (i in seq_along(s)) {
+        k <- max(which(cum <= s[i]))
+        if (k == length(cum)) k <- length(cum) - 1
+        t <- (s[i] - cum[k]) / (cum[k + 1] - cum[k])
+        out[i, ] <- p0[k, ] + t * (p1[k, ] - p0[k, ])
+      }
+
       out
     }
 
-    build_anchor_pairs_from_regions <- function(st) {
+    order_points_by_angle <- function(xy) {
+      ctr <- colMeans(xy)
+      ang <- atan2(xy[, 2] - ctr[2], xy[, 1] - ctr[1])
+      xy[order(ang), , drop = FALSE]
+    }
+
+    extract_poly_anchors_robust <- function(poly_xy, n_boundary = 80) {
+      samp <- resample_polygon_boundary(poly_xy, n = n_boundary)
+      samp <- order_points_by_angle(samp)
+      ctr  <- matrix(colMeans(samp), nrow = 1)
+      colnames(ctr) <- c("x", "y")
+      rbind(ctr, samp)
+    }
+
+    build_anchor_pairs_from_regions <- function(st, n_boundary = 80) {
       ids <- intersect(names(st$ndpi_reg_polys), names(st$msi_reg_polys))
       if (length(ids) == 0) {
         return(list(ndpi = NULL, msi = NULL, ids = character(0), n = 0L))
       }
 
-      ndpi_pts <- do.call(rbind, lapply(ids, function(id) extract_poly_anchors5(st$ndpi_reg_polys[[id]])))
-      msi_pts  <- do.call(rbind, lapply(ids, function(id) extract_poly_anchors5(st$msi_reg_polys[[id]])))
+      ndpi_list <- lapply(ids, function(id) {
+        extract_poly_anchors_robust(st$ndpi_reg_polys[[id]], n_boundary = n_boundary)
+      })
+
+      msi_list <- lapply(ids, function(id) {
+        extract_poly_anchors_robust(st$msi_reg_polys[[id]], n_boundary = n_boundary)
+      })
+
+      ndpi_pts <- do.call(rbind, ndpi_list)
+      msi_pts  <- do.call(rbind, msi_list)
 
       list(
         ndpi = ndpi_pts,
@@ -876,7 +933,7 @@ clustering_module_server <- function(id) {
       st <- registration_state()
       pairs <- build_anchor_pairs_from_regions(st)
       if (pairs$n < 3) {
-        showNotification("Need at least one matched region polygon pair (5 anchor points).", type = "warning")
+        showNotification("Need at least one matched region polygon pair.", type = "warning")
         return()
       }
 
@@ -1164,16 +1221,6 @@ clustering_module_server <- function(id) {
       img_sizex <- x_max - x_min
       img_sizey <- y_max - y_min
 
-      orientation <- input$orientation %||% "Default"
-      if (orientation %in% c("Flip X", "Flip Both")) {
-        x_range <- rev(x_range)
-        img_x <- x_max
-        img_sizex <- -(x_max - x_min)
-      }
-      if (orientation %in% c("Flip Y", "Flip Both")) {
-        y_range <- rev(y_range)
-        img_y <- y_min
-      }
 
       p <- plot_ly(source = ns("cluster_src")) |>
         add_trace(
@@ -1259,17 +1306,6 @@ clustering_module_server <- function(id) {
       img_y <- y_max
       img_sizex <- x_max - x_min
       img_sizey <- y_max - y_min
-
-      orientation <- input$orientation %||% "Default"
-      if (orientation %in% c("Flip X", "Flip Both")) {
-        x_range <- rev(x_range)
-        img_x <- x_max
-        img_sizex <- -(x_max - x_min)
-      }
-      if (orientation %in% c("Flip Y", "Flip Both")) {
-        y_range <- rev(y_range)
-        img_y <- y_min
-      }
 
       p <- plot_ly() |>
         layout(
