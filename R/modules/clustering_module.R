@@ -420,12 +420,24 @@ clustering_module_server <- function(id) {
       )
     }
 
-    bbox_to_corner_matrix <- function(bb) {
+    bbox_to_corner_matrix_msi <- function(bb) {
       out <- rbind(
-        c(bb$xmin, bb$ymin),
-        c(bb$xmax, bb$ymin),
-        c(bb$xmin, bb$ymax),
-        c(bb$xmax, bb$ymax)
+        c(bb$xmin, bb$ymin),  # bottom-left
+        c(bb$xmax, bb$ymin),  # bottom-right
+        c(bb$xmin, bb$ymax),  # top-left
+        c(bb$xmax, bb$ymax)   # top-right
+      )
+      colnames(out) <- c("x", "y")
+      storage.mode(out) <- "double"
+      out
+    }
+
+    bbox_to_corner_matrix_ndpi <- function(bb) {
+      out <- rbind(
+        c(bb$xmin, bb$ymax),  # bottom-left in MSI terms
+        c(bb$xmax, bb$ymax),  # bottom-right in MSI terms
+        c(bb$xmin, bb$ymin),  # top-left in MSI terms
+        c(bb$xmax, bb$ymin)   # top-right in MSI terms
       )
       colnames(out) <- c("x", "y")
       storage.mode(out) <- "double"
@@ -461,8 +473,8 @@ clustering_module_server <- function(id) {
 
         if (is.null(ndpi_bb) || is.null(msi_bb)) next
 
-        ndpi_pts_list[[id]] <- bbox_to_corner_matrix(ndpi_bb)
-        msi_pts_list[[id]]  <- bbox_to_corner_matrix(msi_bb)
+        ndpi_pts_list[[id]] <- bbox_to_corner_matrix_ndpi(ndpi_bb)
+        msi_pts_list[[id]]  <- bbox_to_corner_matrix_msi(msi_bb)
 
         used_ids <- c(used_ids, id)
         region_pixel_counts[id] <- nrow(msi_pixels)
