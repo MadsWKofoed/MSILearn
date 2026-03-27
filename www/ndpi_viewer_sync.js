@@ -1,7 +1,5 @@
-
 window.ndpiSyncViewer = (() => {
   const states = new Map();
-  const registeredHandlers = new Set();
   let activeContainerId = null;
 
   function getState(containerId = activeContainerId) {
@@ -14,114 +12,200 @@ window.ndpiSyncViewer = (() => {
     Shiny.setInputValue(state.inputPrefix + id, value, { priority: "event" });
   }
 
-  function toImagePoint(state, clientX, clientY) {
+  function makeSvgEl(tag, attrs = {}) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    return el;
+  }
+
+  function imageCoordsFromClient(state, clientX, clientY) {
     const rect = state.viewer.container.getBoundingClientRect();
-    const px = new OpenSeadragon.Point(clientX - rect.left, clientY - rect.top);
-    const vp = state.viewer.viewport.pointFromPixel(px);
-    const im = state.viewer.viewport.viewportToImageCoordinates(vp);
-    return { x: im.x, y: im.y };
+    const pixel = new OpenSeadragon.Point(clientX - rect.left, clientY - rect.top);
+    const vpPoint = state.viewer.viewport.pointFromPixel(pixel);
+    const imgPoint = state.viewer.viewport.viewportToImageCoordinates(vpPoint);
+    return { x: imgPoint.x, y: imgPoint.y };
   }
 
-  function clearTempPolyline(state) {
-    if (!state || !state.polyline) return;
-    state.polyline.setAttribute("points", "");
+  function imageToScreen(state, point) {
+    const vp = state.viewer.viewport.imageToViewportCoordinates(point.x, point.y);
+    const px = state.viewer.viewport.pixelFromPoint(vp, true);
+    return { x: px.x, y: px.y };
   }
 
-  function redrawTempPolyline(state) {
-    if (!state || !state.polyline) return;
-    const pts = state.points.map((p) => `${p.x},${p.y}`).join(" ");
-    state.polyline.setAttribute("points", pts);
+  function pointsToScreenString(state, points) {
+    return points
+      .map((p) => {
+        const s = imageToScreen(state, p);
+        return `${s.x},${s.y}`;
+      })
+      .join(" ");
   }
 
-  function updatePointerMode(state) {
-    if (!state || !state.drawLayer) return;
-    const interactive = !!state.regMode || !!state.drawing;
-    state.drawLayer.style.pointerEvents = interactive ? "auto" : "none";
+  function clearSvg(state) {
+    if (!state || !state.drawGroup) return;
+    while (state.drawGroup.firstChild) {
+      state.drawGroup.removeChild(state.drawGroup.firstChild);
+    }
+  }
+
+  function getDisplaySizes(state) {
+    const zoom = state?.viewer ? state.viewer.viewport.getZoom(true) : 1;
+    return {
+      strokeWidth: Math.max(1.2, 2 / zoom),
+      pointRadius: Math.max(1.5, 3 / zoom),
+      pointStrokeWidth: Math.max(0.8, 1 / zoom)
+    };
+  }
+
+  function drawCurrentPolyline(state) {
+    if (!state || !state.drawGroup || state.currentPoints.length === 0) return;
+
+    const sizes = getDisplaySizes(state);
+
+    const pl = makeSvgEl("polyline", {
+      points: pointsToScreenString(state, state.currentPoints),
+      fill: "none",
+      stroke: "#ffff00",
+      "stroke-width": sizes.strokeWidth,
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round"
+    });
+    state.drawGroup.appendChild(pl);
+
+    state.currentPoints.forEach((p) => {
+      const s = imageToScreen(state, p);
+      const c = makeSvgEl("circle", {
+        cx: s.x,
+        cy: s.y,
+        r: sizes.pointRadius,
+        fill: "#00ffff",
+        stroke: "#000000",
+        "stroke-width": sizes.pointStrokeWidth
+      });
+      state.drawGroup.appendChild(c);
+    });
+  }
+
+  function drawLastPolygon(state) {
+    if (!state || !state.drawGroup || !state.lastPolygon || state.lastPolygon.length < 3) return;
+
+    const sizes = getDisplaySizes(state);
+
+    const poly = makeSvgEl("polygon", {
+      points: pointsToScreenString(state, state.lastPolygon),
+      fill: "rgba(255, 255, 0, 0.20)",
+      stroke: "#ffcc00",
+      "stroke-width": sizes.strokeWidth,
+      "stroke-linejoin": "round"
+    });
+    state.drawGroup.appendChild(poly);
+  }
+
+  function redrawAll(state) {
+    if (!state || !state.viewer || !state.svg) return;
+
+    const w = state.viewer.container.clientWidth;
+    const h = state.viewer.container.clientHeight;
+
+    state.svg.setAttribute("width", w);
+    state.svg.setAttribute("height", h);
+    state.svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+
+    clearSvg(state);
+    drawLastPolygon(state);
+    drawCurrentPolyline(state);
+  }
+
+  function setDrawMode(state, enabled) {
+    state.drawing = !!enabled;
+
+    if (!state.drawLayer) return;
+
+    if (state.drawing) {
+      state.drawLayer.style.pointerEvents = "auto";
+      state.drawLayer.style.cursor = "crosshair";
+      state.viewer.setMouseNavEnabled(false);
+    } else {
+      state.drawLayer.style.pointerEvents = "none";
+      state.drawLayer.style.cursor = "default";
+      state.viewer.setMouseNavEnabled(true);
+      state.pointerDown = false;
+      state.currentPoints = [];
+      redrawAll(state);
+    }
   }
 
   function finishPolygon(state) {
     if (!state) return;
-    state.pointerDown = false;
 
-    if (state.points.length >= 3) {
-      setInput(state, "ndpi_polygon_finished", {
-        points: state.points,
-        ts: Date.now()
-      });
+    if (state.currentPoints.length < 3) {
+      state.currentPoints = [];
+      state.pointerDown = false;
+      setDrawMode(state, false);
+      redrawAll(state);
+      return;
     }
 
-    state.points = [];
-    clearTempPolyline(state);
-    state.drawing = false;
-    state.viewer.setMouseNavEnabled(true);
-    updatePointerMode(state);
+    const poly = state.currentPoints.map((p) => ({ x: p.x, y: p.y }));
+
+    state.lastPolygon = poly;
+    state.currentPoints = [];
+    state.pointerDown = false;
+    setDrawMode(state, false);
+    redrawAll(state);
+
+    setInput(state, "ndpi_polygon_finished", {
+      points: poly,
+      ts: Date.now()
+    });
   }
-
-  function imageToScreenPoint(state, x, y) {
-  const vp = state.viewer.viewport.imageToViewportCoordinates(
-    new OpenSeadragon.Point(x, y)
-  );
-  const px = state.viewer.viewport.viewportToViewerElementCoordinates(vp);
-  return { x: px.x, y: px.y };
-}
-
-function redrawTempPolyline(state) {
-  if (!state || !state.polyline) return;
-  const pts = state.points
-    .map((p) => {
-      const s = imageToScreenPoint(state, p.x, p.y);
-      return `${s.x},${s.y}`;
-    })
-    .join(" ");
-  state.polyline.setAttribute("points", pts);
-}
 
   function cancelPolygon(state) {
     if (!state) return;
     state.pointerDown = false;
-    state.points = [];
-    clearTempPolyline(state);
-    state.drawing = false;
-    state.viewer.setMouseNavEnabled(true);
-    updatePointerMode(state);
-    state.viewer.addHandler("animation", () => redrawTempPolyline(state));
-    state.viewer.addHandler("zoom", () => redrawTempPolyline(state));
-    state.viewer.addHandler("pan", () => redrawTempPolyline(state));
-    state.viewer.addHandler("resize", () => redrawTempPolyline(state));
+    state.currentPoints = [];
+    setDrawMode(state, false);
+    redrawAll(state);
+  }
+
+  function removeOverlay(state) {
+    if (state?.drawLayer && state.drawLayer.parentNode) {
+      state.drawLayer.parentNode.removeChild(state.drawLayer);
+    }
+    state.drawLayer = null;
+    state.svg = null;
+    state.drawGroup = null;
   }
 
   function ensureOverlay(state) {
-    const c = state.viewer.container;
-    c.style.position = "relative";
+    const container = state.viewer.container;
+    container.style.position = "relative";
+
+    removeOverlay(state);
 
     const drawLayer = document.createElement("div");
     drawLayer.style.position = "absolute";
     drawLayer.style.inset = "0";
     drawLayer.style.zIndex = "999";
     drawLayer.style.pointerEvents = "none";
-    c.appendChild(drawLayer);
+    drawLayer.style.background = "transparent";
 
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.style.position = "absolute";
     svg.style.inset = "0";
     svg.style.width = "100%";
     svg.style.height = "100%";
+    svg.style.overflow = "visible";
+
+    const drawGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    svg.appendChild(drawGroup);
+
     drawLayer.appendChild(svg);
-
-    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    svg.appendChild(g);
-
-    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-    polyline.setAttribute("fill", "rgba(0, 255, 255, 0.08)");
-    polyline.setAttribute("stroke", "#00ffff");
-    polyline.setAttribute("stroke-width", "2");
-    polyline.setAttribute("points", "");
-    g.appendChild(polyline);
+    container.appendChild(drawLayer);
 
     state.drawLayer = drawLayer;
     state.svg = svg;
-    state.g = g;
-    state.polyline = polyline;
+    state.drawGroup = drawGroup;
 
     drawLayer.addEventListener("mousedown", (e) => {
       if (!state.drawing) return;
@@ -129,28 +213,32 @@ function redrawTempPolyline(state) {
       e.stopPropagation();
 
       state.pointerDown = true;
-      state.points = [toImagePoint(state, e.clientX, e.clientY)];
-      redrawTempPolyline(state);
+      state.currentPoints = [imageCoordsFromClient(state, e.clientX, e.clientY)];
+      redrawAll(state);
     });
 
     drawLayer.addEventListener("mousemove", (e) => {
       if (!state.drawing || !state.pointerDown) return;
+      e.preventDefault();
+      e.stopPropagation();
 
-      const p = toImagePoint(state, e.clientX, e.clientY);
-      const last = state.points[state.points.length - 1];
-      const dx = p.x - last.x;
-      const dy = p.y - last.y;
+      const pt = imageCoordsFromClient(state, e.clientX, e.clientY);
+      const last = state.currentPoints[state.currentPoints.length - 1];
+      const dx = pt.x - last.x;
+      const dy = pt.y - last.y;
 
-      if ((dx * dx + dy * dy) >= 9) {
-        state.points.push(p);
-        redrawTempPolyline(state);
+      if ((dx * dx + dy * dy) > 100) {
+        state.currentPoints.push(pt);
+        redrawAll(state);
       }
     });
 
     drawLayer.addEventListener("mouseup", (e) => {
       if (!state.drawing || !state.pointerDown) return;
-      state.points.push(toImagePoint(state, e.clientX, e.clientY));
-      redrawTempPolyline(state);
+      e.preventDefault();
+      e.stopPropagation();
+
+      state.currentPoints.push(imageCoordsFromClient(state, e.clientX, e.clientY));
       finishPolygon(state);
     });
 
@@ -160,14 +248,6 @@ function redrawTempPolyline(state) {
       }
     });
 
-    drawLayer.addEventListener("click", (e) => {
-      if (!state.regMode || state.drawing) return;
-      const p = toImagePoint(state, e.clientX, e.clientY);
-      setInput(state, "ndpi_landmark_click", { x: p.x, y: p.y, ts: Date.now() });
-      e.preventDefault();
-      e.stopPropagation();
-    });
-
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         const s = getState();
@@ -175,7 +255,7 @@ function redrawTempPolyline(state) {
       }
     });
 
-    updatePointerMode(state);
+    redrawAll(state);
   }
 
   function destroy(containerId = activeContainerId) {
@@ -186,21 +266,18 @@ function redrawTempPolyline(state) {
       if (state.viewer) state.viewer.destroy();
     } catch (_) {}
 
-    if (state.drawLayer && state.drawLayer.parentNode) {
-      state.drawLayer.parentNode.removeChild(state.drawLayer);
-    }
+    removeOverlay(state);
 
     states.delete(containerId);
     if (activeContainerId === containerId) activeContainerId = null;
   }
 
   function init(opts) {
-    if (!window.OpenSeadragon) {
-      throw new Error("OpenSeadragon is not loaded.");
-    }
+    if (!window.OpenSeadragon) throw new Error("OpenSeadragon is not loaded.");
 
     const containerId = opts.containerId;
     if (!containerId) throw new Error("containerId is required.");
+
     destroy(containerId);
 
     const state = {
@@ -209,85 +286,72 @@ function redrawTempPolyline(state) {
       viewer: null,
       drawLayer: null,
       svg: null,
-      g: null,
-      polyline: null,
-      regMode: false,
+      drawGroup: null,
       drawing: false,
       pointerDown: false,
-      points: []
+      currentPoints: [],
+      lastPolygon: null
     };
 
     state.viewer = OpenSeadragon({
       id: containerId,
       prefixUrl: "https://openseadragon.github.io/openseadragon/images/",
       tileSources: opts.dziUrl,
-      showNavigator: true
+      showNavigator: true,
+      zoomPerScroll: 1.2,
+      animationTime: 0.15,
+      springStiffness: 7,
+      imageLoaderLimit: 6,
+      timeout: 120000,
+      maxImageCacheCount: 400,
+      maxZoomPixelRatio: 6,
+      minZoomImageRatio: 1,
+      visibilityRatio: 1,
+      constrainDuringPan: true,
+      immediateRender: true,
+      blendTime: 0,
+      alwaysBlend: false,
+      gestureSettingsMouse: {
+        clickToZoom: false,
+        dblClickToZoom: false,
+        dragToPan: true,
+        scrollToZoom: true
+      }
     });
 
     state.viewer.addHandler("open", () => {
       ensureOverlay(state);
+      redrawAll(state);
     });
+
+    state.viewer.addHandler("animation", () => redrawAll(state));
+    state.viewer.addHandler("resize", () => redrawAll(state));
+    state.viewer.addHandler("pan", () => redrawAll(state));
+    state.viewer.addHandler("zoom", () => redrawAll(state));
 
     states.set(containerId, state);
     activeContainerId = containerId;
   }
 
-  function setRegistrationMode(on, containerId = activeContainerId) {
-    const state = getState(containerId);
-    if (!state) return;
-    state.regMode = !!on;
-    if (state.regMode) {
-      state.drawing = false;
-      state.pointerDown = false;
-      state.viewer.setMouseNavEnabled(true);
-      clearTempPolyline(state);
-    }
-    updatePointerMode(state);
-  }
-
   function startPolygon(containerId = activeContainerId) {
     const state = getState(containerId);
-    if (!state) return;
-    state.regMode = false;
-    state.drawing = true;
-    state.pointerDown = false;
-    state.points = [];
-    clearTempPolyline(state);
-    state.viewer.setMouseNavEnabled(false);
-    updatePointerMode(state);
+    if (!state || !state.viewer) return;
+    state.lastPolygon = null;
+    state.currentPoints = [];
+    redrawAll(state);
+    setDrawMode(state, true);
   }
 
-  function registerShinyHandlers({ loadHandler, regHandler, polyHandler }) {
-    if (!window.Shiny) return;
-
-    const pairs = [
-      [loadHandler, (msg) => init(msg)],
-      [regHandler, (msg) => setRegistrationMode(!!msg.enabled, msg.containerId || activeContainerId)],
-      [polyHandler, (msg) => startPolygon(msg?.containerId || activeContainerId)]
-    ];
-
-    for (const [name, fn] of pairs) {
-      if (!name || registeredHandlers.has(name)) continue;
-      Shiny.addCustomMessageHandler(name, fn);
-      registeredHandlers.add(name);
-    }
-  }
-
-  // Convenience helper: pass ns("") from R, e.g. "clustering-"
-  function bindNamespacedHandlers(nsPrefix) {
-    registerShinyHandlers({
-      loadHandler: `${nsPrefix}ndpiLoadSlide`,
-      regHandler: `${nsPrefix}ndpiSetRegistrationMode`,
-      polyHandler: `${nsPrefix}ndpiStartPolygon`
-    });
+  function stopPolygon(containerId = activeContainerId) {
+    const state = getState(containerId);
+    if (!state || !state.viewer) return;
+    cancelPolygon(state);
   }
 
   return {
     init,
     destroy,
-    setRegistrationMode,
     startPolygon,
-    registerShinyHandlers,
-    bindNamespacedHandlers
+    stopPolygon
   };
 })();
