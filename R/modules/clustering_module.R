@@ -382,7 +382,11 @@ clustering_module_server <- function(id) {
 
     close_polygon_xy <- function(poly_xy) {
       poly_xy <- as.matrix(poly_xy)
-      if (nrow(poly_xy) < 3) return(poly_xy)
+      storage.mode(poly_xy) <- "double"
+
+      if (ncol(poly_xy) != 2) stop("Polygon must be an n x 2 matrix.")
+      if (nrow(poly_xy) < 3) stop("Polygon must have at least 3 points.")
+
       if (!all(poly_xy[1, ] == poly_xy[nrow(poly_xy), ])) {
         poly_xy <- rbind(poly_xy, poly_xy[1, , drop = FALSE])
       }
@@ -406,19 +410,27 @@ clustering_module_server <- function(id) {
 
     resample_polygon_boundary <- function(poly_xy, n = 80) {
       p <- ensure_ccw_polygon(poly_xy)
-      seg_dx <- diff(p[, 1])
-      seg_dy <- diff(p[, 2])
+
+      p_start <- p[-nrow(p), , drop = FALSE]
+      p_end   <- p[-1,       , drop = FALSE]
+
+      seg_dx <- p_end[, 1] - p_start[, 1]
+      seg_dy <- p_end[, 2] - p_start[, 2]
       seg_len <- sqrt(seg_dx^2 + seg_dy^2)
 
-      keep <- seg_len > 0
-      if (!any(keep)) stop("Polygon has zero boundary length.")
+      keep <- is.finite(seg_len) & seg_len > 0
+      if (!any(keep)) stop("Polygon has zero usable boundary length.")
 
-      p0 <- p[cbind(which(keep), 1:2)]
-      p1 <- p[cbind(which(keep) + 1, 1:2)]
+      p_start <- p_start[keep, , drop = FALSE]
+      p_end   <- p_end[keep,   , drop = FALSE]
       seg_len <- seg_len[keep]
 
       cum <- c(0, cumsum(seg_len))
       total <- tail(cum, 1)
+
+      if (!is.finite(total) || total <= 0) {
+        stop("Polygon boundary length is invalid.")
+      }
 
       s <- seq(0, total, length.out = n + 1)[-(n + 1)]
 
@@ -426,16 +438,20 @@ clustering_module_server <- function(id) {
       colnames(out) <- c("x", "y")
 
       for (i in seq_along(s)) {
-        k <- max(which(cum <= s[i]))
-        if (k == length(cum)) k <- length(cum) - 1
-        t <- (s[i] - cum[k]) / (cum[k + 1] - cum[k])
-        out[i, ] <- p0[k, ] + t * (p1[k, ] - p0[k, ])
+        k <- findInterval(s[i], cum, rightmost.closed = TRUE)
+        k <- min(max(k, 1), length(seg_len))
+
+        denom <- cum[k + 1] - cum[k]
+        t <- if (denom <= 0) 0 else (s[i] - cum[k]) / denom
+
+        out[i, ] <- p_start[k, ] + t * (p_end[k, ] - p_start[k, ])
       }
 
       out
     }
 
     order_points_by_angle <- function(xy) {
+      xy <- as.matrix(xy)
       ctr <- colMeans(xy)
       ang <- atan2(xy[, 2] - ctr[2], xy[, 1] - ctr[1])
       xy[order(ang), , drop = FALSE]
@@ -444,9 +460,13 @@ clustering_module_server <- function(id) {
     extract_poly_anchors_robust <- function(poly_xy, n_boundary = 80) {
       samp <- resample_polygon_boundary(poly_xy, n = n_boundary)
       samp <- order_points_by_angle(samp)
-      ctr  <- matrix(colMeans(samp), nrow = 1)
+
+      ctr <- matrix(colMeans(samp), nrow = 1)
       colnames(ctr) <- c("x", "y")
-      rbind(ctr, samp)
+
+      out <- rbind(ctr, samp)
+      colnames(out) <- c("x", "y")
+      out
     }
 
     build_anchor_pairs_from_regions <- function(st, n_boundary = 80) {
@@ -465,6 +485,9 @@ clustering_module_server <- function(id) {
 
       ndpi_pts <- do.call(rbind, ndpi_list)
       msi_pts  <- do.call(rbind, msi_list)
+
+      colnames(ndpi_pts) <- c("x", "y")
+      colnames(msi_pts)  <- c("x", "y")
 
       list(
         ndpi = ndpi_pts,
