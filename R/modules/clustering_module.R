@@ -122,7 +122,7 @@ clustering_module_ui <- function(id) {
           textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
           actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon to Region ID", class = "btn-sm"),
           actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI polygon for Region ID", class = "btn-sm"),
-          actionButton(ns("fit_registration"), "Fit NDPI→MSI (bbox from MSI pixels)", class = "btn-sm btn-primary")
+          actionButton(ns("fit_registration"), "Fit NDPI→MSI (bbox from MSI pixels)", class = "btn-sm btn-primary"),
           actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning"),
           actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm"),
           verbatimTextOutput(ns("registration_status")),
