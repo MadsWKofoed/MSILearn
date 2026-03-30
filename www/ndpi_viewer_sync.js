@@ -26,6 +26,16 @@ window.ndpiSyncViewer = (() => {
     return { x: imgPoint.x, y: imgPoint.y };
   }
 
+  function scheduleRedraw(state) {
+  if (!state) return;
+  if (state.rafPending) return;
+  state.rafPending = true;
+  requestAnimationFrame(() => {
+    state.rafPending = false;
+    redrawAll(state);
+  });
+}
+
   function imageToScreen(state, point) {
     const vp = state.viewer.viewport.imageToViewportCoordinates(point.x, point.y);
     const px = state.viewer.viewport.pixelFromPoint(vp, true);
@@ -290,7 +300,8 @@ window.ndpiSyncViewer = (() => {
       drawing: false,
       pointerDown: false,
       currentPoints: [],
-      lastPolygon: null
+      lastPolygon: null,
+      rafPending: false,
     };
 
     state.viewer = OpenSeadragon({
@@ -324,10 +335,10 @@ window.ndpiSyncViewer = (() => {
       redrawAll(state);
     });
 
-    state.viewer.addHandler("animation", () => redrawAll(state));
-    state.viewer.addHandler("resize", () => redrawAll(state));
-    state.viewer.addHandler("pan", () => redrawAll(state));
-    state.viewer.addHandler("zoom", () => redrawAll(state));
+    state.viewer.addHandler("animation", () => scheduleRedraw(state));
+    state.viewer.addHandler("resize", () => scheduleRedraw(state));
+    state.viewer.addHandler("pan", () => scheduleRedraw(state));
+    state.viewer.addHandler("zoom", () => scheduleRedraw(state));
 
     states.set(containerId, state);
     activeContainerId = containerId;
