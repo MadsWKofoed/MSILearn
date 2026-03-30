@@ -540,8 +540,13 @@ clustering_module_server <- function(id) {
       )
     }
 
-    choose_nearest_region_id <- function(annotation_pts, ndpi_reg_polys) {
+    choose_nearest_region_id <- function(annotation_pts, ndpi_reg_polys, fitted_ids = NULL) {
       ids <- names(ndpi_reg_polys)
+
+      if (!is.null(fitted_ids)) {
+        ids <- intersect(ids, fitted_ids)
+      }
+
       if (length(ids) == 0) return(NA_character_)
 
       ann_ctr <- colMeans(annotation_pts)
@@ -1196,8 +1201,19 @@ clustering_module_server <- function(id) {
           return()
         }
 
-        rid_use <- choose_nearest_region_id(pts, st$ndpi_reg_polys)
+        fitted_ids <- names(st$fit_by_region)
+
+        rid_use <- choose_nearest_region_id(
+          annotation_pts = pts,
+          ndpi_reg_polys = st$ndpi_reg_polys,
+          fitted_ids = fitted_ids
+        )
+
         fit_use <- st$fit_by_region[[rid_use]]
+        showNotification(
+          sprintf("Using fitted region %s", rid_use),
+          type = "message"
+        )
 
         if (is.null(rid_use) || is.na(rid_use) || is.null(fit_use)) {
           showNotification("Could not determine nearest fitted region.", type = "warning")
