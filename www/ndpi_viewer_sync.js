@@ -26,15 +26,19 @@ window.ndpiSyncViewer = (() => {
     return { x: imgPoint.x, y: imgPoint.y };
   }
 
-  function scheduleRedraw(state) {
-  if (!state) return;
-  if (state.rafPending) return;
-  state.rafPending = true;
-  requestAnimationFrame(() => {
-    state.rafPending = false;
-    redrawAll(state);
-  });
-}
+    function scheduleRedraw(state) {
+    if (!state) return;
+
+    if (!state.isHovered && !state.drawing) return;
+
+    if (state.rafPending) return;
+    state.rafPending = true;
+
+    requestAnimationFrame(() => {
+        state.rafPending = false;
+        redrawAll(state);
+    });
+    }
 
   function imageToScreen(state, point) {
     const vp = state.viewer.viewport.imageToViewportCoordinates(point.x, point.y);
@@ -282,7 +286,7 @@ window.ndpiSyncViewer = (() => {
     if (activeContainerId === containerId) activeContainerId = null;
   }
 
-  function init(opts) {
+    function init(opts) {
     if (!window.OpenSeadragon) throw new Error("OpenSeadragon is not loaded.");
 
     const containerId = opts.containerId;
@@ -290,19 +294,33 @@ window.ndpiSyncViewer = (() => {
 
     destroy(containerId);
 
+    const container = document.getElementById(containerId);
+    if (!container) throw new Error(`Container not found: ${containerId}`);
+
     const state = {
-      containerId,
-      inputPrefix: opts.inputPrefix || "",
-      viewer: null,
-      drawLayer: null,
-      svg: null,
-      drawGroup: null,
-      drawing: false,
-      pointerDown: false,
-      currentPoints: [],
-      lastPolygon: null,
-      rafPending: false,
+        containerId,
+        container,
+        inputPrefix: opts.inputPrefix || "",
+        viewer: null,
+        drawLayer: null,
+        svg: null,
+        drawGroup: null,
+        drawing: false,
+        pointerDown: false,
+        currentPoints: [],
+        lastPolygon: null,
+        rafPending: false,
+        isHovered: false,
     };
+
+    state.container.addEventListener("mouseenter", () => {
+        state.isHovered = true;
+        scheduleRedraw(state);
+    });
+
+    state.container.addEventListener("mouseleave", () => {
+        state.isHovered = false;
+    });
 
     state.viewer = OpenSeadragon({
       id: containerId,
@@ -331,8 +349,8 @@ window.ndpiSyncViewer = (() => {
     });
 
     state.viewer.addHandler("open", () => {
-      ensureOverlay(state);
-      redrawAll(state);
+        ensureOverlay(state);
+        redrawAll(state);
     });
 
     state.viewer.addHandler("animation", () => scheduleRedraw(state));
@@ -342,22 +360,24 @@ window.ndpiSyncViewer = (() => {
 
     states.set(containerId, state);
     activeContainerId = containerId;
-  }
+    }
 
-  function startPolygon(containerId = activeContainerId) {
+    function startPolygon(containerId = activeContainerId) {
     const state = getState(containerId);
     if (!state || !state.viewer) return;
     state.lastPolygon = null;
     state.currentPoints = [];
     redrawAll(state);
     setDrawMode(state, true);
-  }
+    scheduleRedraw(state);
+    }
 
-  function stopPolygon(containerId = activeContainerId) {
+    function stopPolygon(containerId = activeContainerId) {
     const state = getState(containerId);
     if (!state || !state.viewer) return;
     cancelPolygon(state);
-  }
+    scheduleRedraw(state);
+    }
 
   return {
     init,
