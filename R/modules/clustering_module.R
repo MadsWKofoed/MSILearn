@@ -250,8 +250,10 @@ clustering_module_server <- function(id) {
       ndpi_reg_polys = list(),
       msi_reg_polys = list(),
       fit = NULL,
+      fit_by_region = list(),
       valid = FALSE,
       rms = NA_real_,
+      rms_by_region = numeric(0),
       orientation_at_fit = NULL,
       ndpi_slide_name = NULL,
       matched_region_ids = character(0),
@@ -363,8 +365,10 @@ clustering_module_server <- function(id) {
     invalidate_registration_fit <- function() {
       st <- registration_state()
       st$fit <- NULL
+      st$fit_by_region <- list()
       st$valid <- FALSE
       st$rms <- NA_real_
+      st$rms_by_region <- numeric(0)
       st$matched_region_ids <- character(0)
       st$n_anchor_pairs <- 0L
       registration_state(st)
@@ -503,6 +507,53 @@ clustering_module_server <- function(id) {
         n = nrow(ndpi_pts),
         region_pixel_counts = region_pixel_counts
       )
+    }
+
+    build_bbox_pairs_for_region <- function(st, base_df, rid) {
+      ndpi_poly <- st$ndpi_reg_polys[[rid]]
+      msi_poly  <- st$msi_reg_polys[[rid]]
+
+      if (is.null(ndpi_poly) || is.null(msi_poly)) {
+        return(list(ndpi = NULL, msi = NULL, id = rid, n = 0L))
+      }
+
+      msi_pixels <- get_pixels_in_polygon(base_df, msi_poly)
+      if (nrow(msi_pixels) < 3) {
+        return(list(ndpi = NULL, msi = NULL, id = rid, n = 0L))
+      }
+
+      ndpi_bb <- bbox_from_xy(ndpi_poly)
+      msi_bb  <- bbox_from_xy(msi_pixels[, c("x", "y"), drop = FALSE])
+
+      if (is.null(ndpi_bb) || is.null(msi_bb)) {
+        return(list(ndpi = NULL, msi = NULL, id = rid, n = 0L))
+      }
+
+      ndpi_pts <- bbox_to_corner_matrix_ndpi(ndpi_bb)
+      msi_pts  <- bbox_to_corner_matrix_msi(msi_bb)
+
+      list(
+        ndpi = ndpi_pts,
+        msi = msi_pts,
+        id = rid,
+        n = nrow(ndpi_pts)
+      )
+    }
+
+    choose_nearest_region_id <- function(annotation_pts, ndpi_reg_polys) {
+      ids <- names(ndpi_reg_polys)
+      if (length(ids) == 0) return(NA_character_)
+
+      ann_ctr <- colMeans(annotation_pts)
+
+      d <- vapply(ids, function(id) {
+        poly <- ndpi_reg_polys[[id]]
+        if (is.null(poly) || nrow(poly) < 1) return(Inf)
+        ctr <- colMeans(as.matrix(poly))
+        sqrt(sum((ann_ctr - ctr)^2))
+      }, numeric(1))
+
+      ids[which.min(d)]
     }
 
     refresh_ann_sets <- function(study_id) {
@@ -905,12 +956,14 @@ clustering_module_server <- function(id) {
 
       poly_xy_disp <- cbind(shape$x, shape$y)
 
-      st <- registration_state()
-      st$msi_reg_polys[[rid]] <- poly_xy_disp
-      st$fit <- NULL
-      st$valid <- FALSE
-      st$rms <- NA_real_
-      registration_state(st)
+    st <- registration_state()
+    st$msi_reg_polys[[rid]] <- poly_xy_disp
+    st$fit <- NULL
+    st$fit_by_region <- list()
+    st$valid <- FALSE
+    st$rms <- NA_real_
+    st$rms_by_region <- numeric(0)
+    registration_state(st)
 
       showNotification(sprintf("Saved MSI registration polygon for %s", rid), type = "message")
     })
@@ -945,8 +998,10 @@ clustering_module_server <- function(id) {
       st$ndpi_reg_polys <- list()
       st$msi_reg_polys <- list()
       st$fit <- NULL
+      st$fit_by_region <- list()
       st$valid <- FALSE
       st$rms <- NA_real_
+      st$rms_by_region <- numeric(0)
       st$orientation_at_fit <- NULL
       st$matched_region_ids <- character(0)
       st$n_anchor_pairs <- 0L
@@ -961,37 +1016,56 @@ clustering_module_server <- function(id) {
       base_df <- clustered_data()
       req(base_df)
 
-      pairs <- build_bbox_pairs_from_regions(st, base_df)
-
-      if (pairs$n < 4) {
-        showNotification("Need at least one matched region pair with MSI pixels inside the MSI polygon.", type = "warning")
+      ids <- intersect(names(st$ndpi_reg_polys), names(st$msi_reg_polys))
+      if (length(ids) == 0) {
+        showNotification("Need at least one matched region pair.", type = "warning")
         return()
       }
 
-      fit <- fit_affine_ndpi_to_msi(pairs$ndpi, pairs$msi)
+      fit_by_region <- list()
+      rms_by_region <- numeric(0)
+      used_ids <- character(0)
+      total_pairs <- 0L
 
-      if (!isTRUE(fit$valid)) {
+      for (rid in ids) {
+        pairs <- build_bbox_pairs_for_region(st, base_df, rid)
+        if (pairs$n < 4) next
+
+        fit <- fit_affine_ndpi_to_msi(pairs$ndpi, pairs$msi)
+        if (!isTRUE(fit$valid)) next
+
+        fit_by_region[[rid]] <- fit
+        rms_by_region[rid] <- fit$rms
+        used_ids <- c(used_ids, rid)
+        total_pairs <- total_pairs + pairs$n
+      }
+
+      if (length(used_ids) == 0) {
         st$fit <- NULL
+        st$fit_by_region <- list()
         st$valid <- FALSE
         st$rms <- NA_real_
-        st$matched_region_ids <- pairs$ids
-        st$n_anchor_pairs <- pairs$n
+        st$rms_by_region <- numeric(0)
+        st$matched_region_ids <- character(0)
+        st$n_anchor_pairs <- 0L
         registration_state(st)
-        showNotification(fit$reason %||% "Registration fit failed.", type = "error")
+        showNotification("Registration fit failed for all region pairs.", type = "error")
         return()
       }
 
-      st$fit <- fit
+      st$fit <- NULL
+      st$fit_by_region <- fit_by_region
       st$valid <- TRUE
-      st$rms <- fit$rms
+      st$rms <- min(rms_by_region)
+      st$rms_by_region <- rms_by_region
       st$orientation_at_fit <- input$orientation %||% "Default"
-      st$matched_region_ids <- pairs$ids
-      st$n_anchor_pairs <- pairs$n
+      st$matched_region_ids <- used_ids
+      st$n_anchor_pairs <- total_pairs
       registration_state(st)
 
       showNotification(
-        sprintf("Registration valid. RMS = %.4f (%d bbox corner pairs across %d region(s))",
-                fit$rms, pairs$n, length(pairs$ids)),
+        sprintf("Registration valid for %d region(s). Best RMS = %.4f",
+                length(used_ids), min(rms_by_region)),
         type = "message"
       )
     })
@@ -1088,8 +1162,10 @@ clustering_module_server <- function(id) {
         st <- registration_state()
         st$ndpi_reg_polys[[rid]] <- pts
         st$fit <- NULL
+        st$fit_by_region <- list()
         st$valid <- FALSE
         st$rms <- NA_real_
+        st$rms_by_region <- numeric(0)
         registration_state(st)
 
         ndpi_draw_mode(NULL)
@@ -1102,7 +1178,7 @@ clustering_module_server <- function(id) {
         base_df <- original_clustered()
         req(base_df)
 
-        if (!isTRUE(st$valid) || is.null(st$fit)) {
+        if (!isTRUE(st$valid) || length(st$fit_by_region) == 0) {
           showNotification("Registration is not valid.", type = "warning")
           ndpi_draw_mode(NULL)
           return()
@@ -1120,7 +1196,16 @@ clustering_module_server <- function(id) {
           return()
         }
 
-        poly_disp <- apply_affine_xy(pts, st$fit$A, st$fit$b)
+        rid_use <- choose_nearest_region_id(pts, st$ndpi_reg_polys)
+        fit_use <- st$fit_by_region[[rid_use]]
+
+        if (is.null(rid_use) || is.na(rid_use) || is.null(fit_use)) {
+          showNotification("Could not determine nearest fitted region.", type = "warning")
+          ndpi_draw_mode(NULL)
+          return()
+        }
+
+        poly_disp <- apply_affine_xy(pts, fit_use$A, fit_use$b)
 
         poly_orig <- to_original_polygon(
           poly_disp,
@@ -1141,7 +1226,11 @@ clustering_module_server <- function(id) {
         pixel_class_state(res$class_vec)
         sync_annotated_from_state()
         ndpi_draw_mode(NULL)
-        showNotification(sprintf("NDPI polygon assigned '%s' to %d MSI pixels.", input$class_label, res$n_updated), type = "message")
+        showNotification(
+          sprintf("NDPI polygon assigned '%s' to %d MSI pixels using region %s.",
+                  input$class_label, res$n_updated, rid_use),
+          type = "message"
+        )
       }
     })
 
@@ -1157,7 +1246,10 @@ clustering_module_server <- function(id) {
         "Matched Region IDs: ", ifelse(length(matched) > 0, paste(matched, collapse = ", "), "None"), "\n",
         "BBox corner pairs used: ", st$n_anchor_pairs, "\n",
         "Valid: ", isTRUE(st$valid), "\n",
-        "RMS: ", ifelse(is.finite(st$rms), format(round(st$rms, 4), nsmall = 4), "NA"), "\n",
+        "Best RMS: ", ifelse(is.finite(st$rms), format(round(st$rms, 4), nsmall = 4), "NA"), "\n",
+        "RMS by region: ", ifelse(length(st$rms_by_region) > 0,
+                                  paste(names(st$rms_by_region), sprintf("%.4f", st$rms_by_region), collapse = ", "),
+                                  "NA"), "\n",
         "Orientation at fit: ", st$orientation_at_fit %||% "NA", "\n",
         "Slide: ", st$ndpi_slide_name %||% "NA"
       )
