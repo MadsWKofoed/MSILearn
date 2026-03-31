@@ -327,7 +327,7 @@ window.ndpiSyncViewer = (() => {
       prefixUrl: "https://openseadragon.github.io/openseadragon/images/",
       tileSources: opts.dziUrl,
       showNavigator: true,
-      zoomPerScroll: 1.2,
+      zoomPerScroll: 2,
       animationTime: 0.15,
       springStiffness: 7,
       imageLoaderLimit: 6,
