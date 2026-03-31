@@ -203,12 +203,11 @@ clustering_module_ui <- function(id) {
           )
         ),
 
-        tags$div(
-          class = "step-box",
           tags$div(
             class = "step-head",
             `data-toggle` = "collapse",
             `data-target` = paste0("#", ns("step_annot")),
+            onclick = sprintf("Shiny.setInputValue('%s', Date.now(), {priority: 'event'})", ns("step_annot_clicked")),
             "4. Annotation"
           ),
           tags$div(
@@ -409,6 +408,39 @@ clustering_module_server <- function(id) {
     reset_class_state <- function(n) {
       pixel_class_state(rep("Unassigned", n))
       sync_annotated_from_state()
+    }
+
+    clear_cluster_shapes <- function() {
+      try(
+        plotlyProxy("cluster_plot", session) |>
+          plotlyProxyInvoke("relayout", list(shapes = list())),
+        silent = TRUE
+      )
+      sel_shape(NULL)
+    }
+
+    open_sidebar_step <- function(step = c("data", "cluster", "align", "annot")) {
+      step <- match.arg(step)
+
+      ids <- c(
+        data = ns("step_data"),
+        cluster = ns("step_cluster"),
+        align = ns("step_align"),
+        annot = ns("step_annot")
+      )
+
+      target <- ids[[step]]
+
+      js <- sprintf(
+        "$('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('show');",
+        ids[["data"]], ids[["cluster"]], ids[["align"]], ids[["annot"]], target
+      )
+
+      shinyjs::runjs(js)
     }
 
     find_python_bin <- function() {
@@ -677,6 +709,10 @@ clustering_module_server <- function(id) {
     observeEvent(input$refresh_studies, load_studies(), ignoreInit = FALSE)
     session$onFlushed(function() load_studies(), once = TRUE)
 
+    observeEvent(input$step_annot_clicked, {
+      clear_cluster_shapes()
+    }, ignoreInit = TRUE)
+
     observeEvent(input$study_select, {
       sid <- input$study_select
       if (!nzchar(sid)) {
@@ -791,6 +827,9 @@ clustering_module_server <- function(id) {
           sprintf("Dataset loaded: %d pixels × %d features.", nrow(df), sum(grepl("^mz_", names(df)))),
           type = "message"
         )
+        if (identical(input$annotation_mode, "msi_only")) {
+          open_sidebar_step("cluster")
+        }
       }, error = function(e) {
         showNotification(paste("Load failed:", e$message), type = "error")
       })
@@ -894,6 +933,13 @@ clustering_module_server <- function(id) {
           paste0("Clustering complete: ", input$method, " (", norm_text, ") — ", input$clusters, " clusters")
         )
         showNotification(paste0("Clustering complete: ", input$clusters, " clusters identified."), type = "message", duration = 5)
+        clear_cluster_shapes()
+
+        if (identical(input$annotation_mode, "msi_ndpi")) {
+          open_sidebar_step("align")
+        } else {
+          open_sidebar_step("annot")
+        }
       }, error = function(e) {
         showNotification(paste("Clustering error:", e$message), type = "error", duration = NULL)
       })
@@ -1036,6 +1082,7 @@ clustering_module_server <- function(id) {
     registration_state(st)
 
       showNotification(sprintf("Saved MSI registration polygon for %s", rid), type = "message")
+      clear_cluster_shapes()
     })
 
     # trigger NDPI registration polygon drawing
@@ -1054,11 +1101,13 @@ clustering_module_server <- function(id) {
     observeEvent(input$draw_ndpi_polygon, {
       req(input$annotation_mode == "msi_ndpi")
       st <- registration_state()
-      if (!isTRUE(st$valid) || is.null(st$fit)) {
+
+      if (!isTRUE(st$valid) || length(st$fit_by_region) == 0) {
         showNotification("Fit registration first.", type = "warning")
         return()
       }
-      
+
+      clear_cluster_shapes()
       ndpi_draw_mode("annotation")
       session$sendCustomMessage(ns("ndpiStartPolygon"), list())
     })
@@ -1138,6 +1187,8 @@ clustering_module_server <- function(id) {
                 length(used_ids), min(rms_by_region)),
         type = "message"
       )
+      clear_cluster_shapes()
+      open_sidebar_step("annot")
     })
 
     observeEvent(input$ndpi_file, {
@@ -1204,6 +1255,9 @@ clustering_module_server <- function(id) {
       ))
 
       showNotification("NDPI ready.", type = "message")
+      if (!is.null(processed_data())) {
+        open_sidebar_step("cluster")
+      }
     })
 
     # NDPI polygon finished: registration OR annotation mode
