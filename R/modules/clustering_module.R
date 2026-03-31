@@ -203,6 +203,8 @@ clustering_module_ui <- function(id) {
           )
         ),
 
+        tags$div(
+          class = "step-box",
           tags$div(
             class = "step-head",
             `data-toggle` = "collapse",
