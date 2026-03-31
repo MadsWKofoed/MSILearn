@@ -176,7 +176,10 @@ clustering_module_ui <- function(id) {
                   )
                 )
               )
-            ),
+            )
+
+          ),  
+        ), 
 
         tags$div(
           class = "step-box",
