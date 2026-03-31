@@ -161,7 +161,15 @@ clustering_module_ui <- function(id) {
             tags$h5("Processing Artifact", style = "font-weight:bold; margin-bottom:4px; margin-top:12px;"),
             selectInput(ns("pipeline_select"), "Pipeline", choices = c("— select sample first —" = ""), width = "100%"),
             uiOutput(ns("pipeline_params_ui")),
-            actionButton(ns("load_dataset_btn"), "Load dataset", class = "btn-primary btn-sm btn-blockish")
+            actionButton(ns("load_dataset_btn"), "Load dataset", class = "btn-primary btn-sm btn-blockish"),
+
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
+              tags$hr(),
+              tags$h5("NDPI setup", style = "font-weight:bold; margin-bottom:4px;"),
+              fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
+              numericInput(ns("ndpi_workers"), "NDPI workers", value = 8, min = 1, max = 10, step = 1)
+            )
           ),  
         ), 
 
