@@ -150,7 +150,7 @@ clustering_module_ui <- function(id) {
               tags$hr(),
               tags$h5("NDPI setup", style = "font-weight:bold; margin-bottom:4px;"),
               fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
-              numericInput(ns("ndpi_workers"), "NDPI workers", value = 6, min = 1, max = 10, step = 1)
+              numericInput(ns("ndpi_workers"), "NDPI workers", value = 8, min = 1, max = 10, step = 1)
             )
           )
         ),
@@ -169,7 +169,7 @@ clustering_module_ui <- function(id) {
 
             selectInput(ns("method"), "Clustering method", choices = c("K-means", "VSClust", "MSIClust")),
             selectInput(ns("normalize"), "Normalisation", choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms")),
-            numericInput(ns("clusters"), "Number of clusters", value = 3, min = 2, max = 30),
+            numericInput(ns("clusters"), "Number of clusters", value = 3, min = 3, max = 30),
             uiOutput(ns("method_params_ui")),
             actionButton(ns("run_clustering"), "Run clustering", class = "btn-primary btn-sm btn-blockish")
           )
@@ -282,7 +282,7 @@ clustering_module_ui <- function(id) {
             tags$h5("NDPI Viewer"),
             tags$div(
               id = ns("ndpi_viewer"),
-              style = "width:min(95vw,900px);height:min(70vh,700px);aspect-ratio:1/1;border:1px solid #ccc;margin-bottom:10px;background:#111;"
+              style = "width:min(95vw,900px);height:min(55vh,520px);aspect-ratio:1/1;border:1px solid #ccc;margin-bottom:10px;background:#111;"
             )
           )
         ),
