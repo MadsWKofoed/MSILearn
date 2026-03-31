@@ -112,6 +112,24 @@ clustering_module_ui <- function(id) {
             width: 100%;
             margin-bottom: 6px;
           }
+            .plot-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            background: #ffffff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            margin-bottom: 14px;
+            overflow: hidden;
+          }
+          .plot-card-head {
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 15px;
+            background: #f8fafc;
+            border-bottom: 1px solid #eef2f7;
+          }
+          .plot-card-body {
+            padding: 10px 10px 4px 10px;
+          }
         ")),
 
         tags$div(
@@ -147,13 +165,18 @@ clustering_module_ui <- function(id) {
 
             conditionalPanel(
               condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-              tags$hr(),
-              tags$h5("NDPI setup", style = "font-weight:bold; margin-bottom:4px;"),
-              fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
-              numericInput(ns("ndpi_workers"), "NDPI workers", value = 8, min = 1, max = 10, step = 1)
-            )
-          )
-        ),
+              tags$div(
+                class = "plot-card",
+                tags$div(class = "plot-card-head", "NDPI Viewer"),
+                tags$div(
+                  class = "plot-card-body",
+                  tags$div(
+                    id = ns("ndpi_viewer"),
+                    style = "width:100%;height:520px;border:1px solid #d1d5db;border-radius:8px;background:#111;"
+                  )
+                )
+              )
+            ),
 
         tags$div(
           class = "step-box",
@@ -1512,7 +1535,7 @@ clustering_module_server <- function(id) {
           )),
           dragmode = "drawclosedpath",
           newshape = list(line = list(color = "black", width = 1), fillcolor = "rgba(0,0,0,0.05)"),
-          title = "MSI Clustering Result",
+          title = NULL,
           xaxis = list(range = x_range, title = "x"),
           yaxis = list(range = y_range, title = "y", scaleanchor = "x", scaleratio = 1),
           showlegend = TRUE,
@@ -1586,7 +1609,7 @@ clustering_module_server <- function(id) {
             sizex = img_sizex, sizey = img_sizey,
             sizing = "stretch", layer = "below"
           )),
-          title = "Class Assignment",
+          title = NULL,
           xaxis = list(range = x_range, title = "x"),
           yaxis = list(range = y_range, title = "y", scaleanchor = "x", scaleratio = 1),
           showlegend = TRUE,
@@ -1617,8 +1640,28 @@ clustering_module_server <- function(id) {
     output$cluster_layout <- renderUI({
       req(clustered_data())
       fluidRow(
-        column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-        column(6, plotlyOutput(ns("class_plot"), height = "600px"))
+        column(
+          6,
+          tags$div(
+            class = "plot-card",
+            tags$div(class = "plot-card-head", "MSI Clustering Result"),
+            tags$div(
+              class = "plot-card-body",
+              plotlyOutput(ns("cluster_plot"), height = "520px")
+            )
+          )
+        ),
+        column(
+          6,
+          tags$div(
+            class = "plot-card",
+            tags$div(class = "plot-card-head", "Class Assignment"),
+            tags$div(
+              class = "plot-card-body",
+              plotlyOutput(ns("class_plot"), height = "520px")
+            )
+          )
+        )
       )
     })
 
