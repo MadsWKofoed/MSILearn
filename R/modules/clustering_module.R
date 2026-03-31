@@ -88,7 +88,7 @@ clustering_module_ui <- function(id) {
     "Clustering",
     sidebarLayout(
       sidebarPanel(
-        width = 2,
+        width = 3,
 
         tags$style(HTML("
           .step-box {
@@ -108,12 +108,6 @@ clustering_module_ui <- function(id) {
           .step-body {
             padding: 10px 12px;
           }
-          .step-head .small-note {
-            font-weight: 400;
-            color: #666;
-            font-size: 12px;
-            margin-left: 6px;
-          }
           .btn-blockish {
             width: 100%;
             margin-bottom: 6px;
@@ -124,8 +118,8 @@ clustering_module_ui <- function(id) {
           class = "step-box",
           tags$div(
             class = "step-head",
-            `data-bs-toggle` = "collapse",
-            `data-bs-target` = paste0("#", ns("step_data")),
+            `data-toggle` = "collapse",
+            `data-target` = paste0("#", ns("step_data")),
             "1. Data & setup"
           ),
           tags$div(
@@ -165,8 +159,8 @@ clustering_module_ui <- function(id) {
           class = "step-box",
           tags$div(
             class = "step-head",
-            `data-bs-toggle` = "collapse",
-            `data-bs-target` = paste0("#", ns("step_cluster")),
+            `data-toggle` = "collapse",
+            `data-target` = paste0("#", ns("step_cluster")),
             "2. Run clustering"
           ),
           tags$div(
@@ -185,8 +179,8 @@ clustering_module_ui <- function(id) {
           class = "step-box",
           tags$div(
             class = "step-head",
-            `data-bs-toggle` = "collapse",
-            `data-bs-target` = paste0("#", ns("step_align")),
+            `data-toggle` = "collapse",
+            `data-target` = paste0("#", ns("step_align")),
             "3. Alignment & orientation"
           ),
           tags$div(
@@ -197,6 +191,8 @@ clustering_module_ui <- function(id) {
 
             conditionalPanel(
               condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
+              tags$hr(),
+              tags$h5("NDPI alignment", style = "font-weight:bold; margin-bottom:4px;"),
               textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
               actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon", class = "btn-sm btn-blockish"),
               actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI region polygon", class = "btn-sm btn-blockish"),
@@ -211,15 +207,15 @@ clustering_module_ui <- function(id) {
           class = "step-box",
           tags$div(
             class = "step-head",
-            `data-bs-toggle` = "collapse",
-            `data-bs-target` = paste0("#", ns("step_annot")),
+            `data-toggle` = "collapse",
+            `data-target` = paste0("#", ns("step_annot")),
             "4. Annotation"
           ),
           tags$div(
             id = ns("step_annot"),
             class = "step-body collapse",
 
-            tags$h5("Annotation Set", style = "font-weight:bold; margin-bottom:4px;"),
+            tags$h5("Annotation set", style = "font-weight:bold; margin-bottom:4px;"),
             radioButtons(ns("ann_set_mode"), NULL, choices = c("Use existing" = "existing", "Create new" = "new"), selected = "existing"),
 
             conditionalPanel(
