@@ -88,7 +88,7 @@ clustering_module_ui <- function(id) {
     "Clustering",
     sidebarLayout(
       sidebarPanel(
-        width = 3,
+        width = 2,
 
         tags$style(HTML("
           .step-box {
