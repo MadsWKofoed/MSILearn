@@ -90,77 +90,166 @@ clustering_module_ui <- function(id) {
       sidebarPanel(
         width = 2,
 
-        tags$h5("Study & Sample", style = "font-weight:bold; margin-bottom:4px;"),
-        selectInput(ns("study_select"), "Study", choices = c("— select —" = ""), width = "100%"),
-        actionButton(ns("refresh_studies"), "↺ Refresh", class = "btn-xs"),
-        tags$hr(style = "margin:6px 0;"),
-        selectInput(ns("sample_select"), "Sample", choices = c("— select study first —" = ""), width = "100%"),
-        tags$hr(),
+        tags$style(HTML("
+          .step-box {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            background: #fff;
+            overflow: hidden;
+          }
+          .step-head {
+            padding: 10px 12px;
+            font-weight: 600;
+            background: #f7f7f9;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+          }
+          .step-body {
+            padding: 10px 12px;
+          }
+          .step-head .small-note {
+            font-weight: 400;
+            color: #666;
+            font-size: 12px;
+            margin-left: 6px;
+          }
+          .btn-blockish {
+            width: 100%;
+            margin-bottom: 6px;
+          }
+        ")),
 
-        tags$h5("Annotation workflow", style = "font-weight:bold; margin-bottom:4px;"),
-        selectInput(
-          ns("annotation_mode"), "Mode",
-          choices = c("MSI only" = "msi_only", "MSI + NDPI" = "msi_ndpi"),
-          selected = "msi_only"
+        tags$div(
+          class = "step-box",
+          tags$div(
+            class = "step-head",
+            `data-bs-toggle` = "collapse",
+            `data-bs-target` = paste0("#", ns("step_data")),
+            "1. Data & setup"
+          ),
+          tags$div(
+            id = ns("step_data"),
+            class = "step-body collapse in",
+
+            tags$h5("Study & Sample", style = "font-weight:bold; margin-bottom:4px;"),
+            selectInput(ns("study_select"), "Study", choices = c("— select —" = ""), width = "100%"),
+            actionButton(ns("refresh_studies"), "↺ Refresh", class = "btn-xs"),
+            tags$hr(style = "margin:6px 0;"),
+
+            selectInput(ns("sample_select"), "Sample", choices = c("— select study first —" = ""), width = "100%"),
+
+            tags$h5("Workflow", style = "font-weight:bold; margin-bottom:4px; margin-top:12px;"),
+            selectInput(
+              ns("annotation_mode"), "Mode",
+              choices = c("MSI only" = "msi_only", "MSI + NDPI" = "msi_ndpi"),
+              selected = "msi_only"
+            ),
+
+            tags$h5("Processing Artifact", style = "font-weight:bold; margin-bottom:4px; margin-top:12px;"),
+            selectInput(ns("pipeline_select"), "Pipeline", choices = c("— select sample first —" = ""), width = "100%"),
+            uiOutput(ns("pipeline_params_ui")),
+            actionButton(ns("load_dataset_btn"), "Load dataset", class = "btn-primary btn-sm btn-blockish"),
+
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
+              tags$hr(),
+              tags$h5("NDPI setup", style = "font-weight:bold; margin-bottom:4px;"),
+              fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
+              numericInput(ns("ndpi_workers"), "NDPI workers", value = 6, min = 1, max = 10, step = 1)
+            )
+          )
         ),
 
-        tags$h5("Processing Artifact", style = "font-weight:bold; margin-bottom:4px;"),
-        selectInput(ns("pipeline_select"), "Pipeline", choices = c("— select sample first —" = ""), width = "100%"),
-        uiOutput(ns("pipeline_params_ui")),
-        actionButton(ns("load_dataset_btn"), "Load Dataset", class = "btn-primary btn-sm", width = "100%"),
-        tags$hr(),
+        tags$div(
+          class = "step-box",
+          tags$div(
+            class = "step-head",
+            `data-bs-toggle` = "collapse",
+            `data-bs-target` = paste0("#", ns("step_cluster")),
+            "2. Run clustering"
+          ),
+          tags$div(
+            id = ns("step_cluster"),
+            class = "step-body collapse",
 
-        fileInput(ns("histology_img"), "Histology image (optional)", accept = c("image/png", "image/jpeg", "image/jpg")),
-        actionButton(ns("clear_histology"), "Clear histology", class = "btn-sm btn-warning"),
-        tags$hr(),
-
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-          tags$h5("NDPI Polygon Registration", style = "font-weight:bold; margin-bottom:4px;"),
-          fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
-          numericInput(ns("ndpi_workers"), "NDPI workers", value = 6, min = 1, max = 10, step = 1),
-          textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
-          actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon to Region ID", class = "btn-sm"),
-          actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI polygon for Region ID", class = "btn-sm"),
-          actionButton(ns("fit_registration"), "Fit NDPI→MSI (bbox from MSI pixels)", class = "btn-sm btn-primary"),
-          actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning"),
-          actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm"),
-          verbatimTextOutput(ns("registration_status")),
-          tags$hr()
+            selectInput(ns("method"), "Clustering method", choices = c("K-means", "VSClust", "MSIClust")),
+            selectInput(ns("normalize"), "Normalisation", choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms")),
+            numericInput(ns("clusters"), "Number of clusters", value = 3, min = 2, max = 30),
+            uiOutput(ns("method_params_ui")),
+            actionButton(ns("run_clustering"), "Run clustering", class = "btn-primary btn-sm btn-blockish")
+          )
         ),
 
-        tags$h4("Clustering Configuration"),
-        selectInput(ns("method"), "Clustering method", choices = c("K-means", "VSClust", "MSIClust")),
-        selectInput(ns("normalize"), "Normalisation", choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms")),
-        numericInput(ns("clusters"), "Number of clusters", value = 3, min = 2, max = 30),
-        uiOutput(ns("method_params_ui")),
-        actionButton(ns("run_clustering"), "Run Clustering"),
-        tags$hr(),
+        tags$div(
+          class = "step-box",
+          tags$div(
+            class = "step-head",
+            `data-bs-toggle` = "collapse",
+            `data-bs-target` = paste0("#", ns("step_align")),
+            "3. Alignment & orientation"
+          ),
+          tags$div(
+            id = ns("step_align"),
+            class = "step-body collapse",
 
-        tags$h5("Annotation Set", style = "font-weight:bold; margin-bottom:4px;"),
-        radioButtons(ns("ann_set_mode"), NULL, choices = c("Use existing" = "existing", "Create new" = "new"), selected = "existing"),
+            selectInput(ns("orientation"), "Orientation adjustment", choices = c("Default", "Flip X", "Flip Y", "Flip Both")),
 
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'existing'", ns("ann_set_mode")),
-          selectInput(ns("ann_set_select"), "Annotation set:", choices = c("— select study first —" = ""), width = "100%")
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
+              textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
+              actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon", class = "btn-sm btn-blockish"),
+              actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI region polygon", class = "btn-sm btn-blockish"),
+              actionButton(ns("fit_registration"), "Fit NDPI → MSI", class = "btn-sm btn-primary btn-blockish"),
+              actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning btn-blockish"),
+              verbatimTextOutput(ns("registration_status"))
+            )
+          )
         ),
 
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'new'", ns("ann_set_mode")),
-          textInput(ns("ann_set_name"), "Name:", placeholder = "e.g. Tumour vs Stroma"),
-          textInput(ns("ann_set_labels"), "Labels (comma-separated):", placeholder = "Tumour, Stroma, Background"),
-          actionButton(ns("create_ann_set_btn"), "Create annotation set", class = "btn-sm btn-success"),
-          uiOutput(ns("ann_set_create_status"))
-        ),
-        tags$hr(),
+        tags$div(
+          class = "step-box",
+          tags$div(
+            class = "step-head",
+            `data-bs-toggle` = "collapse",
+            `data-bs-target` = paste0("#", ns("step_annot")),
+            "4. Annotation"
+          ),
+          tags$div(
+            id = ns("step_annot"),
+            class = "step-body collapse",
 
-        selectInput(ns("orientation"), "Orientation adjustment", choices = c("Default", "Flip X", "Flip Y", "Flip Both")),
-        selectInput(ns("class_label"), "Assign Class", choices = c(), width = "100%"),
-        actionButton(ns("assign_class"), "Assign to Selection"),
-        actionButton(ns("assign_all"), "Assign ALL unassigned"),
-        tags$hr(),
-        actionButton(ns("commit_db"), "Commit to MongoDB", class = "btn-danger btn-sm", width = "100%"),
-        uiOutput(ns("commit_status"))
+            tags$h5("Annotation Set", style = "font-weight:bold; margin-bottom:4px;"),
+            radioButtons(ns("ann_set_mode"), NULL, choices = c("Use existing" = "existing", "Create new" = "new"), selected = "existing"),
+
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'existing'", ns("ann_set_mode")),
+              selectInput(ns("ann_set_select"), "Annotation set", choices = c("— select study first —" = ""), width = "100%")
+            ),
+
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'new'", ns("ann_set_mode")),
+              textInput(ns("ann_set_name"), "Name", placeholder = "e.g. Tumour vs Stroma"),
+              textInput(ns("ann_set_labels"), "Labels (comma-separated)", placeholder = "Tumour, Stroma, Background"),
+              actionButton(ns("create_ann_set_btn"), "Create annotation set", class = "btn-sm btn-success btn-blockish"),
+              uiOutput(ns("ann_set_create_status"))
+            ),
+
+            selectInput(ns("class_label"), "Assign class", choices = c(), width = "100%"),
+
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
+              actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm btn-blockish")
+            ),
+
+            actionButton(ns("assign_class"), "Assign to selection", class = "btn-sm btn-blockish"),
+            actionButton(ns("assign_all"), "Assign all unassigned", class = "btn-sm btn-blockish"),
+
+            tags$hr(),
+            actionButton(ns("commit_db"), "Commit to MongoDB", class = "btn-danger btn-sm btn-blockish"),
+            uiOutput(ns("commit_status"))
+          )
+        )
       ),
 
       mainPanel(
@@ -222,7 +311,6 @@ clustering_module_server <- function(id) {
     clustered_data          <- reactiveVal(NULL)
     annotated_data          <- reactiveVal(NULL)
     original_clustered      <- reactiveVal(NULL)
-    histology_image         <- reactiveVal(NULL)
     vsclust_membership_data <- reactiveVal(NULL)
     current_method          <- reactiveVal(NULL)
 
@@ -712,25 +800,6 @@ clustering_module_server <- function(id) {
       })
     })
 
-    observeEvent(input$histology_img, {
-      req(input$histology_img)
-      tryCatch({
-        img_path <- input$histology_img$datapath
-        img_data <- readBin(img_path, "raw", file.info(img_path)$size)
-        ext <- tolower(tools::file_ext(input$histology_img$name))
-        mime <- switch(ext, "png" = "image/png", "jpg" = "image/jpeg", "jpeg" = "image/jpeg", "image/png")
-        img_uri <- paste0("data:", mime, ";base64,", base64enc::base64encode(img_data))
-        histology_image(img_uri)
-        showNotification("Histology image loaded.", type = "message", duration = 3)
-      }, error = function(e) {
-        showNotification(paste("Error loading image:", e$message), type = "error")
-      })
-    })
-
-    observeEvent(input$clear_histology, {
-      histology_image(NULL)
-      showNotification("Histology image cleared.", type = "message", duration = 2)
-    })
 
     observeEvent(input$method, {
       if (input$method == "MSIClust" && input$normalize == "none") {
@@ -1492,55 +1561,13 @@ clustering_module_server <- function(id) {
       p
     })
 
-    output$histology_plot <- renderPlot({
-      img_uri <- histology_image()
-      df <- clustered_data()
-      req(img_uri, df)
-
-      x_min <- min(df$x)
-      x_max <- max(df$x)
-      y_min <- min(df$y)
-      y_max <- max(df$y)
-
-      img_data <- sub("^data:image/[a-z]+;base64,", "", img_uri)
-      img_raw <- base64enc::base64decode(img_data)
-      tmp_img <- tempfile(fileext = ".png")
-      writeBin(img_raw, tmp_img)
-
-      img <- tryCatch(
-        if (grepl("data:image/png", img_uri)) png::readPNG(tmp_img) else jpeg::readJPEG(tmp_img),
-        error = function(e) NULL
-      )
-      if (is.null(img)) {
-        plot.new()
-        text(0.5, 0.5, "Error loading image", cex = 1.5)
-        return()
-      }
-
-      par(mar = c(4, 4, 3, 1))
-      plot(NULL, xlim = c(x_min, x_max), ylim = c(y_min, y_max), xlab = "x", ylab = "y", main = "Histology", asp = 1)
-      graphics::rasterImage(img, x_min, y_min, x_max, y_max)
-    })
 
     output$cluster_layout <- renderUI({
       req(clustered_data())
-      has_hist <- !is.null(histology_image())
-      if (has_hist) {
-        tagList(
-          fluidRow(
-            column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-            column(6, plotOutput(ns("histology_plot"), height = "600px"))
-          ),
-          fluidRow(
-            column(6, plotlyOutput(ns("class_plot"), height = "600px"))
-          )
-        )
-      } else {
-        fluidRow(
-          column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
-          column(6, plotlyOutput(ns("class_plot"), height = "600px"))
-        )
-      }
+      fluidRow(
+        column(6, plotlyOutput(ns("cluster_plot"), height = "600px")),
+        column(6, plotlyOutput(ns("class_plot"), height = "600px"))
+      )
     })
 
     observeEvent(input$commit_db, {
