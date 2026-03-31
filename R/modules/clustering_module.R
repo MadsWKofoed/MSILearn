@@ -161,23 +161,7 @@ clustering_module_ui <- function(id) {
             tags$h5("Processing Artifact", style = "font-weight:bold; margin-bottom:4px; margin-top:12px;"),
             selectInput(ns("pipeline_select"), "Pipeline", choices = c("— select sample first —" = ""), width = "100%"),
             uiOutput(ns("pipeline_params_ui")),
-            actionButton(ns("load_dataset_btn"), "Load dataset", class = "btn-primary btn-sm btn-blockish"),
-
-            conditionalPanel(
-              condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-              tags$div(
-                class = "plot-card",
-                tags$div(class = "plot-card-head", "NDPI Viewer"),
-                tags$div(
-                  class = "plot-card-body",
-                  tags$div(
-                    id = ns("ndpi_viewer"),
-                    style = "width:100%;height:520px;border:1px solid #d1d5db;border-radius:8px;background:#111;"
-                  )
-                )
-              )
-            )
-
+            actionButton(ns("load_dataset_btn"), "Load dataset", class = "btn-primary btn-sm btn-blockish")
           ),  
         ), 
 
@@ -306,10 +290,14 @@ clustering_module_ui <- function(id) {
         conditionalPanel(
           condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
           tags$div(
-            tags$h5("NDPI Viewer"),
+            class = "plot-card",
+            tags$div(class = "plot-card-head", "NDPI Viewer"),
             tags$div(
-              id = ns("ndpi_viewer"),
-              style = "width:min(95vw,900px);height:min(55vh,520px);aspect-ratio:1/1;border:1px solid #ccc;margin-bottom:10px;background:#111;"
+              class = "plot-card-body",
+              tags$div(
+                id = ns("ndpi_viewer"),
+                style = "width:100%;height:520px;border:1px solid #d1d5db;border-radius:8px;background:#111;"
+              )
             )
           )
         ),
