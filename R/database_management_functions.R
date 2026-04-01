@@ -182,7 +182,7 @@ dbm_get_collection_data <- function(collection,
 
   out <- switch(
     collection,
-    studies = dbm_safe_find("studies", db = db, url = url),
+    studies = tryCatch(get_studies(db = db, url = url), error = function(e) data.frame()),
     samples = {
       if (!is.null(study_id) && nzchar(study_id)) get_samples(study_id, db = db, url = url) else dbm_safe_find("samples", db = db, url = url)
     },
@@ -252,8 +252,16 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
   switch(
     collection,
     studies = {
+      study_id_vec <- if ("_id" %in% names(df)) {
+        as.character(df$`_id`)
+      } else if ("study_id" %in% names(df)) {
+        as.character(df$study_id)
+      } else {
+        rep("", nrow(df))
+      }
+
       show <- data.frame(
-        id = col_or_default(df, "_id"),
+        id = study_id_vec,
         name = col_or_default(df, "name"),
         description = col_or_default(df, "description"),
         created_at = col_or_default(df, "created_at"),

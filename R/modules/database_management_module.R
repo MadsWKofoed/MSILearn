@@ -277,7 +277,12 @@ database_management_module_server <- function(id) {
       }
 
       i <- idx[1]
+
       rid <- as.character(df_disp$id[i])
+      if ((!nzchar(rid) || is.na(rid)) && !is.null(df_raw) && nrow(df_raw) >= i && "_id" %in% names(df_raw)) {
+        rid <- as.character(df_raw$`_id`[i])
+      }
+
       selected_id_rv(rid)
 
       if (!is.null(df_raw) && nrow(df_raw) >= i) {
@@ -485,7 +490,7 @@ database_management_module_server <- function(id) {
 
       if (is.null(rid) || !nzchar(rid)) {
         removeModal()
-        showNotification("No record is currently selected.", type = "warning", duration = 5)
+        showNotification("The selected row has no valid database ID. Refresh the table and try again.", type = "warning", duration = 6)
         return()
       }
 
