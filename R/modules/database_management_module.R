@@ -233,6 +233,24 @@ database_management_module_server <- function(id) {
       selected_record_rv(NULL)
     }
 
+    refresh_records_view <- function(collection = NULL, study_id = NULL, sample_id = NULL) {
+      refresh_records(
+        collection = collection,
+        study_id = study_id,
+        sample_id = sample_id
+      )
+
+      selected_id_rv(NULL)
+      selected_record_rv(NULL)
+
+      session$sendInputMessage(ns("records_table_rows_selected"), NULL)
+
+      try({
+        DT::dataTableProxy("records_table", session = session) |>
+          DT::selectRows(NULL)
+      }, silent = TRUE)
+    }
+
     observeEvent(input$refresh_all, {
       refresh_counts()
       load_studies_for_filter(input$study_filter %||% "")
@@ -500,17 +518,22 @@ database_management_module_server <- function(id) {
         report <- dbm_delete_record(collection, rid)
         msg <- dbm_delete_report_text(report)
 
+        cur_study <- isolate(input$study_filter %||% "")
+        cur_sample <- isolate(input$sample_filter %||% "")
+
         refresh_counts()
-        load_studies_for_filter(selected = "")
-        load_samples_for_filter(study_id = NULL, selected = "")
-        refresh_records(
-          collection = collection,
-          study_id = NULL,
-          sample_id = NULL
+
+        load_studies_for_filter(selected = cur_study)
+        load_samples_for_filter(
+          study_id = if (nzchar(cur_study)) cur_study else NULL,
+          selected = cur_sample
         )
 
-        selected_id_rv(NULL)
-        selected_record_rv(NULL)
+        refresh_records_view(
+          collection = collection,
+          study_id = if (nzchar(cur_study)) cur_study else NULL,
+          sample_id = if (nzchar(cur_sample)) cur_sample else NULL
+        )
 
         showNotification(
           paste("Deleted.", msg),
