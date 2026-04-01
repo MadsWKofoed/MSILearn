@@ -45,6 +45,15 @@ dbm_requires_study_filter <- function(collection) {
 
 # ---- Small generic helpers -------------------------------------------------
 
+col_or_default <- function(df, col, default = "") {
+  n <- nrow(df)
+  if (col %in% names(df)) {
+    as.character(df[[col]])
+  } else {
+    rep(default, n)
+  }
+}
+
 dbm_null_to_na <- function(x) {
   if (is.null(x) || length(x) == 0) return(NA)
   x[[1]]
@@ -244,112 +253,112 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
     collection,
     studies = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        name = as.character(df$name %||% ""),
-        description = if ("description" %in% names(df)) as.character(df$description) else "",
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        name = col_or_default(df, "name"),
+        description = col_or_default(df, "description"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     samples = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        sample = as.character(df$sample_name),
-        study = lookup(df$study_id, study_map),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        sample = col_or_default(df, "sample_name"),
+        study = lookup(col_or_default(df, "study_id"), study_map),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     pipelines = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        type = as.character(df$type %||% ""),
-        name = as.character(df$name %||% ""),
-        code_version = if ("code_version" %in% names(df)) as.character(df$code_version) else "",
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        type = col_or_default(df, "type"),
+        name = col_or_default(df, "name"),
+        code_version = col_or_default(df, "code_version"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     artifacts = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        study = lookup(df$study_id, study_map),
-        sample = lookup(df$sample_id, sample_map),
-        stage = as.character(df$stage_type),
-        pipeline = lookup(df$pipeline_id, pipe_map),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        study = lookup(col_or_default(df, "study_id"), study_map),
+        sample = lookup(col_or_default(df, "sample_id"), sample_map),
+        stage = col_or_default(df, "stage_type"),
+        pipeline = lookup(col_or_default(df, "pipeline_id"), pipe_map),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     annotation_sets = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        name = as.character(df$name),
-        study = lookup(df$study_id, study_map),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        name = col_or_default(df, "name"),
+        study = lookup(col_or_default(df, "study_id"), study_map),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     annotations = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        sample = lookup(df$sample_id, sample_map),
-        annotation_set = lookup(df$annotation_set_id, annset_map),
-        format = if ("format" %in% names(df)) as.character(df$format) else "",
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        sample = lookup(col_or_default(df, "sample_id"), sample_map),
+        annotation_set = lookup(col_or_default(df, "annotation_set_id"), annset_map),
+        format = col_or_default(df, "format"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     datasets = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        name = as.character(df$name %||% ""),
-        study = lookup(df$study_id, study_map),
-        pipeline = lookup(df$pipeline_id, pipe_map),
-        annotation_set = lookup(df$annotation_set_id, annset_map),
-        stage = as.character(df$stage_type),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        name = col_or_default(df, "name"),
+        study = lookup(col_or_default(df, "study_id"), study_map),
+        pipeline = lookup(col_or_default(df, "pipeline_id"), pipe_map),
+        annotation_set = lookup(col_or_default(df, "annotation_set_id"), annset_map),
+        stage = col_or_default(df, "stage_type"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     model_runs = {
       show <- data.frame(
-        id = as.character(df$`_id`),
-        dataset = lookup(df$dataset_id, dataset_map),
-        model_type = as.character(df$model_type),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = col_or_default(df, "_id"),
+        dataset = lookup(col_or_default(df, "dataset_id"), dataset_map),
+        model_type = col_or_default(df, "model_type"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     processing_artifacts_metadata = {
       show <- data.frame(
-        id = if ("_id" %in% names(df)) as.character(df$`_id`) else if ("run_id" %in% names(df)) as.character(df$run_id) else seq_len(nrow(df)),
-        sample = as.character(df$sample_name %||% ""),
-        stage = as.character(df$stage_type %||% ""),
-        filename = if ("filename" %in% names(df)) as.character(df$filename) else if ("imzml_gridfs_name" %in% names(df)) as.character(df$imzml_gridfs_name) else "",
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = if ("_id" %in% names(df)) col_or_default(df, "_id") else if ("run_id" %in% names(df)) col_or_default(df, "run_id") else as.character(seq_len(nrow(df))),
+        sample = col_or_default(df, "sample_name"),
+        stage = col_or_default(df, "stage_type"),
+        filename = if ("filename" %in% names(df)) col_or_default(df, "filename") else if ("imzml_gridfs_name" %in% names(df)) col_or_default(df, "imzml_gridfs_name") else rep("", nrow(df)),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     clustering_metadata = {
       show <- data.frame(
-        id = if ("_id" %in% names(df)) as.character(df$`_id`) else seq_len(nrow(df)),
-        study = lookup(df$study_id, study_map),
-        sample = lookup(df$sample_id, sample_map),
-        method = as.character(df$clustering_method %||% ""),
-        k = as.character(df$k %||% ""),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = if ("_id" %in% names(df)) col_or_default(df, "_id") else as.character(seq_len(nrow(df))),
+        study = lookup(col_or_default(df, "study_id"), study_map),
+        sample = lookup(col_or_default(df, "sample_id"), sample_map),
+        method = col_or_default(df, "clustering_method"),
+        k = col_or_default(df, "k"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     },
     ndpi_registrations = {
       show <- data.frame(
-        id = if ("_id" %in% names(df)) as.character(df$`_id`) else seq_len(nrow(df)),
-        sample = lookup(df$sample_id, sample_map),
-        pipeline = lookup(df$pipeline_id, pipe_map),
-        slide = as.character(df$ndpi_slide_name %||% ""),
-        rms = as.character(df$rms %||% ""),
-        created_at = if ("created_at" %in% names(df)) as.character(df$created_at) else "",
+        id = if ("_id" %in% names(df)) col_or_default(df, "_id") else as.character(seq_len(nrow(df))),
+        sample = lookup(col_or_default(df, "sample_id"), sample_map),
+        pipeline = lookup(col_or_default(df, "pipeline_id"), pipe_map),
+        slide = col_or_default(df, "ndpi_slide_name"),
+        rms = col_or_default(df, "rms"),
+        created_at = col_or_default(df, "created_at"),
         stringsAsFactors = FALSE
       )
     }
