@@ -323,42 +323,39 @@ window.ndpiSyncViewer = (() => {
     });
 
     state.viewer = OpenSeadragon({
-    id: containerId,
-    prefixUrl: "https://openseadragon.github.io/openseadragon/images/",
-    tileSources: opts.dziUrl,
+        id: containerId,
+        prefixUrl: "https://openseadragon.github.io/openseadragon/images/",
+        tileSources: opts.dziUrl,
 
-    showNavigator: true,
+        showNavigator: true,
 
-    // Mere QuPath-lignende zoom
-    zoomPerScroll: 1.08,    
-    flickEnabled: true,
-    flickMinSpeed: 120,
-    flickMomentum: 0.18,
+        zoomPerScroll: 1.2,
 
-    // Blød men ikke overdrevet animation
-    animationTime: 0.22,
-    springStiffness: 5.5,
+        flickEnabled: true,
+        flickMinSpeed: 120,
+        flickMomentum: 0.18,
 
-    // Pan/zoom constraints
-    constrainDuringPan: false,  // QuPath føles mindre “låst”
-    visibilityRatio: 0.5,
-    minZoomImageRatio: 0.8,
-    maxZoomPixelRatio: 2,
+        animationTime: 0,
+        springStiffness: 100,
 
-    // Rendering / tiles
-    imageLoaderLimit: 10,
-    maxImageCacheCount: 800,
-    immediateRender: false,
-    blendTime: 0.1,
-    alwaysBlend: false,
-    timeout: 120000,
+        constrainDuringPan: false,
+        visibilityRatio: 0.5,
+        minZoomImageRatio: 0.8,
+        maxZoomPixelRatio: 2,
 
-    gestureSettingsMouse: {
-        clickToZoom: false,
-        dblClickToZoom: false,
-        dragToPan: true,
-        scrollToZoom: true
-    }
+        imageLoaderLimit: 10,
+        maxImageCacheCount: 800,
+        immediateRender: true,
+        blendTime: 0,
+        alwaysBlend: false,
+        timeout: 120000,
+
+        gestureSettingsMouse: {
+            clickToZoom: false,
+            dblClickToZoom: false,
+            dragToPan: true,
+            scrollToZoom: true
+        }
     });
 
     state.viewer.addHandler("open", () => {
