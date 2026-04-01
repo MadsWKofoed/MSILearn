@@ -644,6 +644,12 @@ clustering_module_server <- function(id) {
       }
     })
 
+    get_ndpi_temp_base <- function() {
+      base <- file.path(getwd(), ".ndpi_tmp")
+      dir.create(base, recursive = TRUE, showWarnings = FALSE)
+      base
+    }
+
     output$step_align_status <- renderUI({
       if (!identical(input$annotation_mode, "msi_ndpi")) {
         badge_ui("Optional")
@@ -843,12 +849,38 @@ clustering_module_server <- function(id) {
 
     stop_ndpi_server <- function() {
       p <- ndpi_runtime$proc
+      out_dir <- ndpi_runtime$output_dir
+
       if (!is.null(p) && p$is_alive()) {
         try(p$kill(), silent = TRUE)
       }
+
+      if (!is.null(out_dir) && dir.exists(out_dir)) {
+        try(unlink(out_dir, recursive = TRUE, force = TRUE), silent = TRUE)
+      }
+
       ndpi_runtime$proc <- NULL
       ndpi_runtime$port <- NULL
       ndpi_runtime$output_dir <- NULL
+    }
+
+    cleanup_old_ndpi_tmp <- function(max_age_hours = 24) {
+      base <- file.path(getwd(), ".ndpi_tmp")
+      if (!dir.exists(base)) return(invisible(NULL))
+
+      dirs <- list.dirs(base, recursive = FALSE, full.names = TRUE)
+      if (length(dirs) == 0) return(invisible(NULL))
+
+      now <- Sys.time()
+      for (d in dirs) {
+        info <- file.info(d)
+        age_hours <- as.numeric(difftime(now, info$mtime, units = "hours"))
+        if (is.finite(age_hours) && age_hours > max_age_hours) {
+          try(unlink(d, recursive = TRUE, force = TRUE), silent = TRUE)
+        }
+      }
+
+      invisible(NULL)
     }
 
     locate_preprocess_script <- function() {
@@ -1087,7 +1119,10 @@ clustering_module_server <- function(id) {
     }
 
     observeEvent(input$refresh_studies, load_studies(), ignoreInit = FALSE)
-    session$onFlushed(function() load_studies(), once = TRUE)
+    session$onFlushed(function() {
+      cleanup_old_ndpi_tmp()
+      load_studies()
+    }, once = TRUE)
 
     observeEvent(input$step_annot_clicked, {
       clear_cluster_shapes()
@@ -1582,7 +1617,15 @@ clustering_module_server <- function(id) {
 
       stop_ndpi_server()
 
-      out_dir <- tempfile("ndpi_tiles_")
+      base_ndpi_tmp <- get_ndpi_temp_base()
+
+      slide_stub <- tools::file_path_sans_ext(basename(input$ndpi_file$name))
+      slide_stub <- gsub("[^A-Za-z0-9._-]", "_", slide_stub)
+
+      out_dir <- file.path(
+        base_ndpi_tmp,
+        paste0(slide_stub, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+      )
       dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
       py <- find_python_bin()
