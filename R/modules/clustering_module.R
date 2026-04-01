@@ -123,14 +123,15 @@ clustering_module_ui <- function(id) {
             width: 24px;
             height: 24px;
             border-radius: 999px;
-            background: #2563eb;
-            color: #fff;
+            background: #eef2ff;
+            color: #3730a3;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             font-size: 12px;
             font-weight: 700;
             flex: 0 0 auto;
+            border: 1px solid #c7d2fe;
           }
 
           .workflow-step-status{
@@ -231,7 +232,7 @@ clustering_module_ui <- function(id) {
           .current-session-title{
             font-size: 12px;
             font-weight: 700;
-            color: #1d4ed8;
+            color: #3730a3;
             text-transform: uppercase;
             letter-spacing: 0.03em;
             margin-bottom: 6px;
@@ -408,8 +409,8 @@ clustering_module_ui <- function(id) {
               tags$div(class = "section-divider"),
               div(class = "workflow-subtitle", "Region matching"),
 
-              textInput(ns("reg_region_id"), "Current Region ID", value = "R1", placeholder = "e.g. R1"),
-              tags$div(class = "mini-note", "Use one Region ID per matching MSI/NDPI region pair. The next ID is suggested automatically."),
+              uiOutput(ns("reg_region_id_ui")),
+              tags$div(class = "mini-note", "Region IDs are assigned automatically for each new MSI/NDPI region pair."),
 
               actionButton(ns("save_msi_reg_polygon"), "Save MSI region", class = "btn-sm btn-blockish"),
               actionButton(ns("draw_ndpi_reg_polygon"), "Draw matching NDPI region", class = "btn-sm btn-blockish"),
@@ -551,6 +552,7 @@ clustering_module_server <- function(id) {
     active_pipeline_id <- reactiveVal(NULL)
     active_artifact_id <- reactiveVal(NULL)
     active_ann_set_id  <- reactiveVal(NULL)
+    current_region_id <- reactiveVal("R1")
 
     processed_data          <- reactiveVal(NULL)
     clustered_data          <- reactiveVal(NULL)
@@ -564,18 +566,63 @@ clustering_module_server <- function(id) {
     sel_shape <- reactiveVal(NULL)
 
     output$session_summary_ui <- renderUI({
+      study_label <- tryCatch({
+        sid <- active_study_id()
+        if (is.null(sid) || !nzchar(sid)) "—" else {
+          df <- get_studies()
+          hit <- df[df$`_id` == sid, , drop = FALSE]
+          if (nrow(hit) == 0) "—" else hit$name[1]
+        }
+      }, error = function(e) "—")
+
+      sample_label <- tryCatch({
+        sid <- active_sample_id()
+        stid <- active_study_id()
+        if (is.null(sid) || !nzchar(sid) || is.null(stid) || !nzchar(stid)) "—" else {
+          df <- get_samples(stid)
+          hit <- df[df$`_id` == sid, , drop = FALSE]
+          if (nrow(hit) == 0) "—" else hit$sample_name[1]
+        }
+      }, error = function(e) "—")
+
+      pipeline_label <- tryCatch({
+        pid <- active_pipeline_id()
+        if (is.null(pid) || !nzchar(pid)) "—" else {
+          meta <- get_pipeline(pid)
+          if (nrow(meta) == 0) "—" else meta$name[1]
+        }
+      }, error = function(e) "—")
+
+      annset_label <- tryCatch({
+        aid <- active_ann_set_id()
+        stid <- active_study_id()
+        if (is.null(aid) || !nzchar(aid) || is.null(stid) || !nzchar(stid)) "—" else {
+          df <- list_annotation_sets(stid)
+          hit <- df[df$`_id` == aid, , drop = FALSE]
+          if (nrow(hit) == 0) "—" else hit$name[1]
+        }
+      }, error = function(e) "—")
+
       tags$div(
         class = "current-session-box",
         tags$div(class = "current-session-title", "Current session"),
         tags$table(
-          tags$tr(tags$td("Study"), tags$td(active_study_id() %||% "—")),
-          tags$tr(tags$td("Sample"), tags$td(active_sample_id() %||% "—")),
-          tags$tr(tags$td("Pipeline"), tags$td(if (!is.null(active_pipeline_id())) substr(active_pipeline_id(), 1, 12) else "—")),
+          tags$tr(tags$td("Study"), tags$td(study_label)),
+          tags$tr(tags$td("Sample"), tags$td(sample_label)),
+          tags$tr(tags$td("Pipeline"), tags$td(pipeline_label)),
           tags$tr(tags$td("Mode"), tags$td(if (identical(input$annotation_mode, "msi_ndpi")) "MSI + NDPI" else "MSI only")),
-          tags$tr(tags$td("Clusters"), tags$td(if (!is.null(original_clustered())) "Ready" else "Not created")),
+          tags$tr(tags$td("Cluster map"), tags$td(if (!is.null(original_clustered())) "Created" else "Not created")),
           tags$tr(tags$td("Alignment"), tags$td(if (isTRUE(registration_state()$valid)) "Valid" else "Not valid")),
-          tags$tr(tags$td("Annotation set"), tags$td(active_ann_set_id() %||% "—"))
+          tags$tr(tags$td("Annotation set"), tags$td(annset_label))
         )
+      )
+    })
+
+    output$reg_region_id_ui <- renderUI({
+      tags$div(
+        class = "helper-box",
+        tags$strong("Current Region ID: "),
+        current_region_id()
       )
     })
 
@@ -652,7 +699,7 @@ clustering_module_server <- function(id) {
 
       if (has_msi && has_ndpi) {
         used_ids <- union(names(st$msi_reg_polys), names(st$ndpi_reg_polys))
-        updateTextInput(session, "reg_region_id", value = next_region_id(used_ids))
+        current_region_id(next_region_id(used_ids))
       }
 
       invisible(NULL)
@@ -1388,7 +1435,7 @@ clustering_module_server <- function(id) {
     # save MSI registration polygon under region id
     observeEvent(input$save_msi_reg_polygon, {
       req(input$annotation_mode == "msi_ndpi")
-      rid <- normalize_region_id(input$reg_region_id)
+      rid <- normalize_region_id(current_region_id())
       if (is.na(rid)) {
         showNotification("Enter a Region ID.", type = "warning")
         return()
@@ -1424,7 +1471,7 @@ clustering_module_server <- function(id) {
     # trigger NDPI registration polygon drawing
     observeEvent(input$draw_ndpi_reg_polygon, {
       req(input$annotation_mode == "msi_ndpi")
-      rid <- normalize_region_id(input$reg_region_id)
+      rid <- normalize_region_id(current_region_id())
       if (is.na(rid)) {
         showNotification("Enter a Region ID.", type = "warning")
         return()
@@ -1462,7 +1509,7 @@ clustering_module_server <- function(id) {
       st$n_anchor_pairs <- 0L
       registration_state(st)
 
-      updateTextInput(session, "reg_region_id", value = "R1")
+      current_region_id("R1")
       showNotification("Registration reset.", type = "message")
     })
 
@@ -1614,7 +1661,7 @@ clustering_module_server <- function(id) {
       mode <- ndpi_draw_mode()
 
       if (identical(mode, "registration")) {
-        rid <- normalize_region_id(input$reg_region_id)
+        rid <- normalize_region_id(current_region_id())
         if (is.na(rid)) {
           showNotification("Enter a Region ID before drawing NDPI registration polygon.", type = "warning")
           ndpi_draw_mode(NULL)
