@@ -197,12 +197,21 @@ database_management_module_server <- function(id) {
       counts_rv(dbm_collection_counts())
     }
 
-    refresh_records <- function() {
-      collection <- input$collection %||% dbm_catalog()$key[1]
+    refresh_records <- function(collection = NULL, study_id = NULL, sample_id = NULL) {
+      if (is.null(collection)) {
+        collection <- isolate(input$collection %||% dbm_catalog()$key[1])
+      }
+      if (is.null(study_id)) {
+        study_id <- isolate(input$study_filter %||% NULL)
+      }
+      if (is.null(sample_id)) {
+        sample_id <- isolate(input$sample_filter %||% NULL)
+      }
+
       raw <- dbm_get_collection_data(
         collection = collection,
-        study_id = input$study_filter %||% NULL,
-        sample_id = input$sample_filter %||% NULL
+        study_id = study_id,
+        sample_id = sample_id
       )
       display <- dbm_prepare_display(raw, collection)
       records_raw_rv(raw)
@@ -236,7 +245,11 @@ database_management_module_server <- function(id) {
       refresh_counts()
       load_studies_for_filter()
       load_samples_for_filter()
-      refresh_records()
+      refresh_records(
+        collection = dbm_catalog()$key[1],
+        study_id = NULL,
+        sample_id = NULL
+      )
     }, once = TRUE)
 
     observeEvent(input$records_table_rows_selected, {
