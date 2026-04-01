@@ -103,6 +103,7 @@ clustering_module_ui <- function(id) {
             background: #ffffff;
             overflow: hidden;
             box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
           }
 
           .workflow-step-head{
@@ -116,12 +117,16 @@ clustering_module_ui <- function(id) {
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+            transition: background-color 0.18s ease;
           }
 
-          .workflow-step-head:hover{
-            transform: translateY(-2px);
-            box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+          .workflow-step:not(:has(.workflow-step-body.in)):hover{
+            transform: translateY(-3px);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.08);
+            border-color: #dbeafe;
+          }
+
+          .workflow-step:not(:has(.workflow-step-body.in)) .workflow-step-head:hover{
             background: #f4f7ff;
           }
 
