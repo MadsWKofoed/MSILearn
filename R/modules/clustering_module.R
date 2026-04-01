@@ -116,6 +116,13 @@ clustering_module_ui <- function(id) {
             align-items: center;
             justify-content: space-between;
             gap: 10px;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+          }
+
+          .workflow-step-head:hover{
+            transform: translateY(-2px);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+            background: #f4f7ff;
           }
 
           .workflow-step-title{
