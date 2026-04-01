@@ -69,8 +69,13 @@ extract_polygon_from_relayout <- function(ev) {
 
     if (is.list(sh) && length(sh) > 0) {
       for (i in rev(seq_along(sh))) {
-        if (!is.null(sh[[i]]$path)) {
-          shp <- parse_plotly_path_to_shape(sh[[i]]$path)
+        item <- sh[[i]]
+
+        if (is.null(item)) next
+
+        if (is.list(item) || is.data.frame(item)) {
+          path <- item$path %||% NULL
+          shp <- parse_plotly_path_to_shape(path)
           if (!is.null(shp)) return(shp)
         }
       }
