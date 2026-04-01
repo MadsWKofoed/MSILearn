@@ -115,7 +115,7 @@ database_management_module_ui <- function(id) {
           tags$div(
             class = "dbm-card-body",
             uiOutput(ns("selected_summary_ui")),
-            actionButton(ns("delete_selected"), "Delete selected record", class = "btn btn-danger btn-sm dbm-btn-block"),
+            uiOutput(ns("delete_btn_ui")),
             tags$div(
               class = "dbm-danger-note",
               "Deletion is permanent. Cascading cleanup is applied for dependent records such as artifacts, annotations, datasets, and model runs."
@@ -254,15 +254,24 @@ database_management_module_server <- function(id) {
 
     observeEvent(input$records_table_rows_selected, {
       idx <- input$records_table_rows_selected
-      df <- records_display_rv()
-      if (is.null(idx) || length(idx) == 0 || nrow(df) == 0) {
+      df_disp <- records_display_rv()
+      df_raw  <- records_raw_rv()
+
+      if (is.null(idx) || length(idx) == 0 || nrow(df_disp) == 0) {
         selected_id_rv(NULL)
         selected_record_rv(NULL)
         return()
       }
-      rid <- as.character(df$id[idx[1]])
+
+      i <- idx[1]
+      rid <- as.character(df_disp$id[i])
       selected_id_rv(rid)
-      selected_record_rv(dbm_fetch_record(input$collection, rid))
+
+      if (!is.null(df_raw) && nrow(df_raw) >= i) {
+        selected_record_rv(df_raw[i, , drop = FALSE])
+      } else {
+        selected_record_rv(dbm_fetch_record(input$collection, rid))
+      }
     }, ignoreInit = TRUE)
 
     output$dbm_session_ui <- renderUI({
@@ -346,6 +355,25 @@ database_management_module_server <- function(id) {
       })
 
       tags$table(class = "table table-condensed table-bordered", kv)
+    })
+
+    output$delete_btn_ui <- renderUI({
+      rec <- selected_record_rv()
+
+      if (is.null(rec) || nrow(rec) == 0) {
+        actionButton(
+          ns("delete_selected"),
+          "Delete selected record",
+          class = "btn btn-danger btn-sm dbm-btn-block",
+          disabled = "disabled"
+        )
+      } else {
+        actionButton(
+          ns("delete_selected"),
+          "Delete selected record",
+          class = "btn btn-danger btn-sm dbm-btn-block"
+        )
+      }
     })
 
     observeEvent(input$delete_selected, {
