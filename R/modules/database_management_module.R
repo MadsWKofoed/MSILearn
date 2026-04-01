@@ -81,7 +81,7 @@ database_management_module_ui <- function(id) {
           .dbm-danger-note{
             color:#991b1b; font-size:12px; line-height:1.45; margin-top:4px;
           }
-        "))),
+        ")),
 
         uiOutput(ns("dbm_session_ui")),
 
