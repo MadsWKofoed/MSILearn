@@ -98,13 +98,13 @@ database_management_module_ui <- function(id) {
             div(class = "dbm-subtitle", "Collection"),
             selectInput(ns("collection"), "Collection", choices = setNames(dbm_catalog()$key, dbm_catalog()$label), width = "100%"),
             div(class = "dbm-subtitle", "Optional filters"),
-            selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%"),
-            selectInput(ns("sample_filter"), "Sample", choices = c("All samples" = ""), width = "100%"),
+            uiOutput(ns("filter_ui")),
             checkboxInput(ns("show_raw_json"), "Show raw JSON in details", value = FALSE),
             tags$div(
               class = "dbm-helper",
-              tags$strong("Tip: "),
-              "Use the study and sample filters to reduce the table before selecting a record."
+              tags$strong("How to use this page: "),
+              "First choose a collection. Then use the filters only to narrow the table. ",
+              "To inspect or delete something, click a row in the Records table below."
             )
           )
         ),
@@ -141,7 +141,12 @@ database_management_module_ui <- function(id) {
           tags$div(class = "dbm-card-head", "Records"),
           tags$div(
             class = "dbm-card-body",
-            tags$p(class = "dbm-lead", "Select a row to inspect it and enable deletion."),
+            tags$div(
+              class = "dbm-helper",
+              tags$strong("Important: "),
+              "The filters do not choose what gets deleted. ",
+              "To inspect or delete a record, click directly on a row in the Records table."
+            ),
             DT::DTOutput(ns("records_table"))
           )
         ),
@@ -290,19 +295,70 @@ database_management_module_server <- function(id) {
       )
     })
 
+    output$filter_ui <- renderUI({
+      coll <- input$collection %||% "studies"
+
+      if (coll %in% c("studies", "pipelines", "model_runs", "datasets")) {
+        return(
+          tagList(
+            if (coll == "datasets") {
+              selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%")
+            },
+            if (coll %in% c("studies", "pipelines", "model_runs")) {
+              tags$div(class = "mini-note", style = "font-size:12px; color:#6b7280;",
+                      "No extra filters are needed for this collection.")
+            }
+          )
+        )
+      }
+
+      if (coll %in% c("samples", "annotation_sets")) {
+        return(
+          tagList(
+            selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%")
+          )
+        )
+      }
+
+      tagList(
+        selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%"),
+        selectInput(ns("sample_filter"), "Sample", choices = c("All samples" = ""), width = "100%")
+      )
+    })
+
     output$selected_summary_ui <- renderUI({
       rec <- selected_record_rv()
+
       if (is.null(rec) || nrow(rec) == 0) {
-        return(tags$div(class = "dbm-helper", "No record selected yet."))
+        return(
+          tags$div(
+            class = "dbm-helper",
+            tags$strong("No record selected."), tags$br(),
+            "Click a row in the Records table to inspect it and enable deletion."
+          )
+        )
       }
+
       title <- dbm_record_title(input$collection, rec)
       rid <- selected_id_rv() %||% "—"
       created <- if ("created_at" %in% names(rec)) as.character(rec$created_at[1]) else "—"
+
+      extra_note <- NULL
+      if (identical(input$collection, "studies")) {
+        extra_note <- tags$div(
+          style = "margin-top:8px; color:#991b1b;",
+          tags$strong("Warning: "),
+          "Deleting a study also removes dependent samples, artifacts, annotations, datasets, model runs, and related metadata."
+        )
+      }
+
       tags$div(
         class = "dbm-helper",
+        tags$strong("Selected for deletion/inspection"), tags$br(),
         tags$strong(title), tags$br(),
         tags$strong("ID: "), rid, tags$br(),
-        tags$strong("Created: "), created
+        tags$strong("Created: "), created,
+        extra_note
       )
     })
 
@@ -359,18 +415,25 @@ database_management_module_server <- function(id) {
 
     output$delete_btn_ui <- renderUI({
       rec <- selected_record_rv()
+      coll <- input$collection %||% ""
+
+      label <- if (identical(coll, "studies")) {
+        "Delete selected study"
+      } else {
+        "Delete selected record"
+      }
 
       if (is.null(rec) || nrow(rec) == 0) {
         actionButton(
           ns("delete_selected"),
-          "Delete selected record",
+          label,
           class = "btn btn-danger btn-sm dbm-btn-block",
           disabled = "disabled"
         )
       } else {
         actionButton(
           ns("delete_selected"),
-          "Delete selected record",
+          label,
           class = "btn btn-danger btn-sm dbm-btn-block"
         )
       }
@@ -381,10 +444,22 @@ database_management_module_server <- function(id) {
       rid <- selected_id_rv()
       req(!is.null(rec), !is.null(rid), nzchar(rid))
 
+      extra_warning <- NULL
+      if (identical(input$collection, "studies")) {
+        extra_warning <- tags$div(
+          class = "alert alert-danger",
+          style = "margin-top:10px; margin-bottom:10px;",
+          tags$b("Study deletion is cascading."),
+          tags$br(),
+          "This will also remove dependent samples, artifacts, annotations, datasets, model runs, and related metadata."
+        )
+      }
+
       showModal(modalDialog(
         title = "Confirm deletion",
         tags$p(dbm_record_title(input$collection, rec)),
         tags$p(tags$b("This operation cannot be undone.")),
+        extra_warning,
         textInput(ns("confirm_delete_text"), "Type DELETE to confirm", value = ""),
         easyClose = TRUE,
         footer = tagList(
