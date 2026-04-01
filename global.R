@@ -160,7 +160,7 @@ ui <- navbarPage(
   processing_module_ui("processing"),
   clustering_module_ui("clustering"),
   training_module_ui("training"),
-  prediction_module_ui("prediction")
+  prediction_module_ui("prediction"),
   database_management_module_ui("db_management")
 )
 
