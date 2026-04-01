@@ -136,6 +136,7 @@ source("R/processing_functions.R")
 source("R/training_functions.R")
 source("R/prediction_functions.R")
 source("R/ndpi_registration_utils.R")
+source("R/database_management_functions.R")
 
 # Enforce schema indexes on startup (idempotent)
 tryCatch(
@@ -149,6 +150,7 @@ source("R/modules/clustering_module.R")
 source("R/modules/prediction_module.R")
 source("R/modules/processing_module.R")
 source("R/modules/training_module.R")
+source("R/modules/database_management_module.R")
 
 # Global UI
 ui <- navbarPage(
@@ -159,6 +161,7 @@ ui <- navbarPage(
   clustering_module_ui("clustering"),
   training_module_ui("training"),
   prediction_module_ui("prediction")
+  database_management_module_ui("db_management")
 )
 
 
@@ -168,4 +171,5 @@ server <- function(input, output, session) {
   clustering_module_server("clustering")
   training_module_server("training")
   prediction_module_server("prediction")
+  database_management_module_server("db_management")
 }
