@@ -115,7 +115,15 @@ database_management_module_ui <- function(id) {
           tags$div(
             class = "dbm-card-body",
             uiOutput(ns("selected_summary_ui")),
-            uiOutput(ns("delete_btn_ui")),
+            tags$div(
+              id = ns("delete_btn_wrap"),
+              style = "display:none;",
+              actionButton(
+                ns("delete_selected"),
+                "Delete selected record",
+                class = "btn btn-danger btn-sm dbm-btn-block"
+              )
+            ),
             tags$div(
               class = "dbm-danger-note",
               "Deletion is permanent. Cascading cleanup is applied for dependent records such as artifacts, annotations, datasets, and model runs."
@@ -362,6 +370,25 @@ database_management_module_server <- function(id) {
       )
     })
 
+    observe({
+      rec <- selected_record_rv()
+      coll <- input$collection %||% ""
+
+      label <- if (identical(coll, "studies")) {
+        "Delete selected study"
+      } else {
+        "Delete selected record"
+      }
+
+      updateActionButton(session, "delete_selected", label = label)
+
+      if (is.null(rec) || nrow(rec) == 0) {
+        shinyjs::hide("delete_btn_wrap")
+      } else {
+        shinyjs::show("delete_btn_wrap")
+      }
+    })
+
     output$counts_table <- DT::renderDT({
       df <- counts_rv()
       if (nrow(df) == 0) df <- data.frame(collection = "No data", records = 0, description = "", stringsAsFactors = FALSE)
@@ -413,31 +440,6 @@ database_management_module_server <- function(id) {
       tags$table(class = "table table-condensed table-bordered", kv)
     })
 
-    output$delete_btn_ui <- renderUI({
-      rec <- selected_record_rv()
-      coll <- input$collection %||% ""
-
-      label <- if (identical(coll, "studies")) {
-        "Delete selected study"
-      } else {
-        "Delete selected record"
-      }
-
-      if (is.null(rec) || nrow(rec) == 0) {
-        actionButton(
-          ns("delete_selected"),
-          label,
-          class = "btn btn-danger btn-sm dbm-btn-block",
-          disabled = "disabled"
-        )
-      } else {
-        actionButton(
-          ns("delete_selected"),
-          label,
-          class = "btn btn-danger btn-sm dbm-btn-block"
-        )
-      }
-    })
 
     observeEvent(input$delete_selected, {
       rec <- selected_record_rv()
@@ -470,7 +472,11 @@ database_management_module_server <- function(id) {
     }, ignoreInit = TRUE)
 
     observeEvent(input$confirm_delete_btn, {
-      req(identical(input$confirm_delete_text, "DELETE"))
+      if (!identical(trimws(input$confirm_delete_text %||% ""), "DELETE")) {
+        showNotification("Type DELETE exactly to confirm deletion.", type = "warning", duration = 5)
+        return()
+      }
+
       rid <- selected_id_rv()
       collection <- input$collection
       removeModal()
@@ -478,10 +484,12 @@ database_management_module_server <- function(id) {
       tryCatch({
         report <- dbm_delete_record(collection, rid)
         msg <- dbm_delete_report_text(report)
+
         refresh_counts()
         load_studies_for_filter(input$study_filter %||% "")
         load_samples_for_filter(input$study_filter %||% NULL, input$sample_filter %||% "")
         refresh_records()
+
         showNotification(paste("Deleted.", msg), type = "message", duration = 10)
       }, error = function(e) {
         showNotification(paste("Delete failed:", conditionMessage(e)), type = "error", duration = 12)
