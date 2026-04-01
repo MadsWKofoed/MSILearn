@@ -88,153 +88,369 @@ clustering_module_ui <- function(id) {
     "Clustering",
     sidebarLayout(
       sidebarPanel(
-        width = 2,
+        width = 3,
 
         tags$style(HTML("
-          .step-box {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            background: #fff;
-            overflow: hidden;
-          }
-          .step-head {
-            padding: 10px 12px;
-            font-weight: 600;
-            background: #f7f7f9;
-            cursor: pointer;
-            border-bottom: 1px solid #eee;
-          }
-          .step-body {
-            padding: 10px 12px;
-          }
-          .btn-blockish {
-            width: 100%;
-            margin-bottom: 6px;
-          }
-            .plot-card {
+          .workflow-step{
             border: 1px solid #e5e7eb;
-            border-radius: 12px;
-            background: #ffffff;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            border-radius: 14px;
             margin-bottom: 14px;
+            background: #ffffff;
             overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
           }
-          .plot-card-head {
-            padding: 10px 14px;
+
+          .workflow-step-head{
+            padding: 12px 14px;
             font-weight: 700;
             font-size: 15px;
             background: #f8fafc;
             border-bottom: 1px solid #eef2f7;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
           }
-          .plot-card-body {
-            padding: 10px 10px 4px 10px;
+
+          .workflow-step-title{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+
+          .workflow-step-num{
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            background: #2563eb;
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            flex: 0 0 auto;
+          }
+
+          .workflow-step-status{
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #3730a3;
+            white-space: nowrap;
+          }
+
+          .workflow-step-body{
+            padding: 12px 14px 14px 14px;
+          }
+
+          .workflow-lead{
+            font-size: 13px;
+            color: #4b5563;
+            margin-bottom: 10px;
+            line-height: 1.45;
+          }
+
+          .workflow-subtitle{
+            font-size: 12px;
+            font-weight: 700;
+            color: #374151;
+            margin-top: 10px;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+          }
+
+          .helper-box{
+            background: #f8fbff;
+            border: 1px solid #dbeafe;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 12px;
+            color: #334155;
+            line-height: 1.5;
+            margin-bottom: 10px;
+          }
+
+          .helper-box strong{
+            color: #1e3a8a;
+          }
+
+          .helper-muted{
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 4px;
+            margin-bottom: 8px;
+            line-height: 1.4;
+          }
+
+          .mini-note{
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 4px;
+            line-height: 1.35;
+          }
+
+          .btn-blockish{
+            width: 100%;
+            margin-bottom: 8px;
+          }
+
+          .section-divider{
+            margin: 10px 0 12px 0;
+            border-top: 1px solid #eef2f7;
+          }
+
+          .compact-help summary{
+            cursor: pointer;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+          }
+
+          .compact-help ol{
+            margin-bottom: 0;
+            padding-left: 18px;
+            font-size: 12px;
+            color: #4b5563;
+            line-height: 1.5;
+          }
+
+          .current-session-box{
+            background: linear-gradient(135deg, #f8fbff 0%, #fdfdff 100%);
+            border: 1px solid #dbeafe;
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 14px;
+            box-shadow: 0 1px 6px rgba(37,99,235,0.05);
+          }
+
+          .current-session-title{
+            font-size: 12px;
+            font-weight: 700;
+            color: #1d4ed8;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            margin-bottom: 6px;
+          }
+
+          .current-session-box table{
+            width: 100%;
+            font-size: 12px;
+            margin-bottom: 0;
+          }
+
+          .current-session-box td{
+            padding: 2px 0;
+            vertical-align: top;
+          }
+
+          .current-session-box td:first-child{
+            color: #64748b;
+            width: 38%;
+          }
+
+          .current-session-box td:last-child{
+            color: #111827;
+            font-weight: 500;
+            word-break: break-word;
           }
         ")),
 
+        uiOutput(ns("session_summary_ui")),
+
         tags$div(
-          class = "step-box",
+          class = "workflow-step",
           tags$div(
-            class = "step-head",
+            class = "workflow-step-head",
             `data-toggle` = "collapse",
             `data-target` = paste0("#", ns("step_data")),
-            "1. Data & setup"
+            tags$div(
+              class = "workflow-step-title",
+              tags$span(class = "workflow-step-num", "1"),
+              tags$span("Load sample")
+            ),
+            uiOutput(ns("step_data_status"))
           ),
           tags$div(
             id = ns("step_data"),
-            class = "step-body collapse in",
+            class = "workflow-step-body collapse in",
 
-            tags$h5("Study & Sample", style = "font-weight:bold; margin-bottom:4px;"),
+            tags$div(
+              class = "workflow-lead",
+              "Choose a study, sample and processed MSI dataset. If you want histology-guided annotation, also upload an NDPI slide."
+            ),
+
+            div(class = "workflow-subtitle", "Study and sample"),
             selectInput(ns("study_select"), "Study", choices = c("— select —" = ""), width = "100%"),
-            actionButton(ns("refresh_studies"), "↺ Refresh", class = "btn-xs"),
-            tags$hr(style = "margin:6px 0;"),
-
+            actionButton(ns("refresh_studies"), "↺ Refresh studies", class = "btn-xs"),
+            tags$div(class = "mini-note", "Select the study first, then choose the sample you want to annotate."),
             selectInput(ns("sample_select"), "Sample", choices = c("— select study first —" = ""), width = "100%"),
 
-            tags$h5("Workflow", style = "font-weight:bold; margin-bottom:4px; margin-top:12px;"),
+            div(class = "workflow-subtitle", "Workflow mode"),
             selectInput(
               ns("annotation_mode"), "Mode",
               choices = c("MSI only" = "msi_only", "MSI + NDPI" = "msi_ndpi"),
               selected = "msi_only"
             ),
+            tags$div(
+              class = "helper-box",
+              tags$strong("MSI only: "), "annotate directly on the cluster map.",
+              tags$br(),
+              tags$strong("MSI + NDPI: "), "align the NDPI slide to the MSI map and annotate using histology."
+            ),
 
-            tags$h5("Processing Artifact", style = "font-weight:bold; margin-bottom:4px; margin-top:12px;"),
-            selectInput(ns("pipeline_select"), "Pipeline", choices = c("— select sample first —" = ""), width = "100%"),
+            div(class = "workflow-subtitle", "Processed MSI data"),
+            selectInput(ns("pipeline_select"), "Processing pipeline", choices = c("— select sample first —" = ""), width = "100%"),
             uiOutput(ns("pipeline_params_ui")),
-            actionButton(ns("load_dataset_btn"), "Load dataset", class = "btn-primary btn-sm btn-blockish"),
+            actionButton(ns("load_dataset_btn"), "Load MSI data", class = "btn-primary btn-sm btn-blockish"),
 
             conditionalPanel(
               condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-              tags$hr(),
-              tags$h5("NDPI setup", style = "font-weight:bold; margin-bottom:4px;"),
-              fileInput(ns("ndpi_file"), "NDPI slide", accept = c(".ndpi")),
-              numericInput(ns("ndpi_workers"), "NDPI workers", value = 8, min = 1, max = 10, step = 1)
+              tags$div(class = "section-divider"),
+              div(class = "workflow-subtitle", "NDPI slide"),
+              fileInput(ns("ndpi_file"), "Upload NDPI slide", accept = c(".ndpi")),
+              numericInput(ns("ndpi_workers"), "NDPI preprocessing workers", value = 8, min = 1, max = 10, step = 1),
+              tags$div(class = "mini-note", "The NDPI file is tiled before viewing. More workers can speed this up, but use only what your machine can handle.")
             )
-          ),  
-        ), 
+          )
+        ),
 
         tags$div(
-          class = "step-box",
+          class = "workflow-step",
           tags$div(
-            class = "step-head",
+            class = "workflow-step-head",
             `data-toggle` = "collapse",
             `data-target` = paste0("#", ns("step_cluster")),
-            "2. Run clustering"
+            tags$div(
+              class = "workflow-step-title",
+              tags$span(class = "workflow-step-num", "2"),
+              tags$span("Create cluster map")
+            ),
+            uiOutput(ns("step_cluster_status"))
           ),
           tags$div(
             id = ns("step_cluster"),
-            class = "step-body collapse",
+            class = "workflow-step-body collapse",
+
+            tags$div(
+              class = "workflow-lead",
+              "Run clustering on the processed MSI matrix to generate the spatial map used for orientation and annotation."
+            ),
 
             selectInput(ns("method"), "Clustering method", choices = c("K-means", "VSClust", "MSIClust")),
             selectInput(ns("normalize"), "Normalisation", choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms")),
             numericInput(ns("clusters"), "Number of clusters", value = 3, min = 3, max = 30),
             uiOutput(ns("method_params_ui")),
-            actionButton(ns("run_clustering"), "Run clustering", class = "btn-primary btn-sm btn-blockish")
+
+            tags$details(
+              class = "compact-help",
+              tags$summary("What does this do?"),
+              tags$ol(
+                tags$li("Clustering groups MSI pixels into spatially distinct patterns."),
+                tags$li("The cluster map helps you identify tissue regions before annotation."),
+                tags$li("For NDPI alignment, try to create clusters that make visually recognizable structures.")
+              )
+            ),
+
+            actionButton(ns("run_clustering"), "Generate cluster map", class = "btn-primary btn-sm btn-blockish")
           )
         ),
 
         tags$div(
-          class = "step-box",
+          class = "workflow-step",
           tags$div(
-            class = "step-head",
+            class = "workflow-step-head",
             `data-toggle` = "collapse",
             `data-target` = paste0("#", ns("step_align")),
-            "3. Alignment & orientation"
+            tags$div(
+              class = "workflow-step-title",
+              tags$span(class = "workflow-step-num", "3"),
+              tags$span("Align NDPI to MSI")
+            ),
+            uiOutput(ns("step_align_status"))
           ),
           tags$div(
             id = ns("step_align"),
-            class = "step-body collapse",
+            class = "workflow-step-body collapse",
 
+            tags$div(
+              class = "workflow-lead",
+              "Match the NDPI slide to the MSI cluster map by drawing corresponding regions in both views."
+            ),
+
+            div(class = "workflow-subtitle", "Orientation"),
             selectInput(ns("orientation"), "Orientation adjustment", choices = c("Default", "Flip X", "Flip Y", "Flip Both")),
+            tags$div(class = "mini-note", "Adjust the MSI map until its axes visually match the NDPI image before creating alignment regions."),
 
             conditionalPanel(
               condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-              tags$hr(),
-              tags$h5("NDPI alignment", style = "font-weight:bold; margin-bottom:4px;"),
-              textInput(ns("reg_region_id"), "Region ID", value = "R1", placeholder = "e.g. R1"),
-              actionButton(ns("save_msi_reg_polygon"), "Save current MSI polygon", class = "btn-sm btn-blockish"),
-              actionButton(ns("draw_ndpi_reg_polygon"), "Draw NDPI region polygon", class = "btn-sm btn-blockish"),
-              actionButton(ns("fit_registration"), "Fit NDPI → MSI", class = "btn-sm btn-primary btn-blockish"),
-              actionButton(ns("reset_registration"), "Reset registration", class = "btn-sm btn-warning btn-blockish"),
+
+              tags$details(
+                class = "compact-help",
+                open = NA,
+                tags$summary("How to align NDPI and MSI"),
+                tags$ol(
+                  tags$li("First adjust the MSI orientation so it visually matches the NDPI slide."),
+                  tags$li("Use the current Region ID for one matching pair of regions."),
+                  tags$li("Draw a polygon on the MSI cluster map around a recognizable region."),
+                  tags$li("Click 'Save MSI region'."),
+                  tags$li("Click 'Draw matching NDPI region' and draw the corresponding region on the NDPI slide."),
+                  tags$li("A new Region ID is suggested automatically after each completed pair."),
+                  tags$li("Repeat for a few regions if needed, then click 'Compute alignment'."),
+                  tags$li("Continue only when the registration is valid.")
+                )
+              ),
+
+              tags$div(class = "section-divider"),
+              div(class = "workflow-subtitle", "Region matching"),
+
+              textInput(ns("reg_region_id"), "Current Region ID", value = "R1", placeholder = "e.g. R1"),
+              tags$div(class = "mini-note", "Use one Region ID per matching MSI/NDPI region pair. The next ID is suggested automatically."),
+
+              actionButton(ns("save_msi_reg_polygon"), "Save MSI region", class = "btn-sm btn-blockish"),
+              actionButton(ns("draw_ndpi_reg_polygon"), "Draw matching NDPI region", class = "btn-sm btn-blockish"),
+              actionButton(ns("fit_registration"), "Compute alignment", class = "btn-sm btn-primary btn-blockish"),
+              actionButton(ns("reset_registration"), "Reset alignment", class = "btn-sm btn-warning btn-blockish"),
+
+              tags$div(
+                class = "helper-box",
+                tags$strong("Tip: "),
+                "Start with one or two large, easy-to-recognize tissue regions before adding smaller refinement regions."
+              ),
+
               verbatimTextOutput(ns("registration_status"))
             )
           )
         ),
 
         tags$div(
-          class = "step-box",
+          class = "workflow-step",
           tags$div(
-            class = "step-head",
+            class = "workflow-step-head",
             `data-toggle` = "collapse",
             `data-target` = paste0("#", ns("step_annot")),
             onclick = sprintf("Shiny.setInputValue('%s', Date.now(), {priority: 'event'})", ns("step_annot_clicked")),
-            "4. Annotation"
+            tags$div(
+              class = "workflow-step-title",
+              tags$span(class = "workflow-step-num", "4"),
+              tags$span("Annotate tissue classes")
+            ),
+            uiOutput(ns("step_annot_status"))
           ),
           tags$div(
             id = ns("step_annot"),
-            class = "step-body collapse",
+            class = "workflow-step-body collapse",
 
-            tags$h5("Annotation set", style = "font-weight:bold; margin-bottom:4px;"),
+            tags$div(
+              class = "workflow-lead",
+              "Create or choose a label set, draw a region on MSI or NDPI, assign a class, and save the annotations when you are finished."
+            ),
+
+            div(class = "workflow-subtitle", "Annotation set"),
             radioButtons(ns("ann_set_mode"), NULL, choices = c("Use existing" = "existing", "Create new" = "new"), selected = "existing"),
 
             conditionalPanel(
@@ -244,31 +460,41 @@ clustering_module_ui <- function(id) {
 
             conditionalPanel(
               condition = sprintf("input['%s'] == 'new'", ns("ann_set_mode")),
-              textInput(ns("ann_set_name"), "Name", placeholder = "e.g. Tumour vs Stroma"),
-              textInput(ns("ann_set_labels"), "Labels (comma-separated)", placeholder = "Tumour, Stroma, Background"),
+              textInput(ns("ann_set_name"), "Annotation set name", placeholder = "e.g. Tumour vs Stroma"),
+              textInput(ns("ann_set_labels"), "Labels (comma-separated)", placeholder = "Tumour, Stroma, Necrosis"),
               actionButton(ns("create_ann_set_btn"), "Create annotation set", class = "btn-sm btn-success btn-blockish"),
               uiOutput(ns("ann_set_create_status"))
             ),
 
-            selectInput(ns("class_label"), "Assign class", choices = c(), width = "100%"),
+            tags$div(class = "section-divider"),
+            div(class = "workflow-subtitle", "Draw and apply labels"),
+
+            selectInput(ns("class_label"), "Current class", choices = c(), width = "100%"),
 
             conditionalPanel(
               condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-              actionButton(ns("draw_ndpi_polygon"), "Draw NDPI annotation polygon", class = "btn-sm btn-blockish")
+              actionButton(ns("draw_ndpi_polygon"), "Draw annotation on NDPI", class = "btn-sm btn-blockish")
             ),
 
-            actionButton(ns("assign_class"), "Assign to selection", class = "btn-sm btn-blockish"),
-            actionButton(ns("assign_all"), "Assign all unassigned", class = "btn-sm btn-blockish"),
+            actionButton(ns("assign_class"), "Apply class to selected MSI region", class = "btn-sm btn-blockish"),
+            actionButton(ns("assign_all"), "Label all remaining unassigned pixels", class = "btn-sm btn-blockish"),
 
-            tags$hr(),
-            actionButton(ns("commit_db"), "Commit to MongoDB", class = "btn-danger btn-sm btn-blockish"),
+            tags$div(
+              class = "helper-box",
+              tags$strong("How annotation works: "),
+              "You can draw directly on the MSI cluster map or on the aligned NDPI view. All annotations update the same pixel class table. Overlapping annotations overwrite earlier class assignments."
+            ),
+
+            tags$div(class = "section-divider"),
+            div(class = "workflow-subtitle", "Save"),
+            actionButton(ns("commit_db"), "Save annotations to database", class = "btn-danger btn-sm btn-blockish"),
             uiOutput(ns("commit_status"))
           )
         )
       ),
 
       mainPanel(
-        width = 10,
+        width = 9,
         tags$head(
           tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/5.0.1/openseadragon.min.js"),
           tags$script(src = "ndpi_viewer_sync.js"),
@@ -337,6 +563,60 @@ clustering_module_server <- function(id) {
     next_color_i <- reactiveVal(1L)
     sel_shape <- reactiveVal(NULL)
 
+    output$session_summary_ui <- renderUI({
+      tags$div(
+        class = "current-session-box",
+        tags$div(class = "current-session-title", "Current session"),
+        tags$table(
+          tags$tr(tags$td("Study"), tags$td(active_study_id() %||% "—")),
+          tags$tr(tags$td("Sample"), tags$td(active_sample_id() %||% "—")),
+          tags$tr(tags$td("Pipeline"), tags$td(if (!is.null(active_pipeline_id())) substr(active_pipeline_id(), 1, 12) else "—")),
+          tags$tr(tags$td("Mode"), tags$td(if (identical(input$annotation_mode, "msi_ndpi")) "MSI + NDPI" else "MSI only")),
+          tags$tr(tags$td("Clusters"), tags$td(if (!is.null(original_clustered())) "Ready" else "Not created")),
+          tags$tr(tags$td("Alignment"), tags$td(if (isTRUE(registration_state()$valid)) "Valid" else "Not valid")),
+          tags$tr(tags$td("Annotation set"), tags$td(active_ann_set_id() %||% "—"))
+        )
+      )
+    })
+
+    badge_ui <- function(text) {
+      tags$span(class = "workflow-step-status", text)
+    }
+
+    output$step_data_status <- renderUI({
+      if (!is.null(processed_data())) badge_ui("Done") else badge_ui("Select data")
+    })
+
+    output$step_cluster_status <- renderUI({
+      if (!is.null(original_clustered())) {
+        badge_ui("Done")
+      } else if (!is.null(processed_data())) {
+        badge_ui("Ready")
+      } else {
+        badge_ui("Waiting")
+      }
+    })
+
+    output$step_align_status <- renderUI({
+      if (!identical(input$annotation_mode, "msi_ndpi")) {
+        badge_ui("Optional")
+      } else if (isTRUE(registration_state()$valid)) {
+        badge_ui("Aligned")
+      } else if (!is.null(original_clustered()) && !is.null(ndpi_runtime$port)) {
+        badge_ui("Ready")
+      } else {
+        badge_ui("Waiting")
+      }
+    })
+
+    output$step_annot_status <- renderUI({
+      if (!is.null(active_ann_set_id()) && !is.null(original_clustered())) {
+        badge_ui("Ready")
+      } else {
+        badge_ui("Setup needed")
+      }
+    })
+
     get_latest_msi_polygon <- function() {
       shp <- extract_polygon_from_relayout(
         event_data("plotly_relayout", source = ns("cluster_src"))
@@ -347,6 +627,35 @@ clustering_module_server <- function(id) {
       if (!is.null(shp)) return(shp)
 
       sel_shape()
+    }
+
+    next_region_id <- function(ids) {
+      ids <- as.character(ids %||% character(0))
+      ids <- ids[nzchar(ids)]
+
+      if (length(ids) == 0) return("R1")
+
+      nums <- suppressWarnings(as.integer(sub("^R", "", ids, ignore.case = TRUE)))
+      nums <- nums[is.finite(nums)]
+
+      if (length(nums) == 0) return("R1")
+      paste0("R", max(nums) + 1L)
+    }
+
+    advance_region_id_if_pair_complete <- function(rid = NULL) {
+      st <- registration_state()
+
+      if (is.null(rid) || !nzchar(rid)) return(invisible(NULL))
+
+      has_msi  <- rid %in% names(st$msi_reg_polys)
+      has_ndpi <- rid %in% names(st$ndpi_reg_polys)
+
+      if (has_msi && has_ndpi) {
+        used_ids <- union(names(st$msi_reg_polys), names(st$ndpi_reg_polys))
+        updateTextInput(session, "reg_region_id", value = next_region_id(used_ids))
+      }
+
+      invisible(NULL)
     }
 
     pixel_class_state <- reactiveVal(NULL)
@@ -1075,6 +1384,7 @@ clustering_module_server <- function(id) {
       }
     })
 
+    
     # save MSI registration polygon under region id
     observeEvent(input$save_msi_reg_polygon, {
       req(input$annotation_mode == "msi_ndpi")
@@ -1096,17 +1406,19 @@ clustering_module_server <- function(id) {
 
       poly_xy_disp <- cbind(shape$x, shape$y)
 
-    st <- registration_state()
-    st$msi_reg_polys[[rid]] <- poly_xy_disp
-    st$fit <- NULL
-    st$fit_by_region <- list()
-    st$valid <- FALSE
-    st$rms <- NA_real_
-    st$rms_by_region <- numeric(0)
-    registration_state(st)
+      st <- registration_state()
+      st$msi_reg_polys[[rid]] <- poly_xy_disp
+      st$fit <- NULL
+      st$fit_by_region <- list()
+      st$valid <- FALSE
+      st$rms <- NA_real_
+      st$rms_by_region <- numeric(0)
+      registration_state(st)
 
       showNotification(sprintf("Saved MSI registration polygon for %s", rid), type = "message")
       clear_cluster_shapes()
+
+      advance_region_id_if_pair_complete(rid)
     })
 
     # trigger NDPI registration polygon drawing
@@ -1149,6 +1461,8 @@ clustering_module_server <- function(id) {
       st$matched_region_ids <- character(0)
       st$n_anchor_pairs <- 0L
       registration_state(st)
+
+      updateTextInput(session, "reg_region_id", value = "R1")
       showNotification("Registration reset.", type = "message")
     })
 
@@ -1299,7 +1613,7 @@ clustering_module_server <- function(id) {
 
       mode <- ndpi_draw_mode()
 
-      if (identical(mode, "registration")) {
+      if (identical(mode, "registration")) {if (identical(mode, "registration")) {
         rid <- normalize_region_id(input$reg_region_id)
         if (is.na(rid)) {
           showNotification("Enter a Region ID before drawing NDPI registration polygon.", type = "warning")
@@ -1318,6 +1632,8 @@ clustering_module_server <- function(id) {
 
         ndpi_draw_mode(NULL)
         showNotification(sprintf("Saved NDPI registration polygon for %s", rid), type = "message")
+
+        advance_region_id_if_pair_complete(rid)
         return()
       }
 
