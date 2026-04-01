@@ -1613,7 +1613,7 @@ clustering_module_server <- function(id) {
 
       mode <- ndpi_draw_mode()
 
-      if (identical(mode, "registration")) {if (identical(mode, "registration")) {
+      if (identical(mode, "registration")) {
         rid <- normalize_region_id(input$reg_region_id)
         if (is.na(rid)) {
           showNotification("Enter a Region ID before drawing NDPI registration polygon.", type = "warning")
