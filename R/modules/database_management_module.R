@@ -444,10 +444,19 @@ database_management_module_server <- function(id) {
     observeEvent(input$delete_selected, {
       rec <- selected_record_rv()
       rid <- selected_id_rv()
-      req(!is.null(rec), !is.null(rid), nzchar(rid))
+      collection <- input$collection %||% ""
+
+      if (is.null(rec) || nrow(rec) == 0 || is.null(rid) || !nzchar(rid)) {
+        showNotification(
+          "Select a row in the Records table before deleting.",
+          type = "warning",
+          duration = 5
+        )
+        return()
+      }
 
       extra_warning <- NULL
-      if (identical(input$collection, "studies")) {
+      if (identical(collection, "studies")) {
         extra_warning <- tags$div(
           class = "alert alert-danger",
           style = "margin-top:10px; margin-bottom:10px;",
@@ -459,26 +468,27 @@ database_management_module_server <- function(id) {
 
       showModal(modalDialog(
         title = "Confirm deletion",
-        tags$p(dbm_record_title(input$collection, rec)),
+        tags$p(dbm_record_title(collection, rec)),
         tags$p(tags$b("This operation cannot be undone.")),
         extra_warning,
-        textInput(ns("confirm_delete_text"), "Type DELETE to confirm", value = ""),
         easyClose = TRUE,
         footer = tagList(
           modalButton("Cancel"),
-          actionButton(ns("confirm_delete_btn"), "Delete permanently", class = "btn-danger")
+          actionButton(ns("confirm_delete_btn"), "Yes, delete", class = "btn-danger")
         )
       ))
     }, ignoreInit = TRUE)
 
     observeEvent(input$confirm_delete_btn, {
-      if (!identical(trimws(input$confirm_delete_text %||% ""), "DELETE")) {
-        showNotification("Type DELETE exactly to confirm deletion.", type = "warning", duration = 5)
+      rid <- selected_id_rv()
+      collection <- input$collection %||% ""
+
+      if (is.null(rid) || !nzchar(rid)) {
+        removeModal()
+        showNotification("No record is currently selected.", type = "warning", duration = 5)
         return()
       }
 
-      rid <- selected_id_rv()
-      collection <- input$collection
       removeModal()
 
       tryCatch({
@@ -486,13 +496,28 @@ database_management_module_server <- function(id) {
         msg <- dbm_delete_report_text(report)
 
         refresh_counts()
-        load_studies_for_filter(input$study_filter %||% "")
-        load_samples_for_filter(input$study_filter %||% NULL, input$sample_filter %||% "")
-        refresh_records()
+        load_studies_for_filter(selected = "")
+        load_samples_for_filter(study_id = NULL, selected = "")
+        refresh_records(
+          collection = collection,
+          study_id = NULL,
+          sample_id = NULL
+        )
 
-        showNotification(paste("Deleted.", msg), type = "message", duration = 10)
+        selected_id_rv(NULL)
+        selected_record_rv(NULL)
+
+        showNotification(
+          paste("Deleted.", msg),
+          type = "message",
+          duration = 10
+        )
       }, error = function(e) {
-        showNotification(paste("Delete failed:", conditionMessage(e)), type = "error", duration = 12)
+        showNotification(
+          paste("Delete failed:", conditionMessage(e)),
+          type = "error",
+          duration = 12
+        )
       })
     }, ignoreInit = TRUE)
   })
