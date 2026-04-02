@@ -276,6 +276,28 @@ clustering_module_ui <- function(id) {
             font-weight: 500;
             word-break: break-word;
           }
+
+          .plot-card{
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            margin-bottom: 16px;
+            background: #ffffff;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+          }
+
+          .plot-card-head{
+            padding: 12px 14px;
+            font-weight: 700;
+            font-size: 15px;
+            background: #f8fafc;
+            border-bottom: 1px solid #eef2f7;
+            color: #374151;
+          }
+
+          .plot-card-body{
+            padding: 12px 14px 14px 14px;
+          }
         ")),
 
         uiOutput(ns("session_summary_ui")),
