@@ -61,6 +61,145 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
 
 
 
+
+# ---------------------------------------------------------------------------
+# Shift-based local spectral similarity diagnostics on annotated pixels
+# ---------------------------------------------------------------------------
+
+.row_correlation_similarity <- function(A, B) {
+  A <- as.matrix(A)
+  B <- as.matrix(B)
+  storage.mode(A) <- 'numeric'
+  storage.mode(B) <- 'numeric'
+  A_center <- A - rowMeans(A, na.rm = TRUE)
+  B_center <- B - rowMeans(B, na.rm = TRUE)
+  num <- rowSums(A_center * B_center, na.rm = TRUE)
+  den <- sqrt(rowSums(A_center * A_center, na.rm = TRUE)) *
+    sqrt(rowSums(B_center * B_center, na.rm = TRUE))
+  out <- num / den
+  out[!is.finite(out)] <- NA_real_
+  out
+}
+
+compute_shift_similarity_diagnostics <- function(
+    X,
+    meta,
+    max_shift = NULL,
+    similarity_threshold = 0.10,
+    min_pairs = 50L,
+    directions = c("x", "y")
+) {
+  req_cols <- c("sample_id", "x", "y")
+  empty_res <- list(
+    similarity_curve = data.frame(
+      distance = numeric(0),
+      mean_similarity = numeric(0),
+      median_similarity = numeric(0),
+      n_pairs = integer(0)
+    ),
+    recommended_buffer_radius = NA_real_,
+    threshold = as.numeric(similarity_threshold),
+    method = "shift_correlation"
+  )
+
+  if (is.null(meta) || !all(req_cols %in% names(meta))) return(empty_res)
+
+  X <- as.matrix(X)
+  storage.mode(X) <- "numeric"
+  meta <- as.data.frame(meta, stringsAsFactors = FALSE)
+
+  ok <- stats::complete.cases(meta[, req_cols, drop = FALSE]) &
+    rowSums(is.finite(X)) == ncol(X)
+  X <- X[ok, , drop = FALSE]
+  meta <- meta[ok, , drop = FALSE]
+
+  if (nrow(X) < 10L || ncol(X) < 2L) return(empty_res)
+
+  xr <- diff(range(meta$x, na.rm = TRUE))
+  yr <- diff(range(meta$y, na.rm = TRUE))
+  inferred_max_shift <- floor(max(5, min(c(20, xr, yr) / 4)))
+  if (!is.finite(inferred_max_shift) || inferred_max_shift < 1) inferred_max_shift <- 15L
+  if (is.null(max_shift)) {
+    max_shift <- inferred_max_shift
+  } else {
+    max_shift <- as.integer(max_shift)
+    if (!is.finite(max_shift) || max_shift < 1L) max_shift <- inferred_max_shift
+  }
+
+  out <- vector("list", max_shift)
+
+  for (d in seq_len(max_shift)) {
+    sim_vals <- numeric(0)
+
+    for (sid in unique(meta$sample_id)) {
+      idx <- which(meta$sample_id == sid)
+      if (length(idx) < 2L) next
+
+      smeta <- meta[idx, , drop = FALSE]
+      key_to_local <- seq_along(idx)
+      names(key_to_local) <- paste(smeta$x, smeta$y, sep = "__")
+
+      for (dir in directions) {
+        shifted_key <- if (identical(dir, "x")) {
+          paste(smeta$x + d, smeta$y, sep = "__")
+        } else if (identical(dir, "y")) {
+          paste(smeta$x, smeta$y + d, sep = "__")
+        } else {
+          character(0)
+        }
+        if (length(shifted_key) == 0L) next
+
+        j_local <- unname(key_to_local[shifted_key])
+        valid <- which(!is.na(j_local))
+        if (length(valid) == 0L) next
+
+        A <- X[idx[valid], , drop = FALSE]
+        B <- X[idx[j_local[valid]], , drop = FALSE]
+        sim <- .row_correlation_similarity(A, B)
+        sim_vals <- c(sim_vals, sim[is.finite(sim)])
+      }
+    }
+
+    sim_vals <- sim_vals[is.finite(sim_vals)]
+    if (length(sim_vals) < min_pairs) next
+
+    out[[d]] <- data.frame(
+      distance = d,
+      mean_similarity = mean(sim_vals, na.rm = TRUE),
+      median_similarity = stats::median(sim_vals, na.rm = TRUE),
+      n_pairs = length(sim_vals)
+    )
+  }
+
+  out <- Filter(Negate(is.null), out)
+  if (length(out) == 0L) return(empty_res)
+  curve_df <- do.call(rbind, out)
+
+  recommended_buffer_radius <- NA_real_
+  below <- curve_df$mean_similarity <= similarity_threshold
+  idx2 <- which(below & c(below[-1], FALSE))[1]
+  if (!is.na(idx2)) {
+    recommended_buffer_radius <- curve_df$distance[idx2]
+  } else {
+    idx1 <- which(below)[1]
+    if (!is.na(idx1)) recommended_buffer_radius <- curve_df$distance[idx1]
+  }
+
+  if (!is.finite(recommended_buffer_radius)) {
+    delta <- abs(diff(curve_df$mean_similarity))
+    flat_idx <- which(delta <= 0.01)[1]
+    if (!is.na(flat_idx)) recommended_buffer_radius <- curve_df$distance[flat_idx + 1L]
+  }
+
+  list(
+    similarity_curve = curve_df,
+    recommended_buffer_radius = as.numeric(recommended_buffer_radius),
+    threshold = as.numeric(similarity_threshold),
+    method = "shift_correlation"
+  )
+}
+
+
 # ---------------------------------------------------------------------------
 # PCA + Moran correlogram diagnostics on training pixels
 # ---------------------------------------------------------------------------
