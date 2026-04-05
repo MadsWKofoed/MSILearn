@@ -59,6 +59,239 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
   X_norm
 }
 
+
+
+# ---------------------------------------------------------------------------
+# PCA + Moran correlogram diagnostics on training pixels
+# ---------------------------------------------------------------------------
+
+.compute_distance_matrix <- function(coords) {
+  as.matrix(stats::dist(coords))
+}
+
+compute_moran_correlogram <- function(
+    coords,
+    values,
+    n_bins = 15L,
+    max_dist = NULL,
+    min_pairs = 30L
+) {
+  stopifnot(nrow(coords) == length(values))
+
+  coords <- as.matrix(coords)
+  storage.mode(coords) <- "numeric"
+  values <- as.numeric(values)
+
+  ok <- is.finite(values) & stats::complete.cases(coords)
+  coords <- coords[ok, , drop = FALSE]
+  values <- values[ok]
+
+  if (nrow(coords) < 10L) {
+    return(data.frame(
+      distance_mid = numeric(0),
+      distance_min = numeric(0),
+      distance_max = numeric(0),
+      moran_i = numeric(0),
+      n_pairs = integer(0)
+    ))
+  }
+
+  z <- values - mean(values)
+  denom <- sum(z^2)
+  if (!is.finite(denom) || denom <= 0) {
+    return(data.frame(
+      distance_mid = numeric(0),
+      distance_min = numeric(0),
+      distance_max = numeric(0),
+      moran_i = numeric(0),
+      n_pairs = integer(0)
+    ))
+  }
+
+  dmat <- .compute_distance_matrix(coords)
+  upper_idx <- upper.tri(dmat, diag = FALSE)
+
+  dists <- dmat[upper_idx]
+  if (is.null(max_dist)) {
+    max_dist <- stats::quantile(dists, probs = 0.9, na.rm = TRUE, names = FALSE)
+  }
+
+  if (!is.finite(max_dist) || max_dist <= 0) {
+    return(data.frame(
+      distance_mid = numeric(0),
+      distance_min = numeric(0),
+      distance_max = numeric(0),
+      moran_i = numeric(0),
+      n_pairs = integer(0)
+    ))
+  }
+
+  breaks <- unique(as.numeric(seq(0, max_dist, length.out = n_bins + 1L)))
+  if (length(breaks) < 2L) {
+    return(data.frame(
+      distance_mid = numeric(0),
+      distance_min = numeric(0),
+      distance_max = numeric(0),
+      moran_i = numeric(0),
+      n_pairs = integer(0)
+    ))
+  }
+
+  zi <- outer(z, z, "*")
+  zij <- zi[upper_idx]
+
+  out <- lapply(seq_len(length(breaks) - 1L), function(i) {
+    lo <- breaks[i]
+    hi <- breaks[i + 1L]
+    pick <- dists >= lo & dists < hi
+
+    n_pairs_i <- sum(pick)
+    if (n_pairs_i < min_pairs) {
+      return(NULL)
+    }
+
+    s0 <- 2 * n_pairs_i
+    num <- 2 * sum(zij[pick], na.rm = TRUE)
+    moran_i <- (length(z) / s0) * (num / denom)
+
+    data.frame(
+      distance_mid = (lo + hi) / 2,
+      distance_min = lo,
+      distance_max = hi,
+      moran_i = moran_i,
+      n_pairs = n_pairs_i
+    )
+  })
+
+  out <- Filter(Negate(is.null), out)
+  if (length(out) == 0L) {
+    return(data.frame(
+      distance_mid = numeric(0),
+      distance_min = numeric(0),
+      distance_max = numeric(0),
+      moran_i = numeric(0),
+      n_pairs = integer(0)
+    ))
+  }
+
+  do.call(rbind, out)
+}
+
+compute_pca_moran_diagnostics <- function(
+    X,
+    meta,
+    n_pcs = 5L,
+    max_points = 3000L,
+    n_bins = 15L,
+    seed = 1234L
+) {
+  req_cols <- c("x", "y")
+  if (is.null(meta) || !all(req_cols %in% names(meta))) {
+    return(list(
+      pca_var_explained = data.frame(pc = character(0), variance_explained = numeric(0)),
+      moran_correlogram = data.frame(),
+      moran_range_summary = data.frame(pc = character(0), range_estimate = numeric(0)),
+      recommended_buffer_radius = NA_real_
+    ))
+  }
+
+  X <- as.matrix(X)
+  storage.mode(X) <- "numeric"
+  meta <- as.data.frame(meta)
+
+  ok <- stats::complete.cases(meta[, req_cols, drop = FALSE])
+  ok <- ok & rowSums(is.finite(X)) == ncol(X)
+
+  X <- X[ok, , drop = FALSE]
+  meta <- meta[ok, , drop = FALSE]
+
+  if (nrow(X) < 20L || ncol(X) < 2L) {
+    return(list(
+      pca_var_explained = data.frame(pc = character(0), variance_explained = numeric(0)),
+      moran_correlogram = data.frame(),
+      moran_range_summary = data.frame(pc = character(0), range_estimate = numeric(0)),
+      recommended_buffer_radius = NA_real_
+    ))
+  }
+
+  set.seed(seed)
+  if (nrow(X) > max_points) {
+    keep <- sort(sample.int(nrow(X), size = max_points))
+    X <- X[keep, , drop = FALSE]
+    meta <- meta[keep, , drop = FALSE]
+  }
+
+  keep_cols <- apply(X, 2, function(v) stats::sd(v, na.rm = TRUE) > 0)
+  X <- X[, keep_cols, drop = FALSE]
+
+  if (ncol(X) < 2L) {
+    return(list(
+      pca_var_explained = data.frame(pc = character(0), variance_explained = numeric(0)),
+      moran_correlogram = data.frame(),
+      moran_range_summary = data.frame(pc = character(0), range_estimate = numeric(0)),
+      recommended_buffer_radius = NA_real_
+    ))
+  }
+
+  pca <- stats::prcomp(X, center = TRUE, scale. = TRUE)
+  npc <- min(as.integer(n_pcs), ncol(pca$x))
+  scores <- as.data.frame(pca$x[, seq_len(npc), drop = FALSE])
+  coords <- as.matrix(meta[, req_cols, drop = FALSE])
+
+  varexp <- (pca$sdev^2) / sum(pca$sdev^2)
+  pca_var_explained <- data.frame(
+    pc = paste0("PC", seq_len(npc)),
+    variance_explained = varexp[seq_len(npc)],
+    stringsAsFactors = FALSE
+  )
+
+  corr_list <- lapply(seq_len(npc), function(i) {
+    corr <- compute_moran_correlogram(
+      coords = coords,
+      values = scores[[i]],
+      n_bins = n_bins
+    )
+    if (nrow(corr) == 0L) return(NULL)
+    corr$pc <- paste0("PC", i)
+    corr
+  })
+  corr_list <- Filter(Negate(is.null), corr_list)
+
+  moran_df <- if (length(corr_list) > 0L) {
+    dplyr::bind_rows(corr_list)
+  } else {
+    data.frame()
+  }
+
+  range_tbl <- if (nrow(moran_df) > 0L) {
+    moran_df |>
+      dplyr::group_by(pc) |>
+      dplyr::arrange(distance_mid, .by_group = TRUE) |>
+      dplyr::summarise(
+        range_estimate = {
+          idx <- which(moran_i <= 0)
+          if (length(idx) == 0) NA_real_ else distance_mid[min(idx)]
+        },
+        .groups = "drop"
+      )
+  } else {
+    data.frame(pc = character(0), range_estimate = numeric(0))
+  }
+
+  recommended_buffer_radius <- if (nrow(range_tbl) > 0L) {
+    stats::quantile(range_tbl$range_estimate, probs = 0.75, na.rm = TRUE, names = FALSE)
+  } else {
+    NA_real_
+  }
+
+  list(
+    pca_var_explained = pca_var_explained,
+    moran_correlogram = moran_df,
+    moran_range_summary = range_tbl,
+    recommended_buffer_radius = as.numeric(recommended_buffer_radius)
+  )
+}
+
 # ---------------------------------------------------------------------------
 # train_ranger_from_dataset()
 #
@@ -106,10 +339,12 @@ train_ranger_from_dataset <- function(
 
   data <- load_dataset_for_training(dataset_id, db, url)
 
-  train_X <- data$train_X
-  train_y <- data$train_y
-  test_X  <- data$test_X
-  test_y  <- data$test_y
+  train_X    <- data$train_X
+  train_y    <- data$train_y
+  test_X     <- data$test_X
+  test_y     <- data$test_y
+  train_meta <- data$train_meta %||% NULL
+  test_meta  <- data$test_meta %||% NULL
 
   message("[train] Applying normalization: ", normalize_method)
   train_X <- normalize_feature_matrix(train_X, normalize_method)
@@ -119,6 +354,21 @@ train_ranger_from_dataset <- function(
           " | Test pixels: ", nrow(test_X),
           " | Features: ", ncol(train_X),
           " | Classes: ", nlevels(train_y))
+
+  diag_info <- compute_pca_moran_diagnostics(
+    X          = train_X,
+    meta       = train_meta,
+    n_pcs      = 5L,
+    max_points = 3000L,
+    n_bins     = 15L,
+    seed       = seed
+  )
+
+  if (nrow(diag_info$moran_correlogram) > 0L) {
+    message("[train] PCA Moran correlogram computed for PCs 1-5.")
+  } else {
+    message("[train] PCA Moran correlogram skipped (insufficient spatial data).")
+  }
 
   set.seed(seed)
 
@@ -188,7 +438,9 @@ train_ranger_from_dataset <- function(
                         as.integer(workers)
                       else
                         NA_integer_,
-    num_threads   = as.integer(num_threads)
+    num_threads   = as.integer(num_threads),
+    pca_moran_n_pcs = 5L,
+    pca_moran_max_points = 3000L
   )
 
   tune_grid <- expand.grid(
@@ -279,6 +531,18 @@ train_ranger_from_dataset <- function(
     dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
     dplyr::ungroup()
   metrics_scalar[["cm_table"]] <- list(cm_df)
+
+  # PCA + Moran correlogram diagnostics
+  if (nrow(diag_info$pca_var_explained) > 0L) {
+    metrics_scalar[["pca_var_explained"]] <- list(diag_info$pca_var_explained)
+  }
+  if (nrow(diag_info$moran_correlogram) > 0L) {
+    metrics_scalar[["pca_moran_correlogram"]] <- list(diag_info$moran_correlogram)
+  }
+  if (nrow(diag_info$moran_range_summary) > 0L) {
+    metrics_scalar[["pca_moran_range_summary"]] <- list(diag_info$moran_range_summary)
+  }
+  metrics_scalar[["recommended_buffer_radius"]] <- diag_info$recommended_buffer_radius
 
   # ROC data
   if (requireNamespace("pROC", quietly = TRUE)) {

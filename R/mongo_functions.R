@@ -698,6 +698,7 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
 
   all_features <- vector("list", length(sample_ids))
   all_labels   <- vector("list", length(sample_ids))
+  all_meta     <- vector("list", length(sample_ids))
 
   for (i in seq_along(sample_ids)) {
     sid <- sample_ids[i]
@@ -721,10 +722,17 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
 
     all_features[[i]] <- as.matrix(merged[, mz_cols, drop = FALSE])
     all_labels[[i]]   <- merged$Class
+    all_meta[[i]]     <- data.frame(
+      sample_id = sid,
+      x = merged$x,
+      y = merged$y,
+      stringsAsFactors = FALSE
+    )
   }
 
   X <- do.call(rbind, all_features)
   y <- as.factor(do.call(c, all_labels))
+  meta <- do.call(rbind, all_meta)
 
   set.seed(split_seed)
   idx     <- sample(nrow(X))
@@ -735,8 +743,10 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
   list(
     train_X      = X[tr_idx, , drop = FALSE],
     train_y      = y[tr_idx],
+    train_meta   = meta[tr_idx, , drop = FALSE],
     test_X       = X[te_idx, , drop = FALSE],
     test_y       = y[te_idx],
+    test_meta    = meta[te_idx, , drop = FALSE],
     split_info   = list(
       strategy   = split_strategy,
       seed       = split_seed,
