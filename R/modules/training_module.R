@@ -37,12 +37,12 @@ training_module_ui <- function(id) {
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
-            numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
-            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
             actionButton(ns("estimate_spatial_btn"), "Estimate from PCA Moran",
                          class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
             uiOutput(ns("estimate_spatial_text")),
-            plotOutput(ns("estimate_moran_plot"), height = "320px")
+            plotOutput(ns("estimate_moran_plot"), height = "320px"),
+            numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
+            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
           ),
           numericInput(ns("ds_seed"), "Split seed:", value = 42, min = 1),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
@@ -81,7 +81,7 @@ training_module_ui <- function(id) {
         numericInput(ns("min_node_size"), "min.node.size",       value = 10,   min = 1),
         selectInput( ns("splitrule"),     "splitrule",
                      choices = c("gini", "extratrees"), selected = "gini"),
-        numericInput(ns("cv_folds"),      "CV folds (0 = none)", value = 10,   min = 0),
+        uiOutput(ns("cv_folds_ui")),
         numericInput(ns("seed"),          "Random seed",         value = 1234, min = 1),
 
         hr(),
@@ -117,6 +117,18 @@ training_module_server <- function(id) {
     selected_run_id <- reactiveVal(NULL)
     estimate_diag_rv <- reactiveVal(NULL)
     estimate_diag_label_rv <- reactiveVal("")
+
+
+    selected_dataset_split_strategy <- reactive({
+      did <- input$dataset_id %||% ""
+      if (!nzchar(did)) return(NULL)
+      tryCatch({
+        ds <- get_dataset(did)
+        sp <- if (is.data.frame(ds$split)) as.list(ds$split[1, ]) else ds$split[[1]]
+        as.character(sp$strategy %||% "random")
+      }, error = function(e) NULL)
+    })
+
 
 
     add_log <- function(msg) {
@@ -390,6 +402,28 @@ training_module_server <- function(id) {
       }, error = function(e)
         updateSelectInput(session, "dataset_id", choices = c("Error loading datasets" = ""))
       )
+    })
+
+
+    output$cv_folds_ui <- renderUI({
+      strategy <- selected_dataset_split_strategy()
+
+      if (identical(strategy, "leave_one_sample_out")) {
+        tagList(
+          tags$label("CV folds"),
+          tags$div(
+            class = "form-control",
+            style = "height:auto; min-height:38px; background:#f8f9fa; color:#555;",
+            "Leave-one-sample-out"
+          ),
+          tags$small(
+            style = "color:#666; display:block; margin-top:4px;",
+            "For leave-one-sample-out, the number of CV folds is determined automatically by the training samples."
+          )
+        )
+      } else {
+        numericInput(ns("cv_folds"), "CV folds (0 = none)", value = 10, min = 0)
+      }
     })
 
     # ── Dataset info card ─────────────────────────────────────────────────
