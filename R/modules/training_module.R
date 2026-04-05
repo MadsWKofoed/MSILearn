@@ -37,7 +37,7 @@ training_module_ui <- function(id) {
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
-            actionButton(ns("estimate_spatial_btn"), "Estimate from local shift similarity",
+            actionButton(ns("estimate_spatial_btn"), "Estimate from local shift correlation",
                          class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
             uiOutput(ns("estimate_spatial_text")),
             plotOutput(ns("estimate_moran_plot"), height = "320px"),
@@ -236,7 +236,7 @@ training_module_server <- function(id) {
       ann_id   <- input$ds_ann_set
 
       if ((input$ds_split_strategy %||% "random") != "spatial_block") {
-        showNotification("Choose 'Spatial block' to estimate buffer from local shift similarity.", type = "warning")
+        showNotification("Choose 'Spatial block' to estimate buffer from local shift correlation.", type = "warning")
         return()
       }
       if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
@@ -292,7 +292,7 @@ training_module_server <- function(id) {
                 style = "margin-top:4px;",
                 tags$small(
                   paste0(
-                    "Method: local cosine similarity over pixel shifts; threshold=",
+                    "Method: local correlation over pixel shifts; threshold=",
                     if (is.finite(thr)) format(round(thr, 2), nsmall = 2) else "NA"
                   )
                 )
@@ -513,10 +513,10 @@ training_module_server <- function(id) {
           color = "#7FCDBB"
         ) +
         ggplot2::labs(
-          title = "Local shift-similarity curve",
+          title = "Local shift-correlation curve",
           subtitle = "Estimated before dataset creation for spatial block split",
           x = "Pixel shift distance",
-          y = "Mean cosine similarity"
+          y = "Mean correlation"
         ) +
         ggplot2::theme_minimal(base_size = 12) +
         ggplot2::theme(

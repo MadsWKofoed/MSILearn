@@ -66,9 +66,16 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
 # Shift-based local spectral similarity diagnostics on annotated pixels
 # ---------------------------------------------------------------------------
 
-.row_cosine_similarity <- function(A, B) {
-  num <- rowSums(A * B)
-  den <- sqrt(rowSums(A * A)) * sqrt(rowSums(B * B))
+.row_correlation_similarity <- function(A, B) {
+  A <- as.matrix(A)
+  B <- as.matrix(B)
+  storage.mode(A) <- 'numeric'
+  storage.mode(B) <- 'numeric'
+  A_center <- A - rowMeans(A, na.rm = TRUE)
+  B_center <- B - rowMeans(B, na.rm = TRUE)
+  num <- rowSums(A_center * B_center, na.rm = TRUE)
+  den <- sqrt(rowSums(A_center * A_center, na.rm = TRUE)) *
+    sqrt(rowSums(B_center * B_center, na.rm = TRUE))
   out <- num / den
   out[!is.finite(out)] <- NA_real_
   out
@@ -92,7 +99,7 @@ compute_shift_similarity_diagnostics <- function(
     ),
     recommended_buffer_radius = NA_real_,
     threshold = as.numeric(similarity_threshold),
-    method = "shift_cosine"
+    method = "shift_correlation"
   )
 
   if (is.null(meta) || !all(req_cols %in% names(meta))) return(empty_res)
@@ -148,7 +155,7 @@ compute_shift_similarity_diagnostics <- function(
 
         A <- X[idx[valid], , drop = FALSE]
         B <- X[idx[j_local[valid]], , drop = FALSE]
-        sim <- .row_cosine_similarity(A, B)
+        sim <- .row_correlation_similarity(A, B)
         sim_vals <- c(sim_vals, sim[is.finite(sim)])
       }
     }
@@ -188,7 +195,7 @@ compute_shift_similarity_diagnostics <- function(
     similarity_curve = curve_df,
     recommended_buffer_radius = as.numeric(recommended_buffer_radius),
     threshold = as.numeric(similarity_threshold),
-    method = "shift_cosine"
+    method = "shift_correlation"
   )
 }
 
