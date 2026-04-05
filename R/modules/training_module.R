@@ -37,7 +37,7 @@ training_module_ui <- function(id) {
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
-            actionButton(ns("estimate_spatial_btn"), "Estimate from local shift correlation",
+            actionButton(ns("estimate_spatial_btn"), "Estimate from PCA Moran",
                          class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
             uiOutput(ns("estimate_spatial_text")),
             plotOutput(ns("estimate_moran_plot"), height = "320px"),
@@ -236,7 +236,7 @@ training_module_server <- function(id) {
       ann_id   <- input$ds_ann_set
 
       if ((input$ds_split_strategy %||% "random") != "spatial_block") {
-        showNotification("Choose 'Spatial block' to estimate buffer from local shift correlation.", type = "warning")
+        showNotification("Choose 'Spatial block' to estimate buffer from PCA Moran.", type = "warning")
         return()
       }
       if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
@@ -253,11 +253,13 @@ training_module_server <- function(id) {
         )
 
         X_est <- normalize_feature_matrix(src$X, input$normalize %||% "none")
-        diag_info <- compute_shift_similarity_diagnostics(
+        diag_info <- compute_pca_moran_diagnostics(
           X = X_est,
           meta = src$meta,
-          similarity_threshold = 0.10,
-          min_pairs = 50L
+          n_pcs = 5L,
+          max_points = 3000L,
+          n_bins = 15L,
+          seed = as.integer(input$seed %||% 1234L)
         )
 
         estimate_diag_rv(diag_info)
@@ -277,9 +279,8 @@ training_module_server <- function(id) {
         }
 
         output$estimate_spatial_text <- renderUI({
-          curve_df <- diag_info$similarity_curve
+          varexp <- diag_info$pca_var_explained
           rec_buf2 <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
-          thr <- suppressWarnings(as.numeric(diag_info$threshold[1]))
           tagList(
             tags$div(
               class = "alert alert-info",
@@ -288,22 +289,13 @@ training_module_server <- function(id) {
               if (is.finite(rec_buf2)) paste0(round(rec_buf2, 2), " px") else "not available",
               tags$br(),
               tags$small(estimate_diag_label_rv()),
-              tags$div(
-                style = "margin-top:4px;",
-                tags$small(
-                  paste0(
-                    "Method: local correlation over pixel shifts; threshold=",
-                    if (is.finite(thr)) format(round(thr, 2), nsmall = 2) else "NA"
-                  )
-                )
-              ),
-              if (is.data.frame(curve_df) && nrow(curve_df) > 0) {
+              if (is.data.frame(varexp) && nrow(varexp) > 0) {
                 tags$div(
                   style = "margin-top:4px;",
                   tags$small(
                     paste0(
-                      "Max evaluated shift: ", max(curve_df$distance, na.rm = TRUE),
-                      " px; pairs at first shift: ", curve_df$n_pairs[1]
+                      "PC variance explained: ",
+                      paste0(varexp$pc, "=", sprintf("%.1f%%", 100 * varexp$variance_explained), collapse = ", ")
                     )
                   )
                 )
@@ -494,46 +486,63 @@ training_module_server <- function(id) {
       diag_info <- estimate_diag_rv()
       req(!is.null(diag_info))
 
-      sim_df <- diag_info$similarity_curve
-      req(is.data.frame(sim_df), nrow(sim_df) > 0)
+      moran_df <- diag_info$moran_correlogram
+      req(is.data.frame(moran_df), nrow(moran_df) > 0)
 
-      thr <- suppressWarnings(as.numeric(diag_info$threshold[1]))
-      rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
+      range_df <- diag_info$moran_range_summary
+      if (!is.data.frame(range_df)) {
+        range_df <- data.frame(pc = character(0), range_estimate = numeric(0))
+      }
+
+      varexp_df <- diag_info$pca_var_explained
+      if (is.data.frame(varexp_df) && nrow(varexp_df) > 0) {
+        moran_df <- dplyr::left_join(moran_df, varexp_df, by = "pc")
+        moran_df$pc_label <- sprintf("%s (%.1f%% var)", moran_df$pc, 100 * moran_df$variance_explained)
+      } else {
+        moran_df$pc_label <- moran_df$pc
+      }
 
       p <- ggplot2::ggplot(
-        sim_df,
-        ggplot2::aes(x = distance, y = mean_similarity)
+        moran_df,
+        ggplot2::aes(x = distance_mid, y = moran_i, color = pc_label)
       ) +
-        ggplot2::geom_line(linewidth = 1, color = "#2C7FB8") +
-        ggplot2::geom_point(size = 2, color = "#2C7FB8") +
-        ggplot2::geom_line(
-          ggplot2::aes(y = median_similarity),
-          linewidth = 0.8,
-          linetype = "dashed",
-          color = "#7FCDBB"
-        ) +
+        ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+        ggplot2::geom_line(linewidth = 0.9) +
+        ggplot2::geom_point(size = 1.8) +
         ggplot2::labs(
-          title = "Local shift-correlation curve",
-          subtitle = "Estimated before dataset creation for spatial block split",
-          x = "Pixel shift distance",
-          y = "Mean correlation"
+          title = "PCA Moran Correlogram (PC1–PC5)",
+          subtitle = "Estimate before dataset creation for spatial block split",
+          x = "Pixel distance",
+          y = "Moran's I",
+          color = NULL
         ) +
         ggplot2::theme_minimal(base_size = 12) +
         ggplot2::theme(
+          legend.position = "bottom",
+          legend.text = ggplot2::element_text(size = 9),
           plot.title = ggplot2::element_text(face = "bold", size = 13),
           plot.subtitle = ggplot2::element_text(size = 10)
         )
 
-      if (is.finite(thr)) {
-        p <- p + ggplot2::geom_hline(
-          yintercept = thr,
+      if (nrow(range_df) > 0) {
+        if (is.data.frame(varexp_df) && nrow(varexp_df) > 0) {
+          range_df <- dplyr::left_join(range_df, varexp_df, by = "pc")
+          range_df$pc_label <- sprintf("%s (%.1f%% var)", range_df$pc, 100 * range_df$variance_explained)
+        } else {
+          range_df$pc_label <- range_df$pc
+        }
+        p <- p + ggplot2::geom_vline(
+          data = range_df,
+          ggplot2::aes(xintercept = range_estimate, color = pc_label),
           linetype = "dotted",
-          color = "grey50"
+          alpha = 0.7,
+          show.legend = FALSE
         )
       }
 
+      rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
       if (is.finite(rec_buf) && rec_buf > 0) {
-        y_top <- max(sim_df$mean_similarity, na.rm = TRUE)
+        y_top <- max(moran_df$moran_i, na.rm = TRUE)
         p <- p +
           ggplot2::geom_vline(xintercept = rec_buf, linetype = "longdash", alpha = 0.6) +
           ggplot2::annotate(
