@@ -292,6 +292,65 @@ compute_pca_moran_diagnostics <- function(
   )
 }
 
+
+# ---------------------------------------------------------------------------
+# CV helper builders for split-aware training
+# ---------------------------------------------------------------------------
+make_random_cv_indices <- function(n, cv_folds, seed = 1234L) {
+  set.seed(as.integer(seed))
+  folds <- caret::createFolds(seq_len(n), k = cv_folds, list = TRUE, returnTrain = FALSE)
+  indexOut <- folds
+  index <- lapply(indexOut, function(te) setdiff(seq_len(n), te))
+  list(index = index, indexOut = indexOut)
+}
+
+make_loso_cv_indices <- function(train_meta) {
+  sample_ids <- unique(train_meta$sample_id)
+  if (length(sample_ids) < 2) stop("Need at least 2 training samples for leave-one-sample-out CV.")
+  indexOut <- lapply(sample_ids, function(sid) which(train_meta$sample_id == sid))
+  names(indexOut) <- paste0("sample_", seq_along(indexOut))
+  index <- lapply(indexOut, function(te) setdiff(seq_len(nrow(train_meta)), te))
+  names(index) <- names(indexOut)
+  list(index = index, indexOut = indexOut)
+}
+
+make_spatial_block_cv_indices <- function(train_meta, cv_folds, block_size = 25L,
+                                          buffer_radius = 0, seed = 1234L) {
+  block_ids <- assign_spatial_block_ids(train_meta, block_size)
+  ublocks <- unique(block_ids)
+  set.seed(as.integer(seed))
+  shuffled <- sample(ublocks, length(ublocks))
+  grp <- split(shuffled, cut(seq_along(shuffled), breaks = cv_folds, labels = FALSE))
+  grp <- Filter(length, grp)
+  indexOut <- lapply(seq_along(grp), function(i) which(block_ids %in% grp[[i]]))
+  names(indexOut) <- paste0("block_", seq_along(indexOut))
+  index <- lapply(indexOut, function(te) {
+    excl <- compute_buffer_exclusion_idx(train_meta, te, buffer_radius)
+    setdiff(seq_len(nrow(train_meta)), unique(c(te, excl)))
+  })
+  names(index) <- names(indexOut)
+  keep <- vapply(index, length, integer(1)) > 0 & vapply(indexOut, length, integer(1)) > 0
+  list(index = index[keep], indexOut = indexOut[keep])
+}
+
+build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) {
+  strategy <- as.character(split_info$strategy %||% "random")
+  if (cv_folds <= 1L) return(NULL)
+  if (strategy == "leave_one_sample_out") {
+    return(make_loso_cv_indices(train_meta))
+  }
+  if (strategy == "spatial_block") {
+    return(make_spatial_block_cv_indices(
+      train_meta = train_meta,
+      cv_folds = cv_folds,
+      block_size = as.integer(split_info$block_size %||% 25L),
+      buffer_radius = as.numeric(split_info$buffer_radius %||% 0),
+      seed = seed
+    ))
+  }
+  make_random_cv_indices(nrow(train_meta), cv_folds, seed)
+}
+
 # ---------------------------------------------------------------------------
 # train_ranger_from_dataset()
 #
@@ -345,6 +404,8 @@ train_ranger_from_dataset <- function(
   test_y     <- data$test_y
   train_meta <- data$train_meta %||% NULL
   test_meta  <- data$test_meta %||% NULL
+  split_info <- data$split_info %||% list(strategy = "random")
+  dataset_meta <- data$dataset_meta %||% NULL
 
   message("[train] Applying normalization: ", normalize_method)
   train_X <- normalize_feature_matrix(train_X, normalize_method)
@@ -354,6 +415,7 @@ train_ranger_from_dataset <- function(
           " | Test pixels: ", nrow(test_X),
           " | Features: ", ncol(train_X),
           " | Classes: ", nlevels(train_y))
+  message("[train] Split strategy: ", split_info$strategy %||% "random")
 
   diag_info <- compute_pca_moran_diagnostics(
     X          = train_X,
@@ -440,7 +502,10 @@ train_ranger_from_dataset <- function(
                         NA_integer_,
     num_threads   = as.integer(num_threads),
     pca_moran_n_pcs = 5L,
-    pca_moran_max_points = 3000L
+    pca_moran_max_points = 3000L,
+    split_strategy = as.character(split_info$strategy %||% "random"),
+    split_block_size = as.integer(split_info$block_size %||% NA_integer_),
+    split_buffer_radius = as.numeric(split_info$buffer_radius %||% NA_real_)
   )
 
   tune_grid <- expand.grid(
@@ -449,15 +514,36 @@ train_ranger_from_dataset <- function(
     min.node.size = min_node_size
   )
 
+  cv_idx <- NULL
+  if (cv_folds > 1L && !is.null(train_meta)) {
+    cv_idx <- build_cv_indices_from_split(train_meta, split_info, cv_folds, seed)
+    if (!is.null(cv_idx)) {
+      message("[train] Using custom CV indices for strategy: ", split_info$strategy %||% "random",
+              " | folds=", length(cv_idx$index))
+    }
+  }
+
   ctrl <- if (cv_folds > 1L) {
 
-    caret::trainControl(
-      method          = "cv",
-      number          = cv_folds,
-      classProbs      = TRUE,
-      summaryFunction = caret::multiClassSummary,
-      allowParallel   = workers > 1L
-    )
+    if (!is.null(cv_idx)) {
+      caret::trainControl(
+        method          = "cv",
+        number          = length(cv_idx$index),
+        index           = cv_idx$index,
+        indexOut        = cv_idx$indexOut,
+        classProbs      = TRUE,
+        summaryFunction = caret::multiClassSummary,
+        allowParallel   = workers > 1L
+      )
+    } else {
+      caret::trainControl(
+        method          = "cv",
+        number          = cv_folds,
+        classProbs      = TRUE,
+        summaryFunction = caret::multiClassSummary,
+        allowParallel   = workers > 1L
+      )
+    }
 
   } else {
 
@@ -500,7 +586,8 @@ train_ranger_from_dataset <- function(
     n_test         = nrow(test_X),
     n_train        = nrow(train_X),
     n_classes      = nlevels(train_y),
-    n_features     = ncol(train_X)
+    n_features     = ncol(train_X),
+    split_strategy = as.character(split_info$strategy %||% "random")
   )
 
   # CV metrics

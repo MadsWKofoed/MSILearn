@@ -679,6 +679,87 @@ list_datasets <- function(study_id = NULL, db = DB_NAME, url = MONGO_URL) {
 #'
 #' @return Named list: train_X, train_y, test_X, test_y,
 #'         split_info, dataset_meta, pipeline_meta.
+
+# --- helpers for dataset split strategies ---------------------------------
+assign_spatial_block_ids <- function(meta, block_size) {
+  block_size <- max(1L, as.integer(round(block_size)))
+  bx <- floor((meta$x - min(meta$x, na.rm = TRUE)) / block_size)
+  by <- floor((meta$y - min(meta$y, na.rm = TRUE)) / block_size)
+  paste(meta$sample_id, bx, by, sep = "__")
+}
+
+compute_buffer_exclusion_idx <- function(meta, test_idx, buffer_radius) {
+  buffer_radius <- suppressWarnings(as.numeric(buffer_radius))
+  if (!is.finite(buffer_radius) || buffer_radius <= 0 || length(test_idx) == 0) return(integer(0))
+  test_idx <- unique(as.integer(test_idx))
+  train_cand <- setdiff(seq_len(nrow(meta)), test_idx)
+  if (length(train_cand) == 0) return(integer(0))
+  out <- integer(0)
+  for (sid in intersect(unique(meta$sample_id[test_idx]), unique(meta$sample_id[train_cand]))) {
+    ti <- test_idx[meta$sample_id[test_idx] == sid]
+    ci <- train_cand[meta$sample_id[train_cand] == sid]
+    if (length(ti) == 0 || length(ci) == 0) next
+    txy <- as.matrix(meta[ti, c("x", "y"), drop = FALSE])
+    cxy <- as.matrix(meta[ci, c("x", "y"), drop = FALSE])
+    # O(n*m) but acceptable for current MSI sizes; chunk later if needed
+    d <- as.matrix(stats::dist(rbind(cxy, txy), method = "euclidean"))
+    nc <- nrow(cxy)
+    nt <- nrow(txy)
+    cross <- d[seq_len(nc), nc + seq_len(nt), drop = FALSE]
+    keep <- apply(cross, 1, min) <= buffer_radius
+    out <- c(out, ci[keep])
+  }
+  unique(as.integer(out))
+}
+
+make_outer_split_indices <- function(meta, split_strategy = "random", split_seed = 42L,
+                                     train_frac = 0.8, block_size = 25L,
+                                     buffer_radius = 0) {
+  split_strategy <- as.character(split_strategy %||% "random")
+  set.seed(as.integer(split_seed))
+  n <- nrow(meta)
+  all_idx <- seq_len(n)
+
+  if (split_strategy == "leave_one_sample_out") {
+    u <- unique(meta$sample_id)
+    if (length(u) < 3) stop("leave_one_sample_out requires at least 3 samples.")
+    test_sample <- sample(u, 1)
+    te_idx <- which(meta$sample_id == test_sample)
+    tr_idx <- setdiff(all_idx, te_idx)
+    return(list(train_idx = tr_idx, test_idx = te_idx,
+                split_details = list(test_sample_id = test_sample)))
+  }
+
+  if (split_strategy == "spatial_block") {
+    meta$block_id <- assign_spatial_block_ids(meta, block_size)
+    ublocks <- unique(meta$block_id)
+    ublocks <- sample(ublocks, length(ublocks))
+    n_train_blocks <- max(1L, min(length(ublocks) - 1L, ceiling(length(ublocks) * train_frac)))
+    train_blocks <- ublocks[seq_len(n_train_blocks)]
+    te_idx <- which(!(meta$block_id %in% train_blocks))
+    if (length(te_idx) == 0) {
+      te_idx <- which(meta$block_id == tail(train_blocks, 1))
+      train_blocks <- setdiff(train_blocks, unique(meta$block_id[te_idx]))
+    }
+    tr_idx <- which(meta$block_id %in% train_blocks)
+    excl_idx <- compute_buffer_exclusion_idx(meta, te_idx, buffer_radius)
+    tr_idx <- setdiff(tr_idx, excl_idx)
+    if (length(tr_idx) == 0) stop("No training pixels left after applying spatial block split and buffer.")
+    return(list(train_idx = tr_idx, test_idx = te_idx,
+                split_details = list(block_size = as.integer(block_size),
+                                     buffer_radius = as.numeric(buffer_radius),
+                                     n_blocks = length(ublocks),
+                                     train_blocks = length(unique(meta$block_id[tr_idx])),
+                                     test_blocks = length(unique(meta$block_id[te_idx])))))
+  }
+
+  idx <- sample(all_idx)
+  n_train <- max(1L, min(n - 1L, ceiling(n * train_frac)))
+  tr_idx <- idx[seq_len(n_train)]
+  te_idx <- idx[(n_train + 1):length(idx)]
+  list(train_idx = tr_idx, test_idx = te_idx, split_details = list())
+}
+
 load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL) {
 
   ds                <- get_dataset(dataset_id, db, url)
@@ -734,11 +815,19 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
   y <- as.factor(do.call(c, all_labels))
   meta <- do.call(rbind, all_meta)
 
-  set.seed(split_seed)
-  idx     <- sample(nrow(X))
-  n_train <- ceiling(nrow(X) * split_frac)
-  tr_idx  <- idx[seq_len(n_train)]
-  te_idx  <- idx[(n_train + 1):length(idx)]
+  block_size <- as.integer(sp$block_size %||% 25L)
+  buffer_radius <- as.numeric(sp$buffer_radius %||% 0)
+
+  split_idx <- make_outer_split_indices(
+    meta = meta,
+    split_strategy = split_strategy,
+    split_seed = split_seed,
+    train_frac = split_frac,
+    block_size = block_size,
+    buffer_radius = buffer_radius
+  )
+  tr_idx <- split_idx$train_idx
+  te_idx <- split_idx$test_idx
 
   list(
     train_X      = X[tr_idx, , drop = FALSE],
@@ -747,13 +836,15 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
     test_X       = X[te_idx, , drop = FALSE],
     test_y       = y[te_idx],
     test_meta    = meta[te_idx, , drop = FALSE],
-    split_info   = list(
+    split_info   = c(list(
       strategy   = split_strategy,
       seed       = split_seed,
       train_frac = split_frac,
+      block_size = block_size,
+      buffer_radius = buffer_radius,
       n_train    = length(tr_idx),
       n_test     = length(te_idx)
-    ),
+    ), split_idx$split_details),
     dataset_meta  = ds,
     pipeline_meta = get_pipeline(pipeline_id, db, url)
   )

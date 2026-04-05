@@ -21,8 +21,25 @@ training_module_ui <- function(id) {
           selectInput(ns("ds_samples"), NULL,
                       choices  = c("— select study first —" = ""),
                       multiple = TRUE, width = "100%"),
-          numericInput(ns("ds_train_frac"), "Train fraction:", value = 0.8,
-                       min = 0.5, max = 0.95, step = 0.05),
+          selectInput(
+            ns("ds_split_strategy"),
+            "Split strategy:",
+            choices = c(
+              "Random" = "random",
+              "Spatial block" = "spatial_block"
+            ),
+            selected = "random"
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] != 'leave_one_sample_out'", ns("ds_split_strategy")),
+            numericInput(ns("ds_train_frac"), "Train fraction:", value = 0.8,
+                         min = 0.5, max = 0.95, step = 0.05)
+          ),
+          conditionalPanel(
+            condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
+            numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
+            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
+          ),
           numericInput(ns("ds_seed"), "Split seed:", value = 42, min = 1),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
           actionButton(ns("create_dataset_btn"), "Create Dataset",
@@ -169,6 +186,20 @@ training_module_server <- function(id) {
       )
     }, ignoreInit = TRUE)
 
+    observeEvent(input$ds_samples, {
+      n_samples <- length(input$ds_samples %||% character(0))
+      choices <- c(
+        "Random" = "random",
+        "Spatial block" = "spatial_block"
+      )
+      if (n_samples >= 3) {
+        choices <- c(choices, "Leave-one-sample-out" = "leave_one_sample_out")
+      }
+      selected <- input$ds_split_strategy
+      if (is.null(selected) || !(selected %in% unname(choices))) selected <- unname(choices)[1]
+      updateSelectInput(session, "ds_split_strategy", choices = choices, selected = selected)
+    }, ignoreInit = FALSE)
+
     # ── Create dataset ────────────────────────────────────────────────────
     observeEvent(input$create_dataset_btn, {
       sid      <- input$ds_study
@@ -184,14 +215,30 @@ training_module_server <- function(id) {
       if (!nzchar(nm))             { showNotification("Enter a dataset name.",        type = "warning"); return() }
 
       tryCatch({
+        split_strategy <- input$ds_split_strategy %||% "random"
+        split_obj <- list(
+          strategy = split_strategy,
+          seed = as.integer(input$ds_seed)
+        )
+        if (split_strategy != "leave_one_sample_out") {
+          split_obj$train_frac <- as.numeric(input$ds_train_frac)
+        }
+        if (split_strategy == "spatial_block") {
+          split_obj$block_size <- as.integer(input$ds_block_size)
+          split_obj$buffer_radius <- as.numeric(input$ds_buffer_radius)
+        }
+
+        if (split_strategy == "leave_one_sample_out" && length(samp_ids) < 3) {
+          showNotification("Leave-one-sample-out requires at least 3 samples.", type = "warning")
+          return()
+        }
+
         dataset_id <- create_dataset(
           study_id          = sid,
           sample_ids        = samp_ids,
           pipeline_id       = pid,
           annotation_set_id = ann_id,
-          split             = list(strategy   = "random",
-                                   seed       = as.integer(input$ds_seed),
-                                   train_frac = input$ds_train_frac),
+          split             = split_obj,
           name              = nm
         )
         output$create_dataset_status <- renderUI(
@@ -256,7 +303,10 @@ training_module_server <- function(id) {
           tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
           tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
           tags$b("Stage: "),    ds$stage_type, tags$br(),
-          tags$b("Split: "),    sp$train_frac * 100, "% train | seed=", sp$seed
+          tags$b("Split strategy: "), sp$strategy %||% "random", tags$br(),
+          tags$b("Split: "),    if (!is.null(sp$train_frac)) paste0(sp$train_frac * 100, "% train | ") else "", "seed=", sp$seed,
+          if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
+          if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius)
         ))
       }, error = function(e)
         tags$small(style = "color:red", "Could not load dataset info.")
@@ -539,6 +589,9 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("splitrule"), tags$td(first_chr(hp[["splitrule"]]))),
                 tags$tr(tags$td("CV folds"), tags$td(first_chr(hp[["cv_folds"]]))),
                 tags$tr(tags$td("Seed"), tags$td(first_chr(hp[["seed"]]))),
+                tags$tr(tags$td("Split strategy"), tags$td(first_chr(hp[["split_strategy"]]))),
+                tags$tr(tags$td("Block size"), tags$td(first_chr(hp[["split_block_size"]]))),
+                tags$tr(tags$td("Buffer radius"), tags$td(first_chr(hp[["split_buffer_radius"]]))),
                 tags$tr(tags$td("PCA Moran PCs"), tags$td(first_chr(hp[["pca_moran_n_pcs"]]))),
                 tags$tr(tags$td("PCA Moran max points"), tags$td(first_chr(hp[["pca_moran_max_points"]])))
               )
