@@ -672,6 +672,60 @@ list_datasets <- function(study_id = NULL, db = DB_NAME, url = MONGO_URL) {
   )
 }
 
+
+
+#' Materialise features, labels and pixel metadata from explicit selections.
+#'
+#' Used for split estimation before dataset creation and by dataset loaders.
+#' Returns full pixel-level matrices/tables without applying a train/test split.
+materialize_training_source <- function(sample_ids,
+                                        pipeline_id,
+                                        annotation_set_id,
+                                        stage_type = "binned_dataframe",
+                                        db = DB_NAME, url = MONGO_URL) {
+  stopifnot(length(sample_ids) > 0)
+
+  all_features <- vector("list", length(sample_ids))
+  all_labels   <- vector("list", length(sample_ids))
+  all_meta     <- vector("list", length(sample_ids))
+
+  for (i in seq_along(sample_ids)) {
+    sid <- sample_ids[i]
+    message("[materialize]  [", i, "/", length(sample_ids), "] sample_id: ", sid)
+
+    feat_df <- load_artifact_by_pipeline(sid, stage_type, pipeline_id, db, url)
+    mz_cols <- grep("^mz_", colnames(feat_df), value = TRUE)
+    if (length(mz_cols) == 0) stop("No mz_ columns in artifact for sample_id=", sid)
+
+    ann_df <- load_annotation(sid, annotation_set_id, db, url)
+
+    merged <- merge(
+      feat_df[, c("x", "y", mz_cols)],
+      ann_df[,  c("x", "y", "Class")],
+      by  = c("x", "y"),
+      all = FALSE
+    )
+    if (nrow(merged) == 0) {
+      stop("No pixel overlap after joining features and annotations for sample_id=", sid)
+    }
+
+    all_features[[i]] <- as.matrix(merged[, mz_cols, drop = FALSE])
+    all_labels[[i]]   <- merged$Class
+    all_meta[[i]]     <- data.frame(
+      sample_id = sid,
+      x = merged$x,
+      y = merged$y,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  list(
+    X = do.call(rbind, all_features),
+    y = as.factor(do.call(c, all_labels)),
+    meta = do.call(rbind, all_meta)
+  )
+}
+
 #' Materialise a dataset: load features + labels, apply the frozen split.
 #'
 #' This is the ONLY authorised entry point for assembling training data.
@@ -777,43 +831,18 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
   message("[dataset] Materialising dataset ", dataset_id,
           " (", length(sample_ids), " samples)")
 
-  all_features <- vector("list", length(sample_ids))
-  all_labels   <- vector("list", length(sample_ids))
-  all_meta     <- vector("list", length(sample_ids))
+  source_data <- materialize_training_source(
+    sample_ids = sample_ids,
+    pipeline_id = pipeline_id,
+    annotation_set_id = annotation_set_id,
+    stage_type = stage_type,
+    db = db,
+    url = url
+  )
 
-  for (i in seq_along(sample_ids)) {
-    sid <- sample_ids[i]
-    message("[dataset]  [", i, "/", length(sample_ids), "] sample_id: ", sid)
-
-    feat_df <- load_artifact_by_pipeline(sid, stage_type, pipeline_id, db, url)
-    mz_cols <- grep("^mz_", colnames(feat_df), value = TRUE)
-    if (length(mz_cols) == 0) stop("No mz_ columns in artifact for sample_id=", sid)
-
-    ann_df <- load_annotation(sid, annotation_set_id, db, url)
-
-    merged <- merge(
-      feat_df[, c("x", "y", mz_cols)],
-      ann_df[,  c("x", "y", "Class")],
-      by  = c("x", "y"),
-      all = FALSE
-    )
-    if (nrow(merged) == 0) {
-      stop("No pixel overlap after joining features and annotations for sample_id=", sid)
-    }
-
-    all_features[[i]] <- as.matrix(merged[, mz_cols, drop = FALSE])
-    all_labels[[i]]   <- merged$Class
-    all_meta[[i]]     <- data.frame(
-      sample_id = sid,
-      x = merged$x,
-      y = merged$y,
-      stringsAsFactors = FALSE
-    )
-  }
-
-  X <- do.call(rbind, all_features)
-  y <- as.factor(do.call(c, all_labels))
-  meta <- do.call(rbind, all_meta)
+  X <- source_data$X
+  y <- source_data$y
+  meta <- source_data$meta
 
   block_size <- as.integer(sp$block_size %||% 25L)
   buffer_radius <- as.numeric(sp$buffer_radius %||% 0)

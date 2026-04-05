@@ -38,7 +38,11 @@ training_module_ui <- function(id) {
           conditionalPanel(
             condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
-            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
+            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
+            actionButton(ns("estimate_spatial_btn"), "Estimate from PCA Moran",
+                         class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
+            uiOutput(ns("estimate_spatial_text")),
+            plotOutput(ns("estimate_moran_plot"), height = "320px")
           ),
           numericInput(ns("ds_seed"), "Split seed:", value = 42, min = 1),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
@@ -111,6 +115,9 @@ training_module_server <- function(id) {
     log_val        <- reactiveVal("")
     last_run_id    <- reactiveVal(NULL)
     selected_run_id <- reactiveVal(NULL)
+    estimate_diag_rv <- reactiveVal(NULL)
+    estimate_diag_label_rv <- reactiveVal("")
+
 
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
@@ -199,6 +206,101 @@ training_module_server <- function(id) {
       if (is.null(selected) || !(selected %in% unname(choices))) selected <- unname(choices)[1]
       updateSelectInput(session, "ds_split_strategy", choices = choices, selected = selected)
     }, ignoreInit = FALSE)
+
+    observeEvent(
+      list(input$ds_study, input$ds_pipeline, input$ds_ann_set, input$ds_samples, input$ds_split_strategy),
+      {
+        estimate_diag_rv(NULL)
+        estimate_diag_label_rv("")
+        output$estimate_spatial_text <- renderUI(NULL)
+      },
+      ignoreInit = TRUE
+    )
+
+    observeEvent(input$estimate_spatial_btn, {
+      sid      <- input$ds_study
+      samp_ids <- input$ds_samples
+      pid      <- input$ds_pipeline
+      ann_id   <- input$ds_ann_set
+
+      if ((input$ds_split_strategy %||% "random") != "spatial_block") {
+        showNotification("Choose 'Spatial block' to estimate buffer from PCA Moran.", type = "warning")
+        return()
+      }
+      if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
+      if (length(samp_ids) == 0)   { showNotification("Select at least one sample.", type = "warning"); return() }
+      if (!nzchar(pid %||% ""))    { showNotification("Select a pipeline.", type = "warning"); return() }
+      if (!nzchar(ann_id %||% "")) { showNotification("Select an annotation set.", type = "warning"); return() }
+
+      tryCatch({
+        src <- materialize_training_source(
+          sample_ids = samp_ids,
+          pipeline_id = pid,
+          annotation_set_id = ann_id,
+          stage_type = "binned_dataframe"
+        )
+
+        X_est <- normalize_feature_matrix(src$X, input$normalize %||% "none")
+        diag_info <- compute_pca_moran_diagnostics(
+          X = X_est,
+          meta = src$meta,
+          n_pcs = 5L,
+          max_points = 3000L,
+          n_bins = 15L,
+          seed = as.integer(input$seed %||% 1234L)
+        )
+
+        estimate_diag_rv(diag_info)
+        estimate_diag_label_rv(
+          paste0(
+            length(samp_ids), " sample(s), ",
+            nrow(src$X), " annotated pixels, normalize=",
+            input$normalize %||% "none"
+          )
+        )
+
+        rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
+        if (is.finite(rec_buf) && rec_buf > 0) {
+          updateNumericInput(session, "ds_buffer_radius", value = round(rec_buf, 1))
+          suggested_block <- max(as.numeric(input$ds_block_size %||% 25), ceiling(rec_buf * 1.5))
+          updateNumericInput(session, "ds_block_size", value = suggested_block)
+        }
+
+        output$estimate_spatial_text <- renderUI({
+          varexp <- diag_info$pca_var_explained
+          rec_buf2 <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
+          tagList(
+            tags$div(
+              class = "alert alert-info",
+              style = "padding:8px; margin-top:4px; margin-bottom:8px;",
+              tags$b("Suggested buffer radius: "),
+              if (is.finite(rec_buf2)) paste0(round(rec_buf2, 2), " px") else "not available",
+              tags$br(),
+              tags$small(estimate_diag_label_rv()),
+              if (is.data.frame(varexp) && nrow(varexp) > 0) {
+                tags$div(
+                  style = "margin-top:4px;",
+                  tags$small(
+                    paste0(
+                      "PC variance explained: ",
+                      paste0(varexp$pc, "=", sprintf("%.1f%%", 100 * varexp$variance_explained), collapse = ", ")
+                    )
+                  )
+                )
+              }
+            )
+          )
+        })
+      }, error = function(e) {
+        estimate_diag_rv(NULL)
+        estimate_diag_label_rv("")
+        output$estimate_spatial_text <- renderUI(
+          tags$div(class = "alert alert-danger", style = "padding:8px; margin-top:4px;",
+                   tags$b("Estimate failed: "), conditionMessage(e))
+        )
+        showNotification(conditionMessage(e), type = "error", duration = 15)
+      })
+    })
 
     # ── Create dataset ────────────────────────────────────────────────────
     observeEvent(input$create_dataset_btn, {
@@ -345,6 +447,83 @@ training_module_server <- function(id) {
     })
 
     output$training_log <- renderText({ log_val() })
+
+    output$estimate_moran_plot <- renderPlot({
+      diag_info <- estimate_diag_rv()
+      req(!is.null(diag_info))
+
+      moran_df <- diag_info$moran_correlogram
+      req(is.data.frame(moran_df), nrow(moran_df) > 0)
+
+      range_df <- diag_info$moran_range_summary
+      if (!is.data.frame(range_df)) {
+        range_df <- data.frame(pc = character(0), range_estimate = numeric(0))
+      }
+
+      varexp_df <- diag_info$pca_var_explained
+      if (is.data.frame(varexp_df) && nrow(varexp_df) > 0) {
+        moran_df <- dplyr::left_join(moran_df, varexp_df, by = "pc")
+        moran_df$pc_label <- sprintf("%s (%.1f%% var)", moran_df$pc, 100 * moran_df$variance_explained)
+      } else {
+        moran_df$pc_label <- moran_df$pc
+      }
+
+      p <- ggplot2::ggplot(
+        moran_df,
+        ggplot2::aes(x = distance_mid, y = moran_i, color = pc_label)
+      ) +
+        ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+        ggplot2::geom_line(linewidth = 0.9) +
+        ggplot2::geom_point(size = 1.8) +
+        ggplot2::labs(
+          title = "PCA Moran Correlogram (PC1–PC5)",
+          subtitle = "Estimate before dataset creation for spatial block split",
+          x = "Pixel distance",
+          y = "Moran's I",
+          color = NULL
+        ) +
+        ggplot2::theme_minimal(base_size = 12) +
+        ggplot2::theme(
+          legend.position = "bottom",
+          legend.text = ggplot2::element_text(size = 9),
+          plot.title = ggplot2::element_text(face = "bold", size = 13),
+          plot.subtitle = ggplot2::element_text(size = 10)
+        )
+
+      if (nrow(range_df) > 0) {
+        if (is.data.frame(varexp_df) && nrow(varexp_df) > 0) {
+          range_df <- dplyr::left_join(range_df, varexp_df, by = "pc")
+          range_df$pc_label <- sprintf("%s (%.1f%% var)", range_df$pc, 100 * range_df$variance_explained)
+        } else {
+          range_df$pc_label <- range_df$pc
+        }
+        p <- p + ggplot2::geom_vline(
+          data = range_df,
+          ggplot2::aes(xintercept = range_estimate, color = pc_label),
+          linetype = "dotted",
+          alpha = 0.7,
+          show.legend = FALSE
+        )
+      }
+
+      rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
+      if (is.finite(rec_buf) && rec_buf > 0) {
+        y_top <- max(moran_df$moran_i, na.rm = TRUE)
+        p <- p +
+          ggplot2::geom_vline(xintercept = rec_buf, linetype = "longdash", alpha = 0.6) +
+          ggplot2::annotate(
+            "text",
+            x = rec_buf,
+            y = y_top,
+            label = paste0("Suggested ≈ ", round(rec_buf, 1), " px"),
+            vjust = -0.4,
+            hjust = 0,
+            size = 3.6
+          )
+      }
+
+      p
+    })
 
     # ── Run list ──────────────────────────────────────────────────────────
     runs_rv <- reactiveVal(data.frame())
