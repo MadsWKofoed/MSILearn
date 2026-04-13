@@ -257,7 +257,6 @@ training_module_server <- function(id) {
         diag_info <- compute_feature_moran_diagnostics(
           X = X_est,
           meta = src$meta,
-          top_n_features = 12L,
           max_points = 3000L,
           n_bins = 15L,
           seed = as.integer(input$ds_seed %||% 42L)
@@ -308,8 +307,9 @@ training_module_server <- function(id) {
                   style = "margin-top:4px;",
                   tags$small(
                     paste0(
-                      "Features used for correlogram: ", nrow(range_tbl),
-                      " | median range: ", round(stats::median(range_tbl$range_estimate, na.rm = TRUE), 2), " px"
+                      "Features contributing to correlogram/buffer: ", nrow(range_tbl),
+                      " | median range: ", round(stats::median(range_tbl$range_estimate, na.rm = TRUE), 2), " px",
+                      " | 75% range: ", round(stats::quantile(range_tbl$range_estimate, 0.75, na.rm = TRUE), 2), " px"
                     )
                   )
                 )
@@ -528,38 +528,37 @@ training_module_server <- function(id) {
 
       p <- ggplot2::ggplot(
         corr_df,
-        ggplot2::aes(x = distance_mid, y = moran_i, color = feature)
+        ggplot2::aes(x = distance_mid, y = moran_i, group = feature, color = feature)
       ) +
         ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
-        ggplot2::geom_line(linewidth = 1) +
-        ggplot2::geom_point(size = 2) +
+        ggplot2::geom_line(linewidth = 0.2, alpha = 0.55) +
         ggplot2::labs(
           title = "Feature Moran correlogram",
-          subtitle = "Estimated before dataset creation for spatial block split",
+          subtitle = "All features shown; suggested buffer based on median range",
           x = "Pixel distance",
-          y = "Moran's I",
-          color = NULL
+          y = "Moran's I"
         ) +
         ggplot2::theme_minimal(base_size = 12) +
         ggplot2::theme(
           plot.title = ggplot2::element_text(face = "bold", size = 13),
           plot.subtitle = ggplot2::element_text(size = 10),
-          legend.position = "bottom"
+          legend.position = "none"
         )
 
       if (nrow(range_df) > 0) {
         p <- p + ggplot2::geom_vline(
           data = range_df,
-          ggplot2::aes(xintercept = range_estimate, color = feature),
+          ggplot2::aes(xintercept = range_estimate, group = feature),
+          inherit.aes = FALSE,
           linetype = "dotted",
-          alpha = 0.7,
-          show.legend = FALSE
+          alpha = 0.08,
+          color = "grey30"
         )
       }
 
       if (is.finite(rec_buf) && rec_buf > 0) {
         p <- p +
-          ggplot2::geom_vline(xintercept = rec_buf, linetype = "longdash", alpha = 0.7) +
+          ggplot2::geom_vline(xintercept = rec_buf, linetype = "longdash", alpha = 0.9, linewidth = 0.7) +
           ggplot2::annotate(
             "text",
             x = rec_buf,

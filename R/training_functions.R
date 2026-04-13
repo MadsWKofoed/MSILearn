@@ -255,7 +255,6 @@ compute_global_moran_for_features <- function(
 compute_feature_moran_diagnostics <- function(
     X,
     meta,
-    top_n_features = 12L,
     max_points = 3000L,
     n_bins = 15L,
     seed = 1234L
@@ -314,13 +313,16 @@ compute_feature_moran_diagnostics <- function(
 
   if (nrow(moran_tbl) == 0L) return(empty_res)
 
-  top_tbl <- moran_tbl |>
-    dplyr::filter(is.finite(moran_i)) |>
-    dplyr::slice_head(n = top_n_features)
-
   coords <- as.matrix(meta[, req_cols, drop = FALSE])
 
-  corr_list <- lapply(top_tbl$feature, function(feat) {
+  candidate_tbl <- moran_tbl |>
+    dplyr::filter(
+      is.finite(moran_i),
+      is.finite(variance),
+      variance > 0
+    )
+
+  corr_list <- lapply(candidate_tbl$feature, function(feat) {
     j <- match(feat, colnames(X))
     vals <- X[, j]
 
@@ -353,13 +355,14 @@ compute_feature_moran_diagnostics <- function(
           if (length(idx) == 0) NA_real_ else distance_mid[min(idx)]
         },
         .groups = "drop"
-      )
+      ) |>
+      dplyr::filter(is.finite(range_estimate))
   } else {
     empty_res$feature_range_summary
   }
 
   recommended_buffer_radius <- if (nrow(range_tbl) > 0L) {
-    stats::quantile(range_tbl$range_estimate, probs = 0.75, na.rm = TRUE, names = FALSE)
+    stats::median(range_tbl$range_estimate, na.rm = TRUE)
   } else {
     NA_real_
   }
