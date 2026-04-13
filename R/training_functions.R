@@ -369,7 +369,13 @@ compute_feature_moran_diagnostics <- function(
 
     parallel::clusterExport(
       cl,
-      varlist = c("X", "coords", "n_bins", "compute_moran_correlogram"),
+      varlist = c(
+        "X",
+        "coords",
+        "n_bins",
+        "compute_moran_correlogram",
+        ".compute_distance_matrix"
+      ),
       envir = environment()
     )
 
