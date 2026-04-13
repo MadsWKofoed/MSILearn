@@ -182,7 +182,8 @@ compute_global_moran_for_features <- function(
     meta,
     sample_size = 2000L,
     seed = 1234L,
-    k = 8L
+    k = 8L,
+    workers = 20L
 ) {
   req_cols <- c("x", "y")
   empty_df <- data.frame(
@@ -223,26 +224,63 @@ compute_global_moran_for_features <- function(
 
   nn_idx <- t(apply(dmat, 1, function(v) order(v)[seq_len(k_eff)]))
 
-  out <- lapply(seq_len(ncol(X)), function(j) {
-    vals <- as.numeric(X[, j])
-    vvar <- stats::var(vals, na.rm = TRUE)
-    if (!is.finite(vvar) || vvar <= 0) return(NULL)
+  feature_indices <- seq_len(ncol(X))
 
-    z <- vals - mean(vals, na.rm = TRUE)
-    denom <- sum(z^2, na.rm = TRUE)
-    if (!is.finite(denom) || denom <= 0) return(NULL)
+  if (as.integer(workers) > 1L) {
+    cl <- parallel::makePSOCKcluster(as.integer(workers))
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
 
-    neigh_mean <- rowMeans(matrix(vals[nn_idx], nrow = nrow(nn_idx)), na.rm = TRUE)
-    num <- sum(z * (neigh_mean - mean(vals, na.rm = TRUE)), na.rm = TRUE)
-    moran_i <- num / denom
-
-    data.frame(
-      feature = colnames(X)[j],
-      moran_i = moran_i,
-      variance = vvar,
-      stringsAsFactors = FALSE
+    parallel::clusterExport(
+      cl,
+      varlist = c("X", "nn_idx"),
+      envir = environment()
     )
-  })
+    parallel::clusterEvalQ(cl, {
+      NULL
+    })
+
+    out <- parallel::parLapply(cl, feature_indices, function(j) {
+      vals <- as.numeric(X[, j])
+      vvar <- stats::var(vals, na.rm = TRUE)
+      if (!is.finite(vvar) || vvar <= 0) return(NULL)
+
+      z <- vals - mean(vals, na.rm = TRUE)
+      denom <- sum(z^2, na.rm = TRUE)
+      if (!is.finite(denom) || denom <= 0) return(NULL)
+
+      neigh_mean <- rowMeans(matrix(vals[nn_idx], nrow = nrow(nn_idx)), na.rm = TRUE)
+      num <- sum(z * (neigh_mean - mean(vals, na.rm = TRUE)), na.rm = TRUE)
+      moran_i <- num / denom
+
+      data.frame(
+        feature = colnames(X)[j],
+        moran_i = moran_i,
+        variance = vvar,
+        stringsAsFactors = FALSE
+      )
+    })
+  } else {
+    out <- lapply(feature_indices, function(j) {
+      vals <- as.numeric(X[, j])
+      vvar <- stats::var(vals, na.rm = TRUE)
+      if (!is.finite(vvar) || vvar <= 0) return(NULL)
+
+      z <- vals - mean(vals, na.rm = TRUE)
+      denom <- sum(z^2, na.rm = TRUE)
+      if (!is.finite(denom) || denom <= 0) return(NULL)
+
+      neigh_mean <- rowMeans(matrix(vals[nn_idx], nrow = nrow(nn_idx)), na.rm = TRUE)
+      num <- sum(z * (neigh_mean - mean(vals, na.rm = TRUE)), na.rm = TRUE)
+      moran_i <- num / denom
+
+      data.frame(
+        feature = colnames(X)[j],
+        moran_i = moran_i,
+        variance = vvar,
+        stringsAsFactors = FALSE
+      )
+    })
+  }
 
   out <- Filter(Negate(is.null), out)
   if (length(out) == 0L) return(empty_df)
@@ -257,7 +295,8 @@ compute_feature_moran_diagnostics <- function(
     meta,
     max_points = 3000L,
     n_bins = 15L,
-    seed = 1234L
+    seed = 1234L,
+    workers = 20L
 ) {
   req_cols <- c("x", "y")
   empty_res <- list(
@@ -322,20 +361,48 @@ compute_feature_moran_diagnostics <- function(
       variance > 0
     )
 
-  corr_list <- lapply(candidate_tbl$feature, function(feat) {
-    j <- match(feat, colnames(X))
-    vals <- X[, j]
+  feature_names <- candidate_tbl$feature
 
-    corr <- compute_moran_correlogram(
-      coords = coords,
-      values = vals,
-      n_bins = n_bins
+  if (as.integer(workers) > 1L) {
+    cl <- parallel::makePSOCKcluster(as.integer(workers))
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+
+    parallel::clusterExport(
+      cl,
+      varlist = c("X", "coords", "n_bins", "compute_moran_correlogram"),
+      envir = environment()
     )
-    if (nrow(corr) == 0L) return(NULL)
 
-    corr$feature <- feat
-    corr
-  })
+    corr_list <- parallel::parLapply(cl, feature_names, function(feat) {
+      j <- match(feat, colnames(X))
+      vals <- X[, j]
+
+      corr <- compute_moran_correlogram(
+        coords = coords,
+        values = vals,
+        n_bins = n_bins
+      )
+      if (nrow(corr) == 0L) return(NULL)
+
+      corr$feature <- feat
+      corr
+    })
+  } else {
+    corr_list <- lapply(feature_names, function(feat) {
+      j <- match(feat, colnames(X))
+      vals <- X[, j]
+
+      corr <- compute_moran_correlogram(
+        coords = coords,
+        values = vals,
+        n_bins = n_bins
+      )
+      if (nrow(corr) == 0L) return(NULL)
+
+      corr$feature <- feat
+      corr
+    })
+  }
 
   corr_list <- Filter(Negate(is.null), corr_list)
 

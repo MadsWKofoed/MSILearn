@@ -259,7 +259,8 @@ training_module_server <- function(id) {
           meta = src$meta,
           max_points = 3000L,
           n_bins = 15L,
-          seed = as.integer(input$ds_seed %||% 42L)
+          seed = as.integer(input$ds_seed %||% 42L),
+          workers = max(1L, parallel::detectCores() - 10L)
         )
 
         estimate_diag_rv(diag_info)
