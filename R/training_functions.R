@@ -60,146 +60,6 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
 }
 
 
-
-
-# ---------------------------------------------------------------------------
-# Shift-based local spectral similarity diagnostics on annotated pixels
-# ---------------------------------------------------------------------------
-
-.row_correlation_similarity <- function(A, B) {
-  A <- as.matrix(A)
-  B <- as.matrix(B)
-  storage.mode(A) <- 'numeric'
-  storage.mode(B) <- 'numeric'
-  A_center <- A - rowMeans(A, na.rm = TRUE)
-  B_center <- B - rowMeans(B, na.rm = TRUE)
-  num <- rowSums(A_center * B_center, na.rm = TRUE)
-  den <- sqrt(rowSums(A_center * A_center, na.rm = TRUE)) *
-    sqrt(rowSums(B_center * B_center, na.rm = TRUE))
-  out <- num / den
-  out[!is.finite(out)] <- NA_real_
-  out
-}
-
-compute_shift_similarity_diagnostics <- function(
-    X,
-    meta,
-    max_shift = NULL,
-    similarity_threshold = 0.10,
-    min_pairs = 50L,
-    directions = c("x", "y")
-) {
-  req_cols <- c("sample_id", "x", "y")
-  empty_res <- list(
-    similarity_curve = data.frame(
-      distance = numeric(0),
-      mean_similarity = numeric(0),
-      median_similarity = numeric(0),
-      n_pairs = integer(0)
-    ),
-    recommended_buffer_radius = NA_real_,
-    threshold = as.numeric(similarity_threshold),
-    method = "shift_correlation"
-  )
-
-  if (is.null(meta) || !all(req_cols %in% names(meta))) return(empty_res)
-
-  X <- as.matrix(X)
-  storage.mode(X) <- "numeric"
-  meta <- as.data.frame(meta, stringsAsFactors = FALSE)
-
-  ok <- stats::complete.cases(meta[, req_cols, drop = FALSE]) &
-    rowSums(is.finite(X)) == ncol(X)
-  X <- X[ok, , drop = FALSE]
-  meta <- meta[ok, , drop = FALSE]
-
-  if (nrow(X) < 10L || ncol(X) < 2L) return(empty_res)
-
-  xr <- diff(range(meta$x, na.rm = TRUE))
-  yr <- diff(range(meta$y, na.rm = TRUE))
-  inferred_max_shift <- floor(max(5, min(c(20, xr, yr) / 4)))
-  if (!is.finite(inferred_max_shift) || inferred_max_shift < 1) inferred_max_shift <- 15L
-  if (is.null(max_shift)) {
-    max_shift <- inferred_max_shift
-  } else {
-    max_shift <- as.integer(max_shift)
-    if (!is.finite(max_shift) || max_shift < 1L) max_shift <- inferred_max_shift
-  }
-
-  out <- vector("list", max_shift)
-
-  for (d in seq_len(max_shift)) {
-    sim_vals <- numeric(0)
-
-    for (sid in unique(meta$sample_id)) {
-      idx <- which(meta$sample_id == sid)
-      if (length(idx) < 2L) next
-
-      smeta <- meta[idx, , drop = FALSE]
-      key_to_local <- seq_along(idx)
-      names(key_to_local) <- paste(smeta$x, smeta$y, sep = "__")
-
-      for (dir in directions) {
-        shifted_key <- if (identical(dir, "x")) {
-          paste(smeta$x + d, smeta$y, sep = "__")
-        } else if (identical(dir, "y")) {
-          paste(smeta$x, smeta$y + d, sep = "__")
-        } else {
-          character(0)
-        }
-        if (length(shifted_key) == 0L) next
-
-        j_local <- unname(key_to_local[shifted_key])
-        valid <- which(!is.na(j_local))
-        if (length(valid) == 0L) next
-
-        A <- X[idx[valid], , drop = FALSE]
-        B <- X[idx[j_local[valid]], , drop = FALSE]
-        sim <- .row_correlation_similarity(A, B)
-        sim_vals <- c(sim_vals, sim[is.finite(sim)])
-      }
-    }
-
-    sim_vals <- sim_vals[is.finite(sim_vals)]
-    if (length(sim_vals) < min_pairs) next
-
-    out[[d]] <- data.frame(
-      distance = d,
-      mean_similarity = mean(sim_vals, na.rm = TRUE),
-      median_similarity = stats::median(sim_vals, na.rm = TRUE),
-      n_pairs = length(sim_vals)
-    )
-  }
-
-  out <- Filter(Negate(is.null), out)
-  if (length(out) == 0L) return(empty_res)
-  curve_df <- do.call(rbind, out)
-
-  recommended_buffer_radius <- NA_real_
-  below <- curve_df$mean_similarity <= similarity_threshold
-  idx2 <- which(below & c(below[-1], FALSE))[1]
-  if (!is.na(idx2)) {
-    recommended_buffer_radius <- curve_df$distance[idx2]
-  } else {
-    idx1 <- which(below)[1]
-    if (!is.na(idx1)) recommended_buffer_radius <- curve_df$distance[idx1]
-  }
-
-  if (!is.finite(recommended_buffer_radius)) {
-    delta <- abs(diff(curve_df$mean_similarity))
-    flat_idx <- which(delta <= 0.01)[1]
-    if (!is.na(flat_idx)) recommended_buffer_radius <- curve_df$distance[flat_idx + 1L]
-  }
-
-  list(
-    similarity_curve = curve_df,
-    recommended_buffer_radius = as.numeric(recommended_buffer_radius),
-    threshold = as.numeric(similarity_threshold),
-    method = "shift_correlation"
-  )
-}
-
-
 # ---------------------------------------------------------------------------
 # PCA + Moran correlogram diagnostics on training pixels
 # ---------------------------------------------------------------------------
@@ -316,95 +176,176 @@ compute_moran_correlogram <- function(
   do.call(rbind, out)
 }
 
-compute_pca_moran_diagnostics <- function(
+
+compute_global_moran_for_features <- function(
     X,
     meta,
-    n_pcs = 5L,
-    max_points = 3000L,
-    n_bins = 15L,
-    seed = 1234L
+    sample_size = 2000L,
+    seed = 1234L,
+    k = 8L
 ) {
   req_cols <- c("x", "y")
-  if (is.null(meta) || !all(req_cols %in% names(meta))) {
-    return(list(
-      pca_var_explained = data.frame(pc = character(0), variance_explained = numeric(0)),
-      moran_correlogram = data.frame(),
-      moran_range_summary = data.frame(pc = character(0), range_estimate = numeric(0)),
-      recommended_buffer_radius = NA_real_
-    ))
-  }
+  empty_df <- data.frame(
+    feature = character(0),
+    moran_i = numeric(0),
+    variance = numeric(0),
+    stringsAsFactors = FALSE
+  )
+
+  if (is.null(meta) || !all(req_cols %in% names(meta))) return(empty_df)
 
   X <- as.matrix(X)
   storage.mode(X) <- "numeric"
   meta <- as.data.frame(meta)
 
-  ok <- stats::complete.cases(meta[, req_cols, drop = FALSE])
-  ok <- ok & rowSums(is.finite(X)) == ncol(X)
+  ok <- stats::complete.cases(meta[, req_cols, drop = FALSE]) &
+    rowSums(is.finite(X)) == ncol(X)
 
   X <- X[ok, , drop = FALSE]
   meta <- meta[ok, , drop = FALSE]
 
-  if (nrow(X) < 20L || ncol(X) < 2L) {
-    return(list(
-      pca_var_explained = data.frame(pc = character(0), variance_explained = numeric(0)),
-      moran_correlogram = data.frame(),
-      moran_range_summary = data.frame(pc = character(0), range_estimate = numeric(0)),
-      recommended_buffer_radius = NA_real_
-    ))
-  }
+  if (nrow(X) < 20L || ncol(X) < 2L) return(empty_df)
 
-  set.seed(seed)
-  if (nrow(X) > max_points) {
-    keep <- sort(sample.int(nrow(X), size = max_points))
+  set.seed(as.integer(seed))
+  if (nrow(X) > sample_size) {
+    keep <- sort(sample.int(nrow(X), sample_size))
     X <- X[keep, , drop = FALSE]
     meta <- meta[keep, , drop = FALSE]
   }
 
+  coords <- as.matrix(meta[, req_cols, drop = FALSE])
+
+  dmat <- as.matrix(stats::dist(coords))
+  diag(dmat) <- Inf
+
+  k_eff <- min(as.integer(k), nrow(coords) - 1L)
+  if (k_eff < 1L) return(empty_df)
+
+  nn_idx <- t(apply(dmat, 1, function(v) order(v)[seq_len(k_eff)]))
+
+  out <- lapply(seq_len(ncol(X)), function(j) {
+    vals <- as.numeric(X[, j])
+    vvar <- stats::var(vals, na.rm = TRUE)
+    if (!is.finite(vvar) || vvar <= 0) return(NULL)
+
+    z <- vals - mean(vals, na.rm = TRUE)
+    denom <- sum(z^2, na.rm = TRUE)
+    if (!is.finite(denom) || denom <= 0) return(NULL)
+
+    neigh_mean <- rowMeans(matrix(vals[nn_idx], nrow = nrow(nn_idx)), na.rm = TRUE)
+    num <- sum(z * (neigh_mean - mean(vals, na.rm = TRUE)), na.rm = TRUE)
+    moran_i <- num / denom
+
+    data.frame(
+      feature = colnames(X)[j],
+      moran_i = moran_i,
+      variance = vvar,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  out <- Filter(Negate(is.null), out)
+  if (length(out) == 0L) return(empty_df)
+
+  dplyr::bind_rows(out) |>
+    dplyr::arrange(dplyr::desc(moran_i))
+}
+
+
+compute_feature_moran_diagnostics <- function(
+    X,
+    meta,
+    top_n_features = 12L,
+    max_points = 3000L,
+    n_bins = 15L,
+    seed = 1234L
+) {
+  req_cols <- c("x", "y")
+  empty_res <- list(
+    feature_moran_summary = data.frame(
+      feature = character(0),
+      moran_i = numeric(0),
+      variance = numeric(0),
+      stringsAsFactors = FALSE
+    ),
+    feature_correlogram = data.frame(
+      feature = character(0),
+      distance_mid = numeric(0),
+      distance_min = numeric(0),
+      distance_max = numeric(0),
+      moran_i = numeric(0),
+      n_pairs = integer(0),
+      stringsAsFactors = FALSE
+    ),
+    feature_range_summary = data.frame(
+      feature = character(0),
+      range_estimate = numeric(0),
+      stringsAsFactors = FALSE
+    ),
+    recommended_buffer_radius = NA_real_
+  )
+
+  if (is.null(meta) || !all(req_cols %in% names(meta))) return(empty_res)
+
+  X <- as.matrix(X)
+  storage.mode(X) <- "numeric"
+  meta <- as.data.frame(meta)
+
+  ok <- stats::complete.cases(meta[, req_cols, drop = FALSE]) &
+    rowSums(is.finite(X)) == ncol(X)
+
+  X <- X[ok, , drop = FALSE]
+  meta <- meta[ok, , drop = FALSE]
+
+  if (nrow(X) < 20L || ncol(X) < 2L) return(empty_res)
+
   keep_cols <- apply(X, 2, function(v) stats::sd(v, na.rm = TRUE) > 0)
   X <- X[, keep_cols, drop = FALSE]
 
-  if (ncol(X) < 2L) {
-    return(list(
-      pca_var_explained = data.frame(pc = character(0), variance_explained = numeric(0)),
-      moran_correlogram = data.frame(),
-      moran_range_summary = data.frame(pc = character(0), range_estimate = numeric(0)),
-      recommended_buffer_radius = NA_real_
-    ))
-  }
+  if (ncol(X) < 2L) return(empty_res)
 
-  pca <- stats::prcomp(X, center = TRUE, scale. = TRUE)
-  npc <- min(as.integer(n_pcs), ncol(pca$x))
-  scores <- as.data.frame(pca$x[, seq_len(npc), drop = FALSE])
-  coords <- as.matrix(meta[, req_cols, drop = FALSE])
-
-  varexp <- (pca$sdev^2) / sum(pca$sdev^2)
-  pca_var_explained <- data.frame(
-    pc = paste0("PC", seq_len(npc)),
-    variance_explained = varexp[seq_len(npc)],
-    stringsAsFactors = FALSE
+  moran_tbl <- compute_global_moran_for_features(
+    X = X,
+    meta = meta,
+    sample_size = min(max_points, nrow(X)),
+    seed = seed,
+    k = 8L
   )
 
-  corr_list <- lapply(seq_len(npc), function(i) {
+  if (nrow(moran_tbl) == 0L) return(empty_res)
+
+  top_tbl <- moran_tbl |>
+    dplyr::filter(is.finite(moran_i)) |>
+    dplyr::slice_head(n = top_n_features)
+
+  coords <- as.matrix(meta[, req_cols, drop = FALSE])
+
+  corr_list <- lapply(top_tbl$feature, function(feat) {
+    j <- match(feat, colnames(X))
+    vals <- X[, j]
+
     corr <- compute_moran_correlogram(
       coords = coords,
-      values = scores[[i]],
+      values = vals,
       n_bins = n_bins
     )
     if (nrow(corr) == 0L) return(NULL)
-    corr$pc <- paste0("PC", i)
+
+    corr$feature <- feat
     corr
   })
+
   corr_list <- Filter(Negate(is.null), corr_list)
 
-  moran_df <- if (length(corr_list) > 0L) {
+  corr_df <- if (length(corr_list) > 0L) {
     dplyr::bind_rows(corr_list)
   } else {
-    data.frame()
+    empty_res$feature_correlogram
   }
 
-  range_tbl <- if (nrow(moran_df) > 0L) {
-    moran_df |>
-      dplyr::group_by(pc) |>
+  range_tbl <- if (nrow(corr_df) > 0L) {
+    corr_df |>
+      dplyr::group_by(feature) |>
       dplyr::arrange(distance_mid, .by_group = TRUE) |>
       dplyr::summarise(
         range_estimate = {
@@ -414,7 +355,7 @@ compute_pca_moran_diagnostics <- function(
         .groups = "drop"
       )
   } else {
-    data.frame(pc = character(0), range_estimate = numeric(0))
+    empty_res$feature_range_summary
   }
 
   recommended_buffer_radius <- if (nrow(range_tbl) > 0L) {
@@ -424,9 +365,9 @@ compute_pca_moran_diagnostics <- function(
   }
 
   list(
-    pca_var_explained = pca_var_explained,
-    moran_correlogram = moran_df,
-    moran_range_summary = range_tbl,
+    feature_moran_summary = moran_tbl,
+    feature_correlogram = corr_df,
+    feature_range_summary = range_tbl,
     recommended_buffer_radius = as.numeric(recommended_buffer_radius)
   )
 }
@@ -556,20 +497,6 @@ train_ranger_from_dataset <- function(
           " | Classes: ", nlevels(train_y))
   message("[train] Split strategy: ", split_info$strategy %||% "random")
 
-  diag_info <- compute_pca_moran_diagnostics(
-    X          = train_X,
-    meta       = train_meta,
-    n_pcs      = 5L,
-    max_points = 3000L,
-    n_bins     = 15L,
-    seed       = seed
-  )
-
-  if (nrow(diag_info$moran_correlogram) > 0L) {
-    message("[train] PCA Moran correlogram computed for PCs 1-5.")
-  } else {
-    message("[train] PCA Moran correlogram skipped (insufficient spatial data).")
-  }
 
   set.seed(seed)
 
@@ -640,8 +567,6 @@ train_ranger_from_dataset <- function(
                       else
                         NA_integer_,
     num_threads   = as.integer(num_threads),
-    pca_moran_n_pcs = 5L,
-    pca_moran_max_points = 3000L,
     split_strategy = as.character(split_info$strategy %||% "random"),
     split_block_size = as.integer(split_info$block_size %||% NA_integer_),
     split_buffer_radius = as.numeric(split_info$buffer_radius %||% NA_real_)
@@ -758,17 +683,6 @@ train_ranger_from_dataset <- function(
     dplyr::ungroup()
   metrics_scalar[["cm_table"]] <- list(cm_df)
 
-  # PCA + Moran correlogram diagnostics
-  if (nrow(diag_info$pca_var_explained) > 0L) {
-    metrics_scalar[["pca_var_explained"]] <- list(diag_info$pca_var_explained)
-  }
-  if (nrow(diag_info$moran_correlogram) > 0L) {
-    metrics_scalar[["pca_moran_correlogram"]] <- list(diag_info$moran_correlogram)
-  }
-  if (nrow(diag_info$moran_range_summary) > 0L) {
-    metrics_scalar[["pca_moran_range_summary"]] <- list(diag_info$moran_range_summary)
-  }
-  metrics_scalar[["recommended_buffer_radius"]] <- diag_info$recommended_buffer_radius
 
   # ROC data
   if (requireNamespace("pROC", quietly = TRUE)) {
