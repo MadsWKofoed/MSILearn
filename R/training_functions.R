@@ -665,13 +665,54 @@ train_ranger_from_dataset <- function(
   )
 
   cv_idx <- NULL
-  if (cv_folds > 1L && !is.null(train_meta)) {
-    cv_idx <- build_cv_indices_from_split(train_meta, split_info, cv_folds, seed)
-    if (!is.null(cv_idx)) {
-      message("[train] Using custom CV indices for strategy: ", split_info$strategy %||% "random",
-              " | folds=", length(cv_idx$index))
+    if (cv_folds > 1L && !is.null(train_meta)) {
+      cv_idx <- build_cv_indices_from_split(train_meta, split_info, cv_folds, seed)
+
+      if (!is.null(cv_idx)) {
+        message(
+          "[train] Using custom CV indices for strategy: ",
+          split_info$strategy %||% "random",
+          " | folds=", length(cv_idx$index)
+        )
+
+        fold_diag <- lapply(seq_along(cv_idx$index), function(i) {
+          tr_idx <- cv_idx$index[[i]]
+          te_idx <- cv_idx$indexOut[[i]]
+
+          tr_y_i <- train_y[tr_idx]
+          te_y_i <- train_y[te_idx]
+
+          data.frame(
+            fold = i,
+            n_train = length(tr_idx),
+            n_test = length(te_idx),
+            n_train_classes = length(unique(tr_y_i)),
+            n_test_classes = length(unique(te_y_i)),
+            train_class_counts = paste(names(table(tr_y_i)), as.integer(table(tr_y_i)), collapse = "; "),
+            test_class_counts  = paste(names(table(te_y_i)), as.integer(table(te_y_i)), collapse = "; "),
+            stringsAsFactors = FALSE
+          )
+        })
+
+        fold_diag_df <- dplyr::bind_rows(fold_diag)
+        print(fold_diag_df)
+
+        bad_folds <- fold_diag_df |>
+          dplyr::filter(
+            n_train < 20 |
+            n_test < 5 |
+            n_train_classes < nlevels(train_y) |
+            n_test_classes < 1
+          )
+
+        if (nrow(bad_folds) > 0) {
+          stop(
+            "Spatial CV produced invalid folds. Check fold sizes/class coverage.\n",
+            paste(capture.output(print(bad_folds)), collapse = "\n")
+          )
+        }
+      }
     }
-  }
 
   ctrl <- if (cv_folds > 1L) {
 
