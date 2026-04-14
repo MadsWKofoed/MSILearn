@@ -742,28 +742,60 @@ assign_spatial_block_ids <- function(meta, block_size) {
   paste(meta$sample_id, bx, by, sep = "__")
 }
 
-compute_buffer_exclusion_idx <- function(meta, test_idx, buffer_radius) {
+compute_buffer_exclusion_idx <- function(meta, test_idx, buffer_radius, block_size) {
   buffer_radius <- suppressWarnings(as.numeric(buffer_radius))
-  if (!is.finite(buffer_radius) || buffer_radius <= 0 || length(test_idx) == 0) return(integer(0))
+  block_size <- suppressWarnings(as.numeric(block_size))
+
+  if (!is.finite(buffer_radius) || buffer_radius <= 0 || length(test_idx) == 0) {
+    return(integer(0))
+  }
+  if (!is.finite(block_size) || block_size <= 0) {
+    stop("block_size must be positive in compute_buffer_exclusion_idx().")
+  }
+
+  meta <- as.data.frame(meta)
   test_idx <- unique(as.integer(test_idx))
   train_cand <- setdiff(seq_len(nrow(meta)), test_idx)
+
   if (length(train_cand) == 0) return(integer(0))
-  out <- integer(0)
-  for (sid in intersect(unique(meta$sample_id[test_idx]), unique(meta$sample_id[train_cand]))) {
-    ti <- test_idx[meta$sample_id[test_idx] == sid]
-    ci <- train_cand[meta$sample_id[train_cand] == sid]
-    if (length(ti) == 0 || length(ci) == 0) next
-    txy <- as.matrix(meta[ti, c("x", "y"), drop = FALSE])
-    cxy <- as.matrix(meta[ci, c("x", "y"), drop = FALSE])
-    # O(n*m) but acceptable for current MSI sizes; chunk later if needed
-    d <- as.matrix(stats::dist(rbind(cxy, txy), method = "euclidean"))
-    nc <- nrow(cxy)
-    nt <- nrow(txy)
-    cross <- d[seq_len(nc), nc + seq_len(nt), drop = FALSE]
-    keep <- apply(cross, 1, min) <= buffer_radius
-    out <- c(out, ci[keep])
+
+  # rebuild block coordinates sample-wise
+  parts <- lapply(split(seq_len(nrow(meta)), meta$sample_id), function(idx) {
+    df <- meta[idx, , drop = FALSE]
+    x0 <- min(df$x, na.rm = TRUE)
+    y0 <- min(df$y, na.rm = TRUE)
+
+    data.frame(
+      row_id = idx,
+      sample_id = df$sample_id,
+      bx = floor((df$x - x0) / block_size),
+      by = floor((df$y - y0) / block_size),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  block_map <- do.call(rbind, parts)
+
+  buffer_blocks <- ceiling(buffer_radius / block_size)
+
+  test_blocks <- unique(block_map[test_idx, c("sample_id", "bx", "by"), drop = FALSE])
+
+  exclude <- rep(FALSE, nrow(block_map))
+
+  for (i in seq_len(nrow(test_blocks))) {
+    tb <- test_blocks[i, , drop = FALSE]
+
+    hit <- block_map$sample_id == tb$sample_id &
+      abs(block_map$bx - tb$bx) <= buffer_blocks &
+      abs(block_map$by - tb$by) <= buffer_blocks
+
+    exclude <- exclude | hit
   }
-  unique(as.integer(out))
+
+  excl_idx <- block_map$row_id[exclude]
+  excl_idx <- setdiff(excl_idx, test_idx)
+
+  unique(as.integer(intersect(excl_idx, train_cand)))
 }
 
 make_outer_split_indices <- function(meta, split_strategy = "random", split_seed = 42L,

@@ -386,67 +386,24 @@ training_module_server <- function(id) {
           split_obj$train_frac <- as.numeric(input$ds_train_frac)
         }
         if (split_strategy == "spatial_block") {
-          meta <- as.data.frame(meta)
+          split_obj$block_size <- as.integer(input$ds_block_size)
+          split_obj$buffer_radius <- as.numeric(input$ds_buffer_radius)
+          split_obj$min_pixels_per_block <- block_merge_threshold(
+            as.integer(input$ds_block_size),
+            frac = 0.60
+          )
 
-          message("[outer split] entering spatial_block")
-          message("[outer split] nrow(meta) = ", nrow(meta))
-          message("[outer split] cols = ", paste(names(meta), collapse = ", "))
-          message("[outer split] block_size = ", block_size, " | buffer_radius = ", buffer_radius)
+          diag_info <- estimate_diag_rv()
+          if (!is.null(diag_info)) {
+            split_obj$diagnostic_method <- "feature_moran_correlogram"
 
-          block_id <- assign_spatial_block_ids(meta, block_size)
+            moran_tbl <- diag_info$feature_moran_summary
+            range_tbl <- diag_info$feature_range_summary
 
-          message("[outer split] class(block_id) = ", paste(class(block_id), collapse = ", "))
-          message("[outer split] length(block_id) = ", length(block_id))
-
-          if (is.data.frame(block_id) || is.list(block_id)) {
-            stop("assign_spatial_block_ids() returned a data.frame/list, expected a vector.")
+            split_obj$diagnostic_n_features <- if (is.data.frame(moran_tbl)) nrow(moran_tbl) else NA_integer_
+            split_obj$diagnostic_n_correlogram_features <- if (is.data.frame(range_tbl)) nrow(range_tbl) else NA_integer_
+            split_obj$diagnostic_recommended_buffer <- as.numeric(diag_info$recommended_buffer_radius)
           }
-          if (length(block_id) != nrow(meta)) {
-            stop("assign_spatial_block_ids() returned wrong length: ", length(block_id),
-                " vs nrow(meta)=", nrow(meta))
-          }
-
-          meta$block_id <- as.character(block_id)
-
-          ublocks <- unique(meta$block_id)
-          message("[outer split] n unique blocks = ", length(ublocks))
-
-          ublocks <- sample(ublocks, length(ublocks))
-          n_train_blocks <- max(1L, min(length(ublocks) - 1L, ceiling(length(ublocks) * train_frac)))
-          train_blocks <- ublocks[seq_len(n_train_blocks)]
-
-          te_idx <- which(!(meta$block_id %in% train_blocks))
-          if (length(te_idx) == 0) {
-            te_idx <- which(meta$block_id == tail(train_blocks, 1))
-            train_blocks <- setdiff(train_blocks, unique(meta$block_id[te_idx]))
-          }
-
-          tr_idx <- which(meta$block_id %in% train_blocks)
-
-          message("[outer split] before buffer: train=", length(tr_idx), " test=", length(te_idx))
-
-          excl_idx <- compute_buffer_exclusion_idx(meta, te_idx, buffer_radius)
-
-          message("[outer split] class(excl_idx) = ", paste(class(excl_idx), collapse = ", "))
-          message("[outer split] length(excl_idx) = ", length(excl_idx))
-
-          tr_idx <- setdiff(tr_idx, excl_idx)
-
-          message("[outer split] after buffer: train=", length(tr_idx), " test=", length(te_idx))
-
-          if (length(tr_idx) == 0) stop("No training pixels left after applying spatial block split and buffer.")
-
-          return(list(
-            train_idx = tr_idx,
-            test_idx = te_idx,
-            split_details = list(
-              block_size = as.integer(block_size),
-              buffer_radius = as.numeric(buffer_radius),
-              n_blocks = length(ublocks),
-              train_blocks = length(unique(meta$block_id[tr_idx])),
-              test_blocks = length(unique(meta$block_id[te_idx]))
-            )
-          ))
         }
 
         if (split_strategy == "leave_one_sample_out" && length(samp_ids) < 3) {
