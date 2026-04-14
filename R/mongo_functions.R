@@ -828,7 +828,7 @@ make_outer_split_indices <- function(meta, split_strategy = "random", split_seed
       train_blocks <- setdiff(train_blocks, unique(meta$block_id[te_idx]))
     }
     tr_idx <- which(meta$block_id %in% train_blocks)
-    excl_idx <- compute_buffer_exclusion_idx(meta, te_idx, buffer_radius)
+    excl_idx <- compute_buffer_exclusion_idx(meta, te_idx, buffer_radius, block_size)
     tr_idx <- setdiff(tr_idx, excl_idx)
     if (length(tr_idx) == 0) stop("No training pixels left after applying spatial block split and buffer.")
     return(list(train_idx = tr_idx, test_idx = te_idx,
