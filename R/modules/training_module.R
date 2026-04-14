@@ -313,7 +313,7 @@ training_module_server <- function(id) {
                 block_size = rec_block2,
                 merge_frac = 0.60,
                 max_cv_folds = 10L
-              )
+              ),
 
               tags$b("Suggested buffer radius: "),
               if (is.finite(rec_buf2)) paste0(round(rec_buf2, 2), " px") else "not available",
