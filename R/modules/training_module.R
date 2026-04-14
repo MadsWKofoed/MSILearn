@@ -273,10 +273,29 @@ training_module_server <- function(id) {
         )
 
         rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
+        rec_block <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
+
+        if (!is.finite(rec_block) || rec_block < 2) {
+          rec_block <- max(4, ceiling(rec_buf))
+        }
+
         if (is.finite(rec_buf) && rec_buf > 0) {
           updateNumericInput(session, "ds_buffer_radius", value = round(rec_buf, 1))
-          suggested_block <- max(as.numeric(input$ds_block_size %||% 25), ceiling(rec_buf * 2))
-          updateNumericInput(session, "ds_block_size", value = suggested_block)
+        }
+
+        if (is.finite(rec_block) && rec_block >= 2) {
+          updateNumericInput(session, "ds_block_size", value = as.integer(rec_block))
+        }
+
+        spatial_rec <- recommend_spatial_params(
+          meta = src$meta,
+          block_size = rec_block,
+          merge_frac = 0.60,
+          max_cv_folds = 10L
+        )
+
+        if (is.finite(spatial_rec$recommended_cv_folds) && spatial_rec$recommended_cv_folds >= 2) {
+          updateNumericInput(session, "cv_folds", value = spatial_rec$recommended_cv_folds)
         }
 
         output$estimate_spatial_text <- renderUI({
@@ -288,8 +307,22 @@ training_module_server <- function(id) {
             tags$div(
               class = "alert alert-info",
               style = "padding:8px; margin-top:4px; margin-bottom:8px;",
+              rec_block2 <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
+              spatial_rec2 <- recommend_spatial_params(
+                meta = src$meta,
+                block_size = rec_block2,
+                merge_frac = 0.60,
+                max_cv_folds = 10L
+              )
+
               tags$b("Suggested buffer radius: "),
               if (is.finite(rec_buf2)) paste0(round(rec_buf2, 2), " px") else "not available",
+              tags$br(),
+              tags$b("Suggested block size: "),
+              if (is.finite(rec_block2)) paste0(as.integer(rec_block2), " px") else "not available",
+              tags$br(),
+              tags$b("Suggested CV folds: "),
+              if (is.finite(spatial_rec2$recommended_cv_folds)) spatial_rec2$recommended_cv_folds else "not available",
               tags$br(),
               tags$small(estimate_diag_label_rv()),
               if (is.data.frame(moran_tbl) && nrow(moran_tbl) > 0) {
@@ -355,6 +388,10 @@ training_module_server <- function(id) {
         if (split_strategy == "spatial_block") {
           split_obj$block_size <- as.integer(input$ds_block_size)
           split_obj$buffer_radius <- as.numeric(input$ds_buffer_radius)
+          split_obj$min_pixels_per_block <- block_merge_threshold(
+            as.integer(input$ds_block_size),
+            frac = 0.60
+          )
 
           diag_info <- estimate_diag_rv()
           if (!is.null(diag_info)) {
@@ -470,6 +507,7 @@ training_module_server <- function(id) {
           tags$b("Split: "),    if (!is.null(sp$train_frac)) paste0(sp$train_frac * 100, "% train | ") else "", "seed=", sp$seed,
           if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
           if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
+          if (!is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
           if (!is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
           if (!is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
           if (!is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
@@ -820,6 +858,7 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("Split strategy"), tags$td(first_chr(hp[["split_strategy"]]))),
                 tags$tr(tags$td("Block size"), tags$td(first_chr(hp[["split_block_size"]]))),
                 tags$tr(tags$td("Buffer radius"), tags$td(first_chr(hp[["split_buffer_radius"]]))),
+                tags$tr(tags$td("Min pixels per merged block"), tags$td(first_chr(hp[["split_min_pixels_per_block"]]))),
                 tags$tr(tags$td("PCA Moran PCs"), tags$td(first_chr(hp[["pca_moran_n_pcs"]]))),
                 tags$tr(tags$td("PCA Moran max points"), tags$td(first_chr(hp[["pca_moran_max_points"]])))
               )

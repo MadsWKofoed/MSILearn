@@ -444,8 +444,17 @@ compute_feature_moran_diagnostics <- function(
     empty_res$feature_range_summary
   }
 
-  recommended_buffer_radius <- if (nrow(range_tbl) > 0L) {
-    stats::median(range_tbl$range_estimate, na.rm = TRUE)
+  recommended_buffer_radius <- estimate_practical_range(
+    corr_df = corr_df,
+    threshold_fraction = 0.25
+  )
+
+  if (!is.finite(recommended_buffer_radius) && nrow(range_tbl) > 0L) {
+    recommended_buffer_radius <- stats::median(range_tbl$range_estimate, na.rm = TRUE)
+  }
+
+  recommended_block_size <- if (is.finite(recommended_buffer_radius) && recommended_buffer_radius > 0) {
+    max(4, ceiling(recommended_buffer_radius))
   } else {
     NA_real_
   }
@@ -454,7 +463,8 @@ compute_feature_moran_diagnostics <- function(
     feature_moran_summary = moran_tbl,
     feature_correlogram = corr_df,
     feature_range_summary = range_tbl,
-    recommended_buffer_radius = as.numeric(recommended_buffer_radius)
+    recommended_buffer_radius = as.numeric(recommended_buffer_radius),
+    recommended_block_size = as.numeric(recommended_block_size)
   )
 }
 
@@ -502,8 +512,232 @@ normalize_split_info <- function(split_info) {
     train_frac = suppressWarnings(as.numeric(first_scalar(split_info$train_frac, NA_real_))),
     seed = suppressWarnings(as.integer(first_scalar(split_info$seed, NA_integer_))),
     block_size = suppressWarnings(as.integer(first_scalar(split_info$block_size, NA_integer_))),
-    buffer_radius = suppressWarnings(as.numeric(first_scalar(split_info$buffer_radius, NA_real_)))
+    buffer_radius = suppressWarnings(as.numeric(first_scalar(split_info$buffer_radius, NA_real_))),
+    min_pixels_per_block = suppressWarnings(as.integer(first_scalar(split_info$min_pixels_per_block, NA_integer_)))
   )
+}
+
+block_merge_threshold <- function(block_size, frac = 0.60) {
+  bs <- suppressWarnings(as.numeric(block_size))
+  if (!is.finite(bs) || bs < 1) return(1L)
+  max(1L, ceiling(frac * (bs^2)))
+}
+
+estimate_practical_range <- function(corr_df, threshold_fraction = 0.25) {
+  if (!is.data.frame(corr_df) || nrow(corr_df) == 0) return(NA_real_)
+
+  corr_df <- corr_df |>
+    dplyr::arrange(feature, distance_mid) |>
+    dplyr::group_by(feature) |>
+    dplyr::mutate(
+      peak_moran = max(moran_i, na.rm = TRUE),
+      threshold_value = pmax(0, peak_moran * threshold_fraction)
+    ) |>
+    dplyr::summarise(
+      practical_range = {
+        idx <- which(moran_i <= threshold_value)
+        if (length(idx) == 0) NA_real_ else distance_mid[min(idx)]
+      },
+      .groups = "drop"
+    ) |>
+    dplyr::filter(is.finite(practical_range))
+
+  if (nrow(corr_df) == 0) return(NA_real_)
+  stats::median(corr_df$practical_range, na.rm = TRUE)
+}
+
+recommend_spatial_params <- function(meta, block_size, merge_frac = 0.60, max_cv_folds = 10L) {
+  req_cols <- c("sample_id", "x", "y")
+  if (is.null(meta) || !all(req_cols %in% names(meta))) {
+    return(list(
+      min_pixels_per_block = NA_integer_,
+      n_blocks = NA_integer_,
+      recommended_cv_folds = NA_integer_
+    ))
+  }
+
+  meta <- as.data.frame(meta)
+  keep <- stats::complete.cases(meta[, req_cols, drop = FALSE])
+  meta <- meta[keep, , drop = FALSE]
+
+  if (nrow(meta) == 0) {
+    return(list(
+      min_pixels_per_block = NA_integer_,
+      n_blocks = 0L,
+      recommended_cv_folds = 0L
+    ))
+  }
+
+  block_size <- suppressWarnings(as.numeric(block_size))
+  min_pixels_per_block <- block_merge_threshold(block_size, frac = merge_frac)
+
+  parts <- lapply(split(meta, meta$sample_id), function(df_s) {
+    x0 <- min(df_s$x, na.rm = TRUE)
+    y0 <- min(df_s$y, na.rm = TRUE)
+    df_s$bx <- floor((df_s$x - x0) / block_size)
+    df_s$by <- floor((df_s$y - y0) / block_size)
+    df_s$block_id <- paste(df_s$sample_id, df_s$bx, df_s$by, sep = "::")
+    df_s
+  })
+
+  part <- dplyr::bind_rows(parts)
+
+  block_tbl <- part |>
+    dplyr::group_by(sample_id, bx, by, block_id) |>
+    dplyr::summarise(n = dplyr::n(), .groups = "drop")
+
+  block_tbl <- merge_small_blocks(
+    block_tbl = block_tbl,
+    min_pixels_per_block = min_pixels_per_block
+  )
+
+  merged_tbl <- block_tbl |>
+    dplyr::distinct(merged_block_id, sample_id, merged_n)
+
+  n_blocks <- nrow(merged_tbl)
+
+  recommended_cv_folds <- dplyr::case_when(
+    n_blocks < 4  ~ 2L,
+    n_blocks < 7  ~ 3L,
+    n_blocks < 12 ~ 4L,
+    n_blocks < 20 ~ 5L,
+    n_blocks < 35 ~ 7L,
+    TRUE          ~ min(as.integer(max_cv_folds), 10L)
+  )
+
+  list(
+    min_pixels_per_block = as.integer(min_pixels_per_block),
+    n_blocks = as.integer(n_blocks),
+    recommended_cv_folds = as.integer(recommended_cv_folds)
+  )
+}
+
+merge_small_blocks <- function(block_tbl, min_pixels_per_block = 1L) {
+  if (!is.data.frame(block_tbl) || nrow(block_tbl) == 0) {
+    return(data.frame())
+  }
+
+  block_tbl <- block_tbl |>
+    dplyr::mutate(
+      merged_block_id = block_id,
+      merged_n = n
+    )
+
+  repeat {
+    merged_units <- block_tbl |>
+      dplyr::group_by(sample_id, merged_block_id) |>
+      dplyr::summarise(
+        merged_n = sum(n),
+        bx_cells = list(bx),
+        by_cells = list(by),
+        .groups = "drop"
+      )
+
+    small_units <- merged_units |>
+      dplyr::filter(merged_n < min_pixels_per_block)
+
+    if (nrow(small_units) == 0) break
+
+    changed <- FALSE
+
+    for (ii in seq_len(nrow(small_units))) {
+      su <- small_units[ii, , drop = FALSE]
+
+      candidates <- merged_units |>
+        dplyr::filter(
+          sample_id == su$sample_id,
+          merged_block_id != su$merged_block_id
+        )
+
+      if (nrow(candidates) == 0) next
+
+      bx_this <- unlist(su$bx_cells[[1]])
+      by_this <- unlist(su$by_cells[[1]])
+
+      is_neighbor <- vapply(seq_len(nrow(candidates)), function(j) {
+        bx_c <- unlist(candidates$bx_cells[[j]])
+        by_c <- unlist(candidates$by_cells[[j]])
+
+        any(vapply(seq_along(bx_this), function(k) {
+          any((abs(bx_this[k] - bx_c) == 1 & by_this[k] == by_c) |
+                (abs(by_this[k] - by_c) == 1 & bx_this[k] == bx_c))
+        }, logical(1)))
+      }, logical(1))
+
+      candidates <- candidates[is_neighbor, , drop = FALSE]
+      if (nrow(candidates) == 0) next
+
+      best_target <- candidates$merged_block_id[which.max(candidates$merged_n)]
+
+      block_tbl$merged_block_id[block_tbl$merged_block_id == su$merged_block_id] <- best_target
+      changed <- TRUE
+    }
+
+    merged_sizes <- block_tbl |>
+      dplyr::group_by(sample_id, merged_block_id) |>
+      dplyr::summarise(merged_n = sum(n), .groups = "drop")
+
+    block_tbl <- block_tbl |>
+      dplyr::select(-merged_n) |>
+      dplyr::left_join(merged_sizes, by = c("sample_id", "merged_block_id"))
+
+    if (!changed) break
+  }
+
+  block_tbl
+}
+
+assign_blocks_to_folds <- function(block_tbl, cv_folds, seed = 1234L) {
+  merged_tbl <- block_tbl |>
+    dplyr::distinct(merged_block_id, sample_id, merged_n)
+
+  if (nrow(merged_tbl) < 2L) {
+    stop("Need at least 2 merged blocks for spatial CV.")
+  }
+
+  set.seed(as.integer(seed))
+  merged_tbl$rand <- stats::runif(nrow(merged_tbl))
+
+  merged_tbl <- merged_tbl |>
+    dplyr::arrange(dplyr::desc(merged_n), rand)
+
+  k_eff <- min(as.integer(cv_folds), nrow(merged_tbl))
+  if (k_eff < 2L) stop("Fewer than 2 effective folds available.")
+
+  fold_blocks <- vector("list", k_eff)
+  fold_load <- rep(0, k_eff)
+
+  for (i in seq_len(nrow(merged_tbl))) {
+    j <- which.min(fold_load)
+    fold_blocks[[j]] <- c(fold_blocks[[j]], merged_tbl$merged_block_id[i])
+    fold_load[j] <- fold_load[j] + merged_tbl$merged_n[i]
+  }
+
+  fold_blocks
+}
+
+get_buffered_block_ids <- function(block_tbl, test_blocks, buffer_radius, block_size) {
+  if (!is.finite(buffer_radius) || buffer_radius <= 0) {
+    return(unique(test_blocks$merged_block_id))
+  }
+
+  buffer_blocks <- ceiling(buffer_radius / block_size)
+
+  out <- unique(unlist(lapply(seq_len(nrow(test_blocks)), function(i) {
+    tb <- test_blocks[i, , drop = FALSE]
+
+    hits <- block_tbl |>
+      dplyr::filter(
+        sample_id == tb$sample_id,
+        abs(bx - tb$bx) <= buffer_blocks,
+        abs(by - tb$by) <= buffer_blocks
+      ) |>
+      dplyr::pull(merged_block_id)
+
+    unique(hits)
+  })))
+
+  unique(c(out, test_blocks$merged_block_id))
 }
 
 make_spatial_block_cv_indices <- function(
@@ -511,6 +745,7 @@ make_spatial_block_cv_indices <- function(
     cv_folds,
     block_size = 25L,
     buffer_radius = 0,
+    min_pixels_per_block = NULL,
     seed = 1234L
 ) {
   cv_folds <- suppressWarnings(as.integer(cv_folds))
@@ -521,91 +756,94 @@ make_spatial_block_cv_indices <- function(
   if (!is.finite(block_size) || block_size < 2) stop("block_size must be >= 2.")
   if (!is.finite(buffer_radius) || buffer_radius < 0) stop("buffer_radius must be >= 0.")
 
+  if (is.null(min_pixels_per_block) || !is.finite(min_pixels_per_block) || min_pixels_per_block < 1) {
+    min_pixels_per_block <- block_merge_threshold(block_size, frac = 0.60)
+  } else {
+    min_pixels_per_block <- as.integer(min_pixels_per_block)
+  }
+
   req_cols <- c("sample_id", "x", "y")
   if (!all(req_cols %in% names(train_meta))) {
     stop("Spatial CV requires columns: sample_id, x, y.")
   }
 
+  train_meta <- as.data.frame(train_meta)
+  train_meta$.orig_row_id <- seq_len(nrow(train_meta))
+
   keep <- stats::complete.cases(train_meta[, req_cols, drop = FALSE])
-  train_meta <- train_meta[keep, , drop = FALSE]
-  if (nrow(train_meta) < 10L) stop("Too few rows for spatial CV after removing missing coordinates.")
+  meta_ok <- train_meta[keep, , drop = FALSE]
 
-  sample_id <- as.character(train_meta$sample_id)
-  x <- as.numeric(train_meta$x)
-  y <- as.numeric(train_meta$y)
-
-  if (any(!is.finite(x)) || any(!is.finite(y))) {
-    stop("x/y coordinates contain non-finite values.")
+  if (nrow(meta_ok) < 10L) {
+    stop("Too few rows for spatial CV after removing missing coordinates.")
   }
 
-  x0 <- min(x, na.rm = TRUE)
-  y0 <- min(y, na.rm = TRUE)
+  parts <- lapply(split(meta_ok, meta_ok$sample_id), function(df_s) {
+    x0 <- min(df_s$x, na.rm = TRUE)
+    y0 <- min(df_s$y, na.rm = TRUE)
 
-  bx <- floor((x - x0) / block_size)
-  by <- floor((y - y0) / block_size)
+    df_s$bx <- floor((as.numeric(df_s$x) - x0) / block_size)
+    df_s$by <- floor((as.numeric(df_s$y) - y0) / block_size)
+    df_s$block_id <- paste(df_s$sample_id, df_s$bx, df_s$by, sep = "::")
+    df_s
+  })
 
-  block_id <- paste(sample_id, bx, by, sep = "::")
-  row_id <- seq_len(nrow(train_meta))
+  part <- dplyr::bind_rows(parts)
 
-  part <- data.frame(
-    row_id = row_id,
-    sample_id = sample_id,
-    bx = bx,
-    by = by,
-    block_id = block_id,
-    stringsAsFactors = FALSE
-  )
+  block_tbl <- part |>
+    dplyr::group_by(sample_id, bx, by, block_id) |>
+    dplyr::summarise(n = dplyr::n(), .groups = "drop")
 
-  block_tbl <- stats::aggregate(
-    row_id ~ block_id + sample_id + bx + by,
-    data = part,
-    FUN = length
-  )
-  names(block_tbl)[names(block_tbl) == "row_id"] <- "n"
-
-  n_blocks <- nrow(block_tbl)
-  if (n_blocks < 2L) stop("Spatial CV failed: fewer than 2 unique blocks.")
-
-  k_eff <- min(cv_folds, n_blocks)
-  if (k_eff < 2L) stop("Spatial CV failed: fewer than 2 effective folds.")
-
-  set.seed(as.integer(seed))
-  ord <- order(block_tbl$n, decreasing = TRUE)
-  ord <- ord[sample.int(length(ord))]
-
-  fold_blocks <- vector("list", k_eff)
-  fold_load <- rep(0L, k_eff)
-
-  for (i in ord) {
-    j <- which.min(fold_load)
-    fold_blocks[[j]] <- c(fold_blocks[[j]], block_tbl$block_id[i])
-    fold_load[j] <- fold_load[j] + block_tbl$n[i]
+  if (nrow(block_tbl) < 2L) {
+    stop("Spatial CV failed: fewer than 2 raw blocks.")
   }
 
-  buffer_blocks <- ceiling(buffer_radius / block_size)
+  block_tbl <- merge_small_blocks(
+    block_tbl = block_tbl,
+    min_pixels_per_block = min_pixels_per_block
+  )
 
-  indexOut <- vector("list", k_eff)
-  index <- vector("list", k_eff)
+  part <- part |>
+    dplyr::left_join(
+      block_tbl[, c("sample_id", "bx", "by", "merged_block_id", "merged_n")],
+      by = c("sample_id", "bx", "by")
+    )
 
-  for (j in seq_len(k_eff)) {
-    test_block_ids <- fold_blocks[[j]]
-    tb <- block_tbl[block_tbl$block_id %in% test_block_ids, , drop = FALSE]
+  merged_tbl <- block_tbl |>
+    dplyr::distinct(merged_block_id, sample_id, merged_n)
 
-    is_excluded_block <- vapply(seq_len(nrow(block_tbl)), function(ii) {
-      any(
-        block_tbl$sample_id[ii] == tb$sample_id &
-          abs(block_tbl$bx[ii] - tb$bx) <= buffer_blocks &
-          abs(block_tbl$by[ii] - tb$by) <= buffer_blocks
-      )
-    }, logical(1))
+  if (nrow(merged_tbl) < 2L) {
+    stop("Spatial CV failed: fewer than 2 merged blocks.")
+  }
 
-    excluded_block_ids <- block_tbl$block_id[is_excluded_block]
+  fold_blocks <- assign_blocks_to_folds(
+    block_tbl = block_tbl,
+    cv_folds = cv_folds,
+    seed = seed
+  )
 
-    te <- which(part$block_id %in% test_block_ids)
-    tr <- which(!(part$block_id %in% excluded_block_ids))
+  index <- list()
+  indexOut <- list()
 
-    indexOut[[j]] <- te
-    index[[j]] <- tr
+  for (j in seq_along(fold_blocks)) {
+    test_ids <- fold_blocks[[j]]
+
+    test_blocks <- block_tbl |>
+      dplyr::filter(merged_block_id %in% test_ids)
+
+    excluded_ids <- get_buffered_block_ids(
+      block_tbl = block_tbl,
+      test_blocks = test_blocks,
+      buffer_radius = buffer_radius,
+      block_size = block_size
+    )
+
+    te <- sort(unique(part$.orig_row_id[part$merged_block_id %in% test_ids]))
+    tr <- sort(unique(part$.orig_row_id[!(part$merged_block_id %in% excluded_ids)]))
+
+    if (length(te) > 0L && length(tr) > 0L) {
+      indexOut[[length(indexOut) + 1L]] <- te
+      index[[length(index) + 1L]] <- tr
+    }
   }
 
   keep_fold <- vapply(index, length, integer(1)) > 0L &
@@ -620,6 +858,9 @@ make_spatial_block_cv_indices <- function(
 
   names(index) <- paste0("block_", seq_along(index))
   names(indexOut) <- names(index)
+
+  attr(index, "min_pixels_per_block") <- min_pixels_per_block
+  attr(index, "n_merged_blocks") <- nrow(merged_tbl)
 
   list(index = index, indexOut = indexOut)
 }
@@ -641,6 +882,7 @@ build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) 
       cv_folds = cv_folds,
       block_size = split_info$block_size %||% 25L,
       buffer_radius = split_info$buffer_radius %||% 0,
+      min_pixels_per_block = split_info$min_pixels_per_block %||% block_merge_threshold(split_info$block_size %||% 25L, 0.60),
       seed = seed
     ))
   }
