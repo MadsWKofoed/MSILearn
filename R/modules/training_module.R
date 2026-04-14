@@ -307,7 +307,7 @@ training_module_server <- function(id) {
             tags$div(
               class = "alert alert-info",
               style = "padding:8px; margin-top:4px; margin-bottom:8px;",
-              rec_block2 <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
+              rec_block2 <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1])),
               spatial_rec2 <- recommend_spatial_params(
                 meta = src$meta,
                 block_size = rec_block2,
