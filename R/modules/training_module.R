@@ -257,7 +257,7 @@ training_module_server <- function(id) {
         diag_info <- compute_feature_moran_diagnostics(
           X = X_est,
           meta = src$meta,
-          max_points = 3000L,
+          max_points = 1200L,
           n_bins = 15L,
           seed = as.integer(input$ds_seed %||% 42L),
           workers = max(1L, parallel::detectCores() - 10L)

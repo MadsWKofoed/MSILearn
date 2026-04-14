@@ -352,7 +352,17 @@ compute_feature_moran_diagnostics <- function(
 
   if (nrow(moran_tbl) == 0L) return(empty_res)
 
-  coords <- as.matrix(meta[, req_cols, drop = FALSE])
+  set.seed(as.integer(seed))
+  if (nrow(X) > max_points) {
+    keep <- sort(sample.int(nrow(X), size = max_points))
+    X_corr <- X[keep, , drop = FALSE]
+    meta_corr <- meta[keep, , drop = FALSE]
+  } else {
+    X_corr <- X
+    meta_corr <- meta
+  }
+
+  coords <- as.matrix(meta_corr[, req_cols, drop = FALSE])
 
   candidate_tbl <- moran_tbl |>
     dplyr::filter(
@@ -370,7 +380,7 @@ compute_feature_moran_diagnostics <- function(
     parallel::clusterExport(
       cl,
       varlist = c(
-        "X",
+        "X_corr",
         "coords",
         "n_bins",
         "compute_moran_correlogram",
@@ -381,7 +391,7 @@ compute_feature_moran_diagnostics <- function(
 
     corr_list <- parallel::parLapply(cl, feature_names, function(feat) {
       j <- match(feat, colnames(X))
-      vals <- X[, j]
+      vals <- X_corr[, j]
 
       corr <- compute_moran_correlogram(
         coords = coords,
@@ -396,7 +406,7 @@ compute_feature_moran_diagnostics <- function(
   } else {
     corr_list <- lapply(feature_names, function(feat) {
       j <- match(feat, colnames(X))
-      vals <- X[, j]
+      vals <- X_corr[, j]
 
       corr <- compute_moran_correlogram(
         coords = coords,
