@@ -546,23 +546,65 @@ make_spatial_block_cv_indices <- function(train_meta, cv_folds, block_size = 25L
 }
 
 
+
+first_scalar <- function(x, default = NULL) {
+  if (is.null(x) || length(x) == 0) return(default)
+  if (is.data.frame(x)) {
+    if (nrow(x) == 0 || ncol(x) == 0) return(default)
+    return(first_scalar(x[[1]], default = default))
+  }
+  if (is.list(x) && !is.atomic(x)) return(first_scalar(x[[1]], default = default))
+  x[[1]]
+}
+
+normalize_split_info <- function(split_info) {
+  if (is.null(split_info)) return(list(strategy = "random"))
+  if (is.data.frame(split_info)) split_info <- as.list(split_info[1, , drop = FALSE])
+  if (!is.list(split_info)) split_info <- list(strategy = "random")
+
+  list(
+    strategy = as.character(first_scalar(split_info$strategy, "random")),
+    train_frac = suppressWarnings(as.numeric(first_scalar(split_info$train_frac, NA_real_))),
+    seed = suppressWarnings(as.integer(first_scalar(split_info$seed, NA_integer_))),
+    block_size = suppressWarnings(as.integer(first_scalar(split_info$block_size, NA_integer_))),
+    buffer_radius = suppressWarnings(as.numeric(first_scalar(split_info$buffer_radius, NA_real_)))
+  )
+}
+
 build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) {
-  strategy <- as.character(split_info$strategy %||% "random")
-  if (cv_folds <= 1L) return(NULL)
-  if (strategy == "leave_one_sample_out") {
+  split_info <- normalize_split_info(split_info)
+  strategy <- split_info$strategy %||% "random"
+
+  cv_folds <- suppressWarnings(as.integer(cv_folds))
+  if (!is.finite(cv_folds) || cv_folds <= 1L) return(NULL)
+
+  if (identical(strategy, "leave_one_sample_out")) {
     return(make_loso_cv_indices(train_meta))
   }
-  if (strategy == "spatial_block") {
+
+  if (identical(strategy, "spatial_block")) {
+    bs <- split_info$block_size
+    br <- split_info$buffer_radius
+
+    if (!is.finite(bs) || bs < 2L) {
+      stop("Invalid spatial split: block_size is missing/non-numeric (<2). Recreate dataset split settings.")
+    }
+    if (!is.finite(br) || br < 0) {
+      stop("Invalid spatial split: buffer_radius is missing/non-numeric (<0). Recreate dataset split settings.")
+    }
+
     return(make_spatial_block_cv_indices(
       train_meta = train_meta,
       cv_folds = cv_folds,
-      block_size = as.integer(split_info$block_size %||% 25L),
-      buffer_radius = as.numeric(split_info$buffer_radius %||% 0),
+      block_size = as.integer(bs),
+      buffer_radius = as.numeric(br),
       seed = seed
     ))
   }
+
   make_random_cv_indices(nrow(train_meta), cv_folds, seed)
 }
+
 
 # ---------------------------------------------------------------------------
 # train_ranger_from_dataset()
@@ -617,7 +659,7 @@ train_ranger_from_dataset <- function(
   test_y     <- data$test_y
   train_meta <- data$train_meta %||% NULL
   test_meta  <- data$test_meta %||% NULL
-  split_info <- data$split_info %||% list(strategy = "random")
+  split_info <- normalize_split_info(data$split_info)
   dataset_meta <- data$dataset_meta %||% NULL
 
   message("[train] Applying normalization: ", normalize_method)
