@@ -480,24 +480,71 @@ make_loso_cv_indices <- function(train_meta) {
   list(index = index, indexOut = indexOut)
 }
 
+
 make_spatial_block_cv_indices <- function(train_meta, cv_folds, block_size = 25L,
                                           buffer_radius = 0, seed = 1234L) {
+  cv_folds <- as.integer(cv_folds)
+  if (!is.finite(cv_folds) || cv_folds < 2L) return(NULL)
+
+  req_cols <- c("sample_id", "x", "y")
+  if (!all(req_cols %in% names(train_meta))) {
+    stop("Spatial CV requires train_meta columns: sample_id, x, y.")
+  }
+
+  keep_xy <- stats::complete.cases(train_meta[, req_cols, drop = FALSE])
+  train_meta <- train_meta[keep_xy, , drop = FALSE]
+
+  if (nrow(train_meta) < 2L) {
+    stop("Spatial CV failed: too few training pixels after removing missing coordinates.")
+  }
+
   block_ids <- assign_spatial_block_ids(train_meta, block_size)
   ublocks <- unique(block_ids)
+  n_blocks <- length(ublocks)
+
+  if (n_blocks < 2L) {
+    stop(
+      "Spatial CV failed: only 1 unique training block after outer split/buffer. ",
+      "Reduce block_size/buffer_radius or increase train_frac / number of samples."
+    )
+  }
+
+  k_eff <- min(cv_folds, n_blocks)
+  if (k_eff < 2L) {
+    stop("Spatial CV failed: fewer than 2 effective folds available.")
+  }
+
   set.seed(as.integer(seed))
-  shuffled <- sample(ublocks, length(ublocks))
-  grp <- split(shuffled, cut(seq_along(shuffled), breaks = cv_folds, labels = FALSE))
-  grp <- Filter(length, grp)
+  shuffled <- sample(ublocks, n_blocks)
+
+  grp_id <- ((seq_along(shuffled) - 1L) %% k_eff) + 1L
+  grp <- split(shuffled, grp_id)
+
   indexOut <- lapply(seq_along(grp), function(i) which(block_ids %in% grp[[i]]))
   names(indexOut) <- paste0("block_", seq_along(indexOut))
+
   index <- lapply(indexOut, function(te) {
     excl <- compute_buffer_exclusion_idx(train_meta, te, buffer_radius)
     setdiff(seq_len(nrow(train_meta)), unique(c(te, excl)))
   })
   names(index) <- names(indexOut)
-  keep <- vapply(index, length, integer(1)) > 0 & vapply(indexOut, length, integer(1)) > 0
-  list(index = index[keep], indexOut = indexOut[keep])
+
+  keep <- vapply(index, length, integer(1)) > 0L &
+    vapply(indexOut, length, integer(1)) > 0L
+
+  index <- index[keep]
+  indexOut <- indexOut[keep]
+
+  if (length(index) < 2L) {
+    stop(
+      "Spatial CV failed: fewer than 2 valid folds after buffer exclusion. ",
+      "Try smaller buffer_radius, smaller block_size, or fewer cv_folds."
+    )
+  }
+
+  list(index = index, indexOut = indexOut)
 }
+
 
 build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) {
   strategy <- as.character(split_info$strategy %||% "random")
