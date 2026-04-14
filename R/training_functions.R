@@ -481,71 +481,6 @@ make_loso_cv_indices <- function(train_meta) {
 }
 
 
-make_spatial_block_cv_indices <- function(train_meta, cv_folds, block_size = 25L,
-                                          buffer_radius = 0, seed = 1234L) {
-  cv_folds <- as.integer(cv_folds)
-  if (!is.finite(cv_folds) || cv_folds < 2L) return(NULL)
-
-  req_cols <- c("sample_id", "x", "y")
-  if (!all(req_cols %in% names(train_meta))) {
-    stop("Spatial CV requires train_meta columns: sample_id, x, y.")
-  }
-
-  keep_xy <- stats::complete.cases(train_meta[, req_cols, drop = FALSE])
-  train_meta <- train_meta[keep_xy, , drop = FALSE]
-
-  if (nrow(train_meta) < 2L) {
-    stop("Spatial CV failed: too few training pixels after removing missing coordinates.")
-  }
-
-  block_ids <- assign_spatial_block_ids(train_meta, block_size)
-  ublocks <- unique(block_ids)
-  n_blocks <- length(ublocks)
-
-  if (n_blocks < 2L) {
-    stop(
-      "Spatial CV failed: only 1 unique training block after outer split/buffer. ",
-      "Reduce block_size/buffer_radius or increase train_frac / number of samples."
-    )
-  }
-
-  k_eff <- min(cv_folds, n_blocks)
-  if (k_eff < 2L) {
-    stop("Spatial CV failed: fewer than 2 effective folds available.")
-  }
-
-  set.seed(as.integer(seed))
-  shuffled <- sample(ublocks, n_blocks)
-
-  grp_id <- ((seq_along(shuffled) - 1L) %% k_eff) + 1L
-  grp <- split(shuffled, grp_id)
-
-  indexOut <- lapply(seq_along(grp), function(i) which(block_ids %in% grp[[i]]))
-  names(indexOut) <- paste0("block_", seq_along(indexOut))
-
-  index <- lapply(indexOut, function(te) {
-    excl <- compute_buffer_exclusion_idx(train_meta, te, buffer_radius)
-    setdiff(seq_len(nrow(train_meta)), unique(c(te, excl)))
-  })
-  names(index) <- names(indexOut)
-
-  keep <- vapply(index, length, integer(1)) > 0L &
-    vapply(indexOut, length, integer(1)) > 0L
-
-  index <- index[keep]
-  indexOut <- indexOut[keep]
-
-  if (length(index) < 2L) {
-    stop(
-      "Spatial CV failed: fewer than 2 valid folds after buffer exclusion. ",
-      "Try smaller buffer_radius, smaller block_size, or fewer cv_folds."
-    )
-  }
-
-  list(index = index, indexOut = indexOut)
-}
-
-
 
 first_scalar <- function(x, default = NULL) {
   if (is.null(x) || length(x) == 0) return(default)
@@ -571,6 +506,124 @@ normalize_split_info <- function(split_info) {
   )
 }
 
+make_spatial_block_cv_indices <- function(
+    train_meta,
+    cv_folds,
+    block_size = 25L,
+    buffer_radius = 0,
+    seed = 1234L
+) {
+  cv_folds <- suppressWarnings(as.integer(cv_folds))
+  block_size <- suppressWarnings(as.numeric(block_size))
+  buffer_radius <- suppressWarnings(as.numeric(buffer_radius))
+
+  if (!is.finite(cv_folds) || cv_folds < 2L) return(NULL)
+  if (!is.finite(block_size) || block_size < 2) stop("block_size must be >= 2.")
+  if (!is.finite(buffer_radius) || buffer_radius < 0) stop("buffer_radius must be >= 0.")
+
+  req_cols <- c("sample_id", "x", "y")
+  if (!all(req_cols %in% names(train_meta))) {
+    stop("Spatial CV requires columns: sample_id, x, y.")
+  }
+
+  keep <- stats::complete.cases(train_meta[, req_cols, drop = FALSE])
+  train_meta <- train_meta[keep, , drop = FALSE]
+  if (nrow(train_meta) < 10L) stop("Too few rows for spatial CV after removing missing coordinates.")
+
+  sample_id <- as.character(train_meta$sample_id)
+  x <- as.numeric(train_meta$x)
+  y <- as.numeric(train_meta$y)
+
+  if (any(!is.finite(x)) || any(!is.finite(y))) {
+    stop("x/y coordinates contain non-finite values.")
+  }
+
+  x0 <- min(x, na.rm = TRUE)
+  y0 <- min(y, na.rm = TRUE)
+
+  bx <- floor((x - x0) / block_size)
+  by <- floor((y - y0) / block_size)
+
+  block_id <- paste(sample_id, bx, by, sep = "::")
+  row_id <- seq_len(nrow(train_meta))
+
+  part <- data.frame(
+    row_id = row_id,
+    sample_id = sample_id,
+    bx = bx,
+    by = by,
+    block_id = block_id,
+    stringsAsFactors = FALSE
+  )
+
+  block_tbl <- stats::aggregate(
+    row_id ~ block_id + sample_id + bx + by,
+    data = part,
+    FUN = length
+  )
+  names(block_tbl)[names(block_tbl) == "row_id"] <- "n"
+
+  n_blocks <- nrow(block_tbl)
+  if (n_blocks < 2L) stop("Spatial CV failed: fewer than 2 unique blocks.")
+
+  k_eff <- min(cv_folds, n_blocks)
+  if (k_eff < 2L) stop("Spatial CV failed: fewer than 2 effective folds.")
+
+  set.seed(as.integer(seed))
+  ord <- order(block_tbl$n, decreasing = TRUE)
+  ord <- ord[sample.int(length(ord))]
+
+  fold_blocks <- vector("list", k_eff)
+  fold_load <- rep(0L, k_eff)
+
+  for (i in ord) {
+    j <- which.min(fold_load)
+    fold_blocks[[j]] <- c(fold_blocks[[j]], block_tbl$block_id[i])
+    fold_load[j] <- fold_load[j] + block_tbl$n[i]
+  }
+
+  buffer_blocks <- ceiling(buffer_radius / block_size)
+
+  indexOut <- vector("list", k_eff)
+  index <- vector("list", k_eff)
+
+  for (j in seq_len(k_eff)) {
+    test_block_ids <- fold_blocks[[j]]
+    tb <- block_tbl[block_tbl$block_id %in% test_block_ids, , drop = FALSE]
+
+    is_excluded_block <- vapply(seq_len(nrow(block_tbl)), function(ii) {
+      any(
+        block_tbl$sample_id[ii] == tb$sample_id &
+          abs(block_tbl$bx[ii] - tb$bx) <= buffer_blocks &
+          abs(block_tbl$by[ii] - tb$by) <= buffer_blocks
+      )
+    }, logical(1))
+
+    excluded_block_ids <- block_tbl$block_id[is_excluded_block]
+
+    te <- which(part$block_id %in% test_block_ids)
+    tr <- which(!(part$block_id %in% excluded_block_ids))
+
+    indexOut[[j]] <- te
+    index[[j]] <- tr
+  }
+
+  keep_fold <- vapply(index, length, integer(1)) > 0L &
+    vapply(indexOut, length, integer(1)) > 0L
+
+  index <- index[keep_fold]
+  indexOut <- indexOut[keep_fold]
+
+  if (length(index) < 2L) {
+    stop("Spatial CV failed: fewer than 2 valid folds after buffer exclusion.")
+  }
+
+  names(index) <- paste0("block_", seq_along(index))
+  names(indexOut) <- names(index)
+
+  list(index = index, indexOut = indexOut)
+}
+
 build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) {
   split_info <- normalize_split_info(split_info)
   strategy <- split_info$strategy %||% "random"
@@ -583,28 +636,17 @@ build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) 
   }
 
   if (identical(strategy, "spatial_block")) {
-    bs <- split_info$block_size
-    br <- split_info$buffer_radius
-
-    if (!is.finite(bs) || bs < 2L) {
-      stop("Invalid spatial split: block_size is missing/non-numeric (<2). Recreate dataset split settings.")
-    }
-    if (!is.finite(br) || br < 0) {
-      stop("Invalid spatial split: buffer_radius is missing/non-numeric (<0). Recreate dataset split settings.")
-    }
-
     return(make_spatial_block_cv_indices(
       train_meta = train_meta,
       cv_folds = cv_folds,
-      block_size = as.integer(bs),
-      buffer_radius = as.numeric(br),
+      block_size = split_info$block_size %||% 25L,
+      buffer_radius = split_info$buffer_radius %||% 0,
       seed = seed
     ))
   }
 
   make_random_cv_indices(nrow(train_meta), cv_folds, seed)
 }
-
 
 # ---------------------------------------------------------------------------
 # train_ranger_from_dataset()
@@ -659,7 +701,7 @@ train_ranger_from_dataset <- function(
   test_y     <- data$test_y
   train_meta <- data$train_meta %||% NULL
   test_meta  <- data$test_meta %||% NULL
-  split_info <- normalize_split_info(data$split_info)
+  split_info <- data$split_info %||% list(strategy = "random")
   dataset_meta <- data$dataset_meta %||% NULL
 
   message("[train] Applying normalization: ", normalize_method)
