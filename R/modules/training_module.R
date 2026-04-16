@@ -342,8 +342,8 @@ training_module_server <- function(id) {
                   tags$small(
                     paste0(
                       "Features contributing to correlogram/buffer: ", nrow(range_tbl),
-                      " | median range: ", round(stats::median(range_tbl$range_estimate, na.rm = TRUE), 2), " px",
-                      " | 75% range: ", round(stats::quantile(range_tbl$range_estimate, 0.75, na.rm = TRUE), 2), " px"
+                      " | median local decay: ", round(stats::median(range_tbl$range_estimate, na.rm = TRUE), 2), " px",
+                      " | 75% local decay: ", round(stats::quantile(range_tbl$range_estimate, 0.75, na.rm = TRUE), 2), " px"
                     )
                   )
                 )
@@ -573,7 +573,7 @@ training_module_server <- function(id) {
         ggplot2::geom_line(linewidth = 0.2, alpha = 0.55) +
         ggplot2::labs(
           title = "Feature Moran correlogram",
-          subtitle = "All features shown; suggested buffer based on median range",
+          subtitle = "All features shown; suggested buffer based on first local Moran decay",
           x = "Pixel distance",
           y = "Moran's I"
         ) +

@@ -176,6 +176,47 @@ compute_moran_correlogram <- function(
   do.call(rbind, out)
 }
 
+estimate_local_decay_distance <- function(
+    corr_df_one_feature,
+    threshold_fraction = 0.10
+) {
+  if (!is.data.frame(corr_df_one_feature) || nrow(corr_df_one_feature) == 0L) {
+    return(NA_real_)
+  }
+
+  corr_df_one_feature <- corr_df_one_feature |>
+    dplyr::arrange(distance_mid)
+
+  moran_vals <- as.numeric(corr_df_one_feature$moran_i)
+  dist_vals  <- as.numeric(corr_df_one_feature$distance_mid)
+
+  ok <- is.finite(moran_vals) & is.finite(dist_vals)
+  moran_vals <- moran_vals[ok]
+  dist_vals  <- dist_vals[ok]
+
+  if (length(moran_vals) == 0L) return(NA_real_)
+
+  peak_i <- suppressWarnings(max(moran_vals, na.rm = TRUE))
+  if (!is.finite(peak_i) || peak_i <= 0) return(NA_real_)
+
+  threshold_value <- threshold_fraction * peak_i
+
+  idx_below_frac <- which(moran_vals <= threshold_value)
+  idx_below_zero <- which(moran_vals <= 0)
+
+  idx_first <- c(
+    if (length(idx_below_frac) > 0) min(idx_below_frac) else NA_integer_,
+    if (length(idx_below_zero) > 0) min(idx_below_zero) else NA_integer_
+  )
+
+  idx_first <- idx_first[is.finite(idx_first)]
+
+  if (length(idx_first) == 0L) {
+    return(NA_real_)
+  }
+
+  dist_vals[min(idx_first)]
+}
 
 compute_global_moran_for_features <- function(
     X,
@@ -428,44 +469,56 @@ compute_feature_moran_diagnostics <- function(
     empty_res$feature_correlogram
   }
 
-  range_tbl <- if (nrow(corr_df) > 0L) {
-    corr_df |>
-      dplyr::group_by(feature) |>
-      dplyr::arrange(distance_mid, .by_group = TRUE) |>
-      dplyr::summarise(
-        range_estimate = {
-          idx <- which(moran_i <= 0)
-          if (length(idx) == 0) NA_real_ else distance_mid[min(idx)]
-        },
-        .groups = "drop"
-      ) |>
-      dplyr::filter(is.finite(range_estimate))
-  } else {
-    empty_res$feature_range_summary
-  }
+    range_tbl <- if (nrow(corr_df) > 0L) {
+      corr_df |>
+        dplyr::group_by(feature) |>
+        dplyr::group_modify(~{
+          data.frame(
+            range_estimate = estimate_local_decay_distance(
+              corr_df_one_feature = .x,
+              threshold_fraction = 0.10
+            )
+          )
+        }) |>
+        dplyr::ungroup() |>
+        dplyr::filter(is.finite(range_estimate))
+    } else {
+      empty_res$feature_range_summary
+    }
 
-  recommended_buffer_radius <- estimate_practical_range(
-    corr_df = corr_df,
-    threshold_fraction = 0.25
-  )
+    if (nrow(range_tbl) > 0L) {
+      upper_trim_cutoff <- stats::quantile(
+        range_tbl$range_estimate,
+        probs = 0.85,
+        na.rm = TRUE,
+        names = FALSE
+      )
 
-  if (!is.finite(recommended_buffer_radius) && nrow(range_tbl) > 0L) {
-    recommended_buffer_radius <- stats::median(range_tbl$range_estimate, na.rm = TRUE)
-  }
+      range_tbl_for_buffer <- range_tbl |>
+        dplyr::filter(range_estimate <= upper_trim_cutoff)
+    } else {
+      range_tbl_for_buffer <- range_tbl
+    }
 
-  recommended_block_size <- if (is.finite(recommended_buffer_radius) && recommended_buffer_radius > 0) {
-    max(4, ceiling(recommended_buffer_radius))
-  } else {
-    NA_real_
-  }
+    recommended_buffer_radius <- if (nrow(range_tbl_for_buffer) > 0L) {
+      stats::median(range_tbl_for_buffer$range_estimate, na.rm = TRUE)
+    } else {
+      NA_real_
+    }
 
-  list(
-    feature_moran_summary = moran_tbl,
-    feature_correlogram = corr_df,
-    feature_range_summary = range_tbl,
-    recommended_buffer_radius = as.numeric(recommended_buffer_radius),
-    recommended_block_size = as.numeric(recommended_block_size)
-  )
+    recommended_block_size <- if (is.finite(recommended_buffer_radius) && recommended_buffer_radius > 0) {
+      max(4, ceiling(recommended_buffer_radius))
+    } else {
+      NA_real_
+    }
+
+    list(
+      feature_moran_summary = moran_tbl,
+      feature_correlogram = corr_df,
+      feature_range_summary = range_tbl,
+      recommended_buffer_radius = as.numeric(recommended_buffer_radius),
+      recommended_block_size = as.numeric(recommended_block_size)
+    )
 }
 
 
