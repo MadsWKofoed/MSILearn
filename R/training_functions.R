@@ -71,7 +71,7 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
 compute_moran_correlogram <- function(
     coords,
     values,
-    n_bins = 15L,
+    n_bins = 50L,
     max_dist = NULL,
     min_pairs = 30L
 ) {
@@ -178,7 +178,7 @@ compute_moran_correlogram <- function(
 
 estimate_local_decay_distance <- function(
     corr_df_one_feature,
-    threshold_fraction = 0.10
+    threshold_fraction = 0.05
 ) {
   if (!is.data.frame(corr_df_one_feature) || nrow(corr_df_one_feature) == 0L) {
     return(NA_real_)
@@ -335,7 +335,7 @@ compute_feature_moran_diagnostics <- function(
     X,
     meta,
     max_points = 3000L,
-    n_bins = 15L,
+    n_bins = 50L,
     seed = 1234L,
     workers = 20L
 ) {
