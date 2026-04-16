@@ -334,8 +334,9 @@ compute_global_moran_for_features <- function(
 compute_feature_moran_diagnostics <- function(
     X,
     meta,
-    max_points = 3000L,
+    max_points = 1200L,
     n_bins = 50L,
+    local_decay_threshold = 0.05,
     seed = 1234L,
     workers = 20L
 ) {
@@ -476,7 +477,7 @@ compute_feature_moran_diagnostics <- function(
           data.frame(
             range_estimate = estimate_local_decay_distance(
               corr_df_one_feature = .x,
-              threshold_fraction = 0.10
+              threshold_fraction = local_decay_threshold
             )
           )
         }) |>
