@@ -858,9 +858,7 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("Split strategy"), tags$td(first_chr(hp[["split_strategy"]]))),
                 tags$tr(tags$td("Block size"), tags$td(first_chr(hp[["split_block_size"]]))),
                 tags$tr(tags$td("Buffer radius"), tags$td(first_chr(hp[["split_buffer_radius"]]))),
-                tags$tr(tags$td("Min pixels per merged block"), tags$td(first_chr(hp[["split_min_pixels_per_block"]]))),
-                tags$tr(tags$td("PCA Moran PCs"), tags$td(first_chr(hp[["pca_moran_n_pcs"]]))),
-                tags$tr(tags$td("PCA Moran max points"), tags$td(first_chr(hp[["pca_moran_max_points"]])))
+                tags$tr(tags$td("Min pixels per merged block"), tags$td(first_chr(hp[["split_min_pixels_per_block"]])))
               )
             ),
             column(4,
@@ -915,28 +913,6 @@ training_module_server <- function(id) {
             column(3)
           ),
 
-          tags$br(),
-
-          tags$div(
-            style="margin-bottom:10px;",
-            tags$h4(
-              "PCA Moran Correlogram (PC1–PC5)",
-              style="font-weight:600; margin-bottom:6px;"
-            ),
-            tags$p(
-              style = "font-size:13px; color:#666; margin-bottom:8px;",
-              "Used to estimate a reasonable pixel buffer where spatial autocorrelation falls toward zero."
-            )
-          ),
-
-          fluidRow(
-            column(1),
-            column(
-              10,
-              plotOutput(ns("moran_plot"), height = "450px")
-            ),
-            column(1)
-          ),
 
           tags$br(),
 
@@ -1007,105 +983,6 @@ training_module_server <- function(id) {
         )
     })
 
-    # ── PCA Moran correlogram plot ───────────────────────────────────────
-    output$moran_plot <- renderPlot({
-      first_num_local <- function(x) {
-        if (is.null(x) || length(x) == 0) return(NA_real_)
-        suppressWarnings(as.numeric(x[1]))
-      }
-
-      rid <- selected_run_id()
-      req(rid, nzchar(rid))
-      row <- get_model_run(rid)
-      req(!is.null(row) && nrow(row) > 0)
-
-      m <- extract_subdoc(row, "metrics")
-      if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
-
-      moran_raw <- m[["pca_moran_correlogram"]]
-      if (is.null(moran_raw)) return(NULL)
-
-      moran_df <- moran_raw
-      while (is.list(moran_df) && !is.data.frame(moran_df)) moran_df <- moran_df[[1]]
-      req(is.data.frame(moran_df), nrow(moran_df) > 0)
-
-      range_raw <- m[["pca_moran_range_summary"]]
-      range_df <- range_raw
-      while (is.list(range_df) && !is.data.frame(range_df)) range_df <- range_df[[1]]
-      if (!is.data.frame(range_df)) {
-        range_df <- data.frame(pc = character(0), range_estimate = numeric(0))
-      }
-
-      varexp_raw <- m[["pca_var_explained"]]
-      varexp_df <- varexp_raw
-      while (is.list(varexp_df) && !is.data.frame(varexp_df)) varexp_df <- varexp_df[[1]]
-      if (is.data.frame(varexp_df) && nrow(varexp_df) > 0) {
-        moran_df <- dplyr::left_join(moran_df, varexp_df, by = "pc")
-        moran_df$pc_label <- sprintf(
-          "%s (%.1f%% var)",
-          moran_df$pc,
-          100 * moran_df$variance_explained
-        )
-      } else {
-        moran_df$pc_label <- moran_df$pc
-      }
-
-      p <- ggplot2::ggplot(
-        moran_df,
-        ggplot2::aes(x = distance_mid, y = moran_i, color = pc_label)
-      ) +
-        ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
-        ggplot2::geom_line(linewidth = 1) +
-        ggplot2::geom_point(size = 2) +
-        ggplot2::labs(
-          x = "Pixel distance",
-          y = "Moran's I",
-          color = NULL
-        ) +
-        ggplot2::theme_minimal(base_size = 13) +
-        ggplot2::theme(
-          legend.position = "bottom",
-          legend.text = ggplot2::element_text(size = 11),
-          axis.title = ggplot2::element_text(size = 13),
-          axis.text = ggplot2::element_text(size = 11)
-        )
-
-      if (nrow(range_df) > 0) {
-        if (is.data.frame(varexp_df) && nrow(varexp_df) > 0) {
-          range_df <- dplyr::left_join(range_df, varexp_df, by = "pc")
-          range_df$pc_label <- sprintf(
-            "%s (%.1f%% var)",
-            range_df$pc,
-            100 * range_df$variance_explained
-          )
-        } else {
-          range_df$pc_label <- range_df$pc
-        }
-        p <- p + ggplot2::geom_vline(
-          data = range_df,
-          ggplot2::aes(xintercept = range_estimate, color = pc_label),
-          linetype = "dotted",
-          alpha = 0.7,
-          show.legend = FALSE
-        )
-      }
-
-      rec_buf <- first_num_local(m[["recommended_buffer_radius"]])
-      if (is.finite(rec_buf)) {
-        p <- p + ggplot2::annotate(
-          "text",
-          x = rec_buf,
-          y = max(moran_df$moran_i, na.rm = TRUE),
-          label = paste0("Suggested buffer ≈ ", round(rec_buf, 1), " px"),
-          vjust = -0.5,
-          hjust = 0,
-          size = 4
-        ) +
-          ggplot2::geom_vline(xintercept = rec_buf, linetype = "longdash", alpha = 0.6)
-      }
-
-      p
-    })
 
     # ── ROC curve plot ────────────────────────────────────────────────────
     output$roc_plot <- renderPlot({
