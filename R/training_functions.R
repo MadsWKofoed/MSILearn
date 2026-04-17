@@ -71,7 +71,7 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
 compute_moran_correlogram <- function(
     coords,
     values,
-    n_bins = 50L,
+    n_bins = 150L,
     max_dist = NULL,
     min_pairs = 30L
 ) {
@@ -335,7 +335,7 @@ compute_feature_moran_diagnostics <- function(
     X,
     meta,
     max_points = 1200L,
-    n_bins = 50L,
+    n_bins = 150L,
     local_decay_threshold = 0.9,
     seed = 1234L,
     workers = 20L

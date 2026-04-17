@@ -258,7 +258,7 @@ training_module_server <- function(id) {
           X = X_est,
           meta = src$meta,
           max_points = 1200L,
-          n_bins = 50L,
+          n_bins = 150L,
           local_decay_threshold = 0.9,
           seed = as.integer(input$ds_seed %||% 42L),
           workers = max(1L, parallel::detectCores() - 10L)
