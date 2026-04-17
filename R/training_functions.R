@@ -336,7 +336,7 @@ compute_feature_moran_diagnostics <- function(
     meta,
     max_points = 1200L,
     n_bins = 50L,
-    local_decay_threshold = 0.1,
+    local_decay_threshold = 0.9,
     seed = 1234L,
     workers = 20L
 ) {
