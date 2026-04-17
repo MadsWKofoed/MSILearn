@@ -258,8 +258,10 @@ training_module_server <- function(id) {
           X = X_est,
           meta = src$meta,
           max_points = 1200L,
-          n_bins = 150L,
-          local_decay_threshold = 0.9,
+          lag_breaks = NULL,
+          max_dist = 1500,
+          max_pairs_per_bin = 5000L,
+          local_decay_threshold = 0.10,
           seed = as.integer(input$ds_seed %||% 42L),
           workers = max(1L, parallel::detectCores() - 10L)
         )
@@ -396,7 +398,7 @@ training_module_server <- function(id) {
 
           diag_info <- estimate_diag_rv()
           if (!is.null(diag_info)) {
-            split_obj$diagnostic_method <- "feature_moran_correlogram"
+            split_obj$diagnostic_method <- "sampled_moran_correlogram"
 
             moran_tbl <- diag_info$feature_moran_summary
             range_tbl <- diag_info$feature_range_summary
@@ -573,8 +575,8 @@ training_module_server <- function(id) {
         ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
         ggplot2::geom_line(linewidth = 0.2, alpha = 0.55) +
         ggplot2::labs(
-          title = "Feature Moran correlogram",
-          subtitle = "All features shown; suggested buffer based on first local Moran decay",
+          title = "Sampled Moran correlogram",
+          subtitle = "All features shown; fixed pair sampling per lag bin; suggested buffer based on first local Moran decay",
           x = "Pixel distance",
           y = "Moran's I"
         ) +

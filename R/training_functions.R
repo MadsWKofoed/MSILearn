@@ -61,119 +61,194 @@ normalize_feature_matrix <- function(X, method = c("none", "tic", "median", "rms
 
 
 # ---------------------------------------------------------------------------
-# PCA + Moran correlogram diagnostics on training pixels
+# Moran correlogram diagnostics on training pixels
 # ---------------------------------------------------------------------------
 
 .compute_distance_matrix <- function(coords) {
   as.matrix(stats::dist(coords))
 }
 
-compute_moran_correlogram <- function(
-    coords,
-    values,
-    n_bins = 150L,
-    max_dist = NULL,
-    min_pairs = 30L
-) {
-  stopifnot(nrow(coords) == length(values))
+build_pair_sampling_lag_breaks <- function(max_dist) {
+  max_dist <- suppressWarnings(as.numeric(max_dist))
+  if (!is.finite(max_dist) || max_dist <= 1) {
+    return(c(0, 1))
+  }
 
+  br <- c(
+    seq(0, min(20, max_dist), by = 1),
+    seq(20, min(50, max_dist), by = 2),
+    seq(50, min(100, max_dist), by = 5),
+    seq(100, min(300, max_dist), by = 10),
+    seq(300, min(500, max_dist), by = 25)
+  )
+
+  if (max_dist > 500) {
+    br <- c(br, seq(500, max_dist, by = 25))
+  }
+
+  br <- sort(unique(as.numeric(br)))
+  br <- br[is.finite(br)]
+
+  if (length(br) < 2L) {
+    br <- c(0, max_dist)
+  }
+
+  if (tail(br, 1) < max_dist) {
+    br <- c(br, max_dist)
+  }
+
+  sort(unique(br))
+}
+
+build_sampled_pair_structure <- function(
+    coords,
+    lag_breaks = NULL,
+    max_dist = NULL,
+    max_pairs_per_bin = 5000L,
+    min_pairs = 30L,
+    seed = 1234L
+) {
   coords <- as.matrix(coords)
   storage.mode(coords) <- "numeric"
-  values <- as.numeric(values)
 
-  ok <- is.finite(values) & stats::complete.cases(coords)
-  coords <- coords[ok, , drop = FALSE]
-  values <- values[ok]
-
-  if (nrow(coords) < 10L) {
-    return(data.frame(
-      distance_mid = numeric(0),
+  empty_res <- list(
+    pair_i = integer(0),
+    pair_j = integer(0),
+    bins = data.frame(
+      bin_id = integer(0),
       distance_min = numeric(0),
       distance_max = numeric(0),
-      moran_i = numeric(0),
-      n_pairs = integer(0)
-    ))
-  }
-
-  z <- values - mean(values)
-  denom <- sum(z^2)
-  if (!is.finite(denom) || denom <= 0) {
-    return(data.frame(
       distance_mid = numeric(0),
-      distance_min = numeric(0),
-      distance_max = numeric(0),
-      moran_i = numeric(0),
-      n_pairs = integer(0)
-    ))
-  }
+      n_pairs = integer(0),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  if (nrow(coords) < 10L) return(empty_res)
 
   dmat <- .compute_distance_matrix(coords)
-  upper_idx <- upper.tri(dmat, diag = FALSE)
+  upper_idx <- which(upper.tri(dmat, diag = FALSE), arr.ind = TRUE)
 
-  dists <- dmat[upper_idx]
+  dists <- as.numeric(dmat[upper.tri(dmat, diag = FALSE)])
+
   if (is.null(max_dist)) {
     max_dist <- stats::quantile(dists, probs = 0.9, na.rm = TRUE, names = FALSE)
   }
 
-  if (!is.finite(max_dist) || max_dist <= 0) {
-    return(data.frame(
-      distance_mid = numeric(0),
-      distance_min = numeric(0),
-      distance_max = numeric(0),
-      moran_i = numeric(0),
-      n_pairs = integer(0)
-    ))
+  if (!is.finite(max_dist) || max_dist <= 0) return(empty_res)
+
+  if (is.null(lag_breaks)) {
+    lag_breaks <- build_pair_sampling_lag_breaks(max_dist = max_dist)
   }
 
-  breaks <- unique(as.numeric(seq(0, max_dist, length.out = n_bins + 1L)))
-  if (length(breaks) < 2L) {
-    return(data.frame(
-      distance_mid = numeric(0),
-      distance_min = numeric(0),
-      distance_max = numeric(0),
-      moran_i = numeric(0),
-      n_pairs = integer(0)
-    ))
+  lag_breaks <- sort(unique(as.numeric(lag_breaks)))
+  lag_breaks <- lag_breaks[is.finite(lag_breaks)]
+
+  if (length(lag_breaks) < 2L) return(empty_res)
+
+  if (tail(lag_breaks, 1) < max_dist) {
+    lag_breaks <- c(lag_breaks, max_dist)
   }
 
-  zi <- outer(z, z, "*")
-  zij <- zi[upper_idx]
+  set.seed(as.integer(seed))
 
-  out <- lapply(seq_len(length(breaks) - 1L), function(i) {
-    lo <- breaks[i]
-    hi <- breaks[i + 1L]
-    pick <- dists >= lo & dists < hi
+  pair_i_all <- integer(0)
+  pair_j_all <- integer(0)
+  bins_out <- vector("list", length(lag_breaks) - 1L)
 
-    n_pairs_i <- sum(pick)
-    if (n_pairs_i < min_pairs) {
-      return(NULL)
+  for (b in seq_len(length(lag_breaks) - 1L)) {
+    lo <- lag_breaks[b]
+    hi <- lag_breaks[b + 1L]
+
+    if (b < (length(lag_breaks) - 1L)) {
+      pick <- which(dists >= lo & dists < hi)
+    } else {
+      pick <- which(dists >= lo & dists <= hi)
     }
 
-    s0 <- 2 * n_pairs_i
-    num <- 2 * sum(zij[pick], na.rm = TRUE)
-    moran_i <- (length(z) / s0) * (num / denom)
+    if (length(pick) < min_pairs) {
+      bins_out[[b]] <- NULL
+      next
+    }
 
-    data.frame(
-      distance_mid = (lo + hi) / 2,
+    if (length(pick) > max_pairs_per_bin) {
+      pick <- sample(pick, size = max_pairs_per_bin, replace = FALSE)
+    }
+
+    pair_i_all <- c(pair_i_all, upper_idx[pick, 1])
+    pair_j_all <- c(pair_j_all, upper_idx[pick, 2])
+
+    bins_out[[b]] <- data.frame(
+      bin_id = b,
       distance_min = lo,
       distance_max = hi,
-      moran_i = moran_i,
-      n_pairs = n_pairs_i
+      distance_mid = (lo + hi) / 2,
+      n_pairs = length(pick),
+      stringsAsFactors = FALSE
     )
-  })
-
-  out <- Filter(Negate(is.null), out)
-  if (length(out) == 0L) {
-    return(data.frame(
-      distance_mid = numeric(0),
-      distance_min = numeric(0),
-      distance_max = numeric(0),
-      moran_i = numeric(0),
-      n_pairs = integer(0)
-    ))
   }
 
-  do.call(rbind, out)
+  bins_df <- dplyr::bind_rows(bins_out)
+
+  if (nrow(bins_df) == 0L) return(empty_res)
+
+  list(
+    pair_i = pair_i_all,
+    pair_j = pair_j_all,
+    bins = bins_df
+  )
+}
+
+compute_sampled_moran_from_pair_structure <- function(
+    values,
+    pair_structure
+) {
+  empty_df <- data.frame(
+    distance_mid = numeric(0),
+    distance_min = numeric(0),
+    distance_max = numeric(0),
+    moran_i = numeric(0),
+    n_pairs = integer(0)
+  )
+
+  if (is.null(pair_structure) || length(pair_structure$pair_i) == 0L) {
+    return(empty_df)
+  }
+
+  values <- as.numeric(values)
+  ok <- is.finite(values)
+  if (!all(ok)) return(empty_df)
+
+  z <- values - mean(values)
+  denom <- sum(z^2)
+  if (!is.finite(denom) || denom <= 0) return(empty_df)
+
+  pair_i <- pair_structure$pair_i
+  pair_j <- pair_structure$pair_j
+  bins_df <- pair_structure$bins
+
+  zij <- z[pair_i] * z[pair_j]
+
+  out <- vector("list", nrow(bins_df))
+  offset <- 0L
+
+  for (k in seq_len(nrow(bins_df))) {
+    m <- bins_df$n_pairs[k]
+    idx <- seq.int(from = offset + 1L, length.out = m)
+    offset <- offset + m
+
+    moran_i <- length(z) * mean(zij[idx], na.rm = TRUE) / denom
+
+    out[[k]] <- data.frame(
+      distance_mid = bins_df$distance_mid[k],
+      distance_min = bins_df$distance_min[k],
+      distance_max = bins_df$distance_max[k],
+      moran_i = moran_i,
+      n_pairs = m
+    )
+  }
+
+  dplyr::bind_rows(out)
 }
 
 estimate_local_decay_distance <- function(
@@ -335,8 +410,10 @@ compute_feature_moran_diagnostics <- function(
     X,
     meta,
     max_points = 1200L,
-    n_bins = 150L,
-    local_decay_threshold = 0.9,
+    lag_breaks = NULL,
+    max_dist = NULL,
+    max_pairs_per_bin = 5000L,
+    local_decay_threshold = 0.10,
     seed = 1234L,
     workers = 20L
 ) {
@@ -406,6 +483,19 @@ compute_feature_moran_diagnostics <- function(
 
   coords <- as.matrix(meta_corr[, req_cols, drop = FALSE])
 
+  pair_structure <- build_sampled_pair_structure(
+    coords = coords,
+    lag_breaks = lag_breaks,
+    max_dist = max_dist,
+    max_pairs_per_bin = max_pairs_per_bin,
+    min_pairs = 30L,
+    seed = seed
+  )
+
+  if (length(pair_structure$pair_i) == 0L || nrow(pair_structure$bins) == 0L) {
+    return(empty_res)
+  }
+
   candidate_tbl <- moran_tbl |>
     dplyr::filter(
       is.finite(moran_i),
@@ -423,22 +513,19 @@ compute_feature_moran_diagnostics <- function(
       cl,
       varlist = c(
         "X_corr",
-        "coords",
-        "n_bins",
-        "compute_moran_correlogram",
-        ".compute_distance_matrix"
+        "pair_structure",
+        "compute_sampled_moran_from_pair_structure"
       ),
       envir = environment()
     )
 
     corr_list <- parallel::parLapply(cl, feature_names, function(feat) {
-      j <- match(feat, colnames(X))
+      j <- match(feat, colnames(X_corr))
       vals <- X_corr[, j]
 
-      corr <- compute_moran_correlogram(
-        coords = coords,
+      corr <- compute_sampled_moran_from_pair_structure(
         values = vals,
-        n_bins = n_bins
+        pair_structure = pair_structure
       )
       if (nrow(corr) == 0L) return(NULL)
 
@@ -447,13 +534,12 @@ compute_feature_moran_diagnostics <- function(
     })
   } else {
     corr_list <- lapply(feature_names, function(feat) {
-      j <- match(feat, colnames(X))
+      j <- match(feat, colnames(X_corr))
       vals <- X_corr[, j]
 
-      corr <- compute_moran_correlogram(
-        coords = coords,
+      corr <- compute_sampled_moran_from_pair_structure(
         values = vals,
-        n_bins = n_bins
+        pair_structure = pair_structure
       )
       if (nrow(corr) == 0L) return(NULL)
 
