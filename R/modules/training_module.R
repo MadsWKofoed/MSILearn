@@ -42,7 +42,8 @@ training_module_ui <- function(id) {
             uiOutput(ns("estimate_spatial_text")),
             plotOutput(ns("estimate_moran_plot"), height = "360px"),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
-            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
+            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
+            uiOutput(ns("spatial_preview_ui"))
           ),
           numericInput(ns("ds_seed"), "Split seed:", value = 42, min = 1),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
@@ -112,11 +113,12 @@ training_module_server <- function(id) {
 
     ns <- session$ns
 
-    log_val        <- reactiveVal("")
-    last_run_id    <- reactiveVal(NULL)
+    log_val         <- reactiveVal("")
+    last_run_id     <- reactiveVal(NULL)
     selected_run_id <- reactiveVal(NULL)
     estimate_diag_rv <- reactiveVal(NULL)
     estimate_diag_label_rv <- reactiveVal("")
+    preview_src_rv  <- reactiveVal(NULL)
 
 
     selected_dataset_split_strategy <- reactive({
@@ -134,6 +136,183 @@ training_module_server <- function(id) {
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
     }
+
+    make_class_count_wide <- function(labels, groups, all_levels = NULL) {
+      labels <- as.factor(labels)
+      if (is.null(all_levels)) {
+        all_levels <- levels(labels)
+      }
+
+      df <- data.frame(
+        group = as.character(groups),
+        class = as.character(labels),
+        stringsAsFactors = FALSE
+      )
+
+      out <- as.data.frame.matrix(table(
+        factor(df$group),
+        factor(df$class, levels = all_levels)
+      ))
+
+      out <- cbind(group = rownames(out), out, row.names = NULL, stringsAsFactors = FALSE)
+      names(out)[1] <- "Group"
+      out
+    }
+
+    make_fold_preview_table <- function(cv_idx, y, all_levels = NULL) {
+      y <- as.factor(y)
+      if (is.null(all_levels)) {
+        all_levels <- levels(y)
+      }
+
+      fold_rows <- lapply(seq_along(cv_idx$index), function(i) {
+        tr_idx <- cv_idx$index[[i]]
+        te_idx <- cv_idx$indexOut[[i]]
+
+        tr_tab <- table(factor(y[tr_idx], levels = all_levels))
+        te_tab <- table(factor(y[te_idx], levels = all_levels))
+
+        row <- data.frame(
+          Fold = i,
+          Train_n = length(tr_idx),
+          Test_n = length(te_idx),
+          stringsAsFactors = FALSE
+        )
+
+        for (cls in all_levels) {
+          row[[paste0("Train_", cls)]] <- as.integer(tr_tab[[cls]])
+          row[[paste0("Test_", cls)]]  <- as.integer(te_tab[[cls]])
+        }
+
+        row
+      })
+
+      dplyr::bind_rows(fold_rows)
+    }
+
+    render_preview_table <- function(df, title_text, subtitle_text = NULL) {
+      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(NULL)
+
+      tagList(
+        tags$div(
+          style = "margin-top:8px; margin-bottom:4px;",
+          tags$b(title_text),
+          if (!is.null(subtitle_text)) {
+            tagList(
+              tags$br(),
+              tags$small(style = "color:#666;", subtitle_text)
+            )
+          }
+        ),
+        tags$div(
+          style = "max-height:220px; overflow-y:auto; border:1px solid #ddd; padding:4px; background:#fff;",
+          tags$table(
+            class = "table table-condensed table-bordered",
+            style = "font-size:12px; margin-bottom:0;",
+            tags$thead(
+              tags$tr(lapply(names(df), tags$th))
+            ),
+            tags$tbody(
+              lapply(seq_len(nrow(df)), function(i) {
+                tags$tr(lapply(df[i, , drop = FALSE], function(x) tags$td(as.character(x[[1]]))))
+              })
+            )
+          )
+        )
+      )
+    }
+
+    spatial_preview_tables <- reactive({
+      req((input$ds_split_strategy %||% "random") == "spatial_block")
+
+      src <- preview_src_rv()
+      req(!is.null(src), is.matrix(src$X), length(src$y) > 0, is.data.frame(src$meta))
+
+      block_size <- suppressWarnings(as.integer(input$ds_block_size))
+      buffer_radius <- suppressWarnings(as.numeric(input$ds_buffer_radius))
+      train_frac <- suppressWarnings(as.numeric(input$ds_train_frac))
+      split_seed <- suppressWarnings(as.integer(input$ds_seed))
+
+      req(is.finite(block_size), block_size >= 2)
+      req(is.finite(buffer_radius), buffer_radius >= 0)
+      req(is.finite(train_frac), train_frac > 0, train_frac < 1)
+      req(is.finite(split_seed))
+
+      y_all <- as.factor(src$y)
+      class_levels <- levels(y_all)
+
+      split_idx <- make_outer_split_indices(
+        meta = src$meta,
+        split_strategy = "spatial_block",
+        split_seed = split_seed,
+        train_frac = train_frac,
+        block_size = block_size,
+        buffer_radius = buffer_radius
+      )
+
+      tr_idx <- split_idx$train_idx
+      te_idx <- split_idx$test_idx
+      excl_idx <- setdiff(seq_len(nrow(src$meta)), c(tr_idx, te_idx))
+
+      outer_groups <- rep(NA_character_, nrow(src$meta))
+      outer_groups[tr_idx] <- "Final train"
+      outer_groups[te_idx] <- "Final test"
+      if (length(excl_idx) > 0) {
+        outer_groups[excl_idx] <- "Buffer excluded"
+      }
+
+      outer_tbl <- make_class_count_wide(
+        labels = y_all,
+        groups = outer_groups,
+        all_levels = class_levels
+      )
+
+      spatial_rec <- recommend_spatial_params(
+        meta = src$meta,
+        block_size = block_size,
+        merge_frac = 0.60,
+        max_cv_folds = 10L
+      )
+
+      cv_tbl <- NULL
+      recommended_folds <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
+
+      if (is.finite(recommended_folds) && recommended_folds >= 2 && length(tr_idx) > 0) {
+        train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
+        train_y_preview <- y_all[tr_idx]
+
+        split_info_preview <- list(
+          strategy = "spatial_block",
+          block_size = block_size,
+          buffer_radius = buffer_radius,
+          min_pixels_per_block = block_merge_threshold(block_size, frac = 0.60)
+        )
+
+        cv_idx <- tryCatch(
+          build_cv_indices_from_split(
+            train_meta = train_meta_preview,
+            split_info = split_info_preview,
+            cv_folds = recommended_folds,
+            seed = split_seed
+          ),
+          error = function(e) NULL
+        )
+
+        if (!is.null(cv_idx)) {
+          cv_tbl <- make_fold_preview_table(
+            cv_idx = cv_idx,
+            y = train_y_preview,
+            all_levels = class_levels
+          )
+        }
+      }
+
+      list(
+        outer_tbl = outer_tbl,
+        cv_tbl = cv_tbl,
+        recommended_folds = recommended_folds
+      )
+    })
 
     # ── Study dropdown ────────────────────────────────────────────────────
     load_ds_studies <- function() {
@@ -455,6 +634,40 @@ training_module_server <- function(id) {
       })
     }, ignoreInit = TRUE)
 
+
+    observeEvent(
+      list(input$ds_study, input$ds_pipeline, input$ds_ann_set, input$ds_samples, input$ds_split_strategy),
+      {
+        sid      <- input$ds_study
+        samp_ids <- input$ds_samples
+        pid      <- input$ds_pipeline
+        ann_id   <- input$ds_ann_set
+        strategy <- input$ds_split_strategy %||% "random"
+
+        preview_src_rv(NULL)
+
+        if (strategy != "spatial_block") return()
+        if (!nzchar(sid %||% "")) return()
+        if (length(samp_ids) == 0) return()
+        if (!nzchar(pid %||% "")) return()
+        if (!nzchar(ann_id %||% "")) return()
+
+        tryCatch({
+          src <- materialize_training_source(
+            sample_ids = samp_ids,
+            pipeline_id = pid,
+            annotation_set_id = ann_id,
+            stage_type = "binned_dataframe"
+          )
+          preview_src_rv(src)
+        }, error = function(e) {
+          preview_src_rv(NULL)
+        })
+      },
+      ignoreInit = TRUE
+    )
+
+
     # ── Dataset list ──────────────────────────────────────────────────────
     observe({
       input$refresh_datasets
@@ -520,6 +733,32 @@ training_module_server <- function(id) {
         tags$small(style = "color:red", "Could not load dataset info.")
       )
     })
+
+
+    output$spatial_preview_ui <- renderUI({
+      if ((input$ds_split_strategy %||% "random") != "spatial_block") return(NULL)
+
+      prev <- tryCatch(spatial_preview_tables(), error = function(e) NULL)
+      if (is.null(prev)) return(NULL)
+
+      tagList(
+        render_preview_table(
+          prev$outer_tbl,
+          title_text = "Final split class counts",
+          subtitle_text = "Counts per class in final train, final test, and buffer-excluded pixels."
+        ),
+        render_preview_table(
+          prev$cv_tbl,
+          title_text = "CV fold class counts",
+          subtitle_text = paste0(
+            "Preview of class counts per fold using the current block size and buffer radius. ",
+            "Recommended CV folds: ",
+            if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
+          )
+        )
+      )
+    })
+
 
     # ── Train ─────────────────────────────────────────────────────────────
     observeEvent(input$run_training, {
