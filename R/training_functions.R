@@ -75,14 +75,14 @@ build_pair_sampling_lag_breaks <- function(max_dist) {
   }
 
   br <- c(
-    seq(0, min(20, max_dist), by = 1),
-    seq(20, min(50, max_dist), by = 2),
-    seq(50, min(100, max_dist), by = 5),
-    seq(100, min(200, max_dist), by = 10)
+    seq(0, min(10, max_dist), by = 1),
+    seq(10, min(20, max_dist), by = 2),
+    seq(20, min(50, max_dist), by = 5),
+    seq(50, min(100, max_dist), by = 10)
   )
 
-  if (max_dist > 200) {
-    br <- c(br, seq(200, max_dist, by = 20))
+  if (max_dist > 100) {
+    br <- c(br, seq(100, max_dist, by = 20))
   }
 
   br <- sort(unique(as.numeric(br)))
@@ -103,7 +103,7 @@ build_sampled_pair_structure <- function(
     coords,
     lag_breaks = NULL,
     max_dist = NULL,
-    max_pairs_per_bin = 1000L,
+    max_pairs_per_bin = 500L,
     min_pairs = 30L,
     seed = 1234L
 ) {
@@ -411,7 +411,7 @@ compute_feature_moran_diagnostics <- function(
     max_points = 1000L,
     lag_breaks = NULL,
     max_dist = NULL,
-    max_pairs_per_bin = 1000L,
+    max_pairs_per_bin = 500L,
     local_decay_threshold = 0.10,
     seed = 1234L,
     workers = 20L
