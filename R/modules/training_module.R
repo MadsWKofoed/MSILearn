@@ -137,6 +137,47 @@ training_module_server <- function(id) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
     }
 
+    materialize_preview_source <- function(sample_ids,
+                                           pipeline_id,
+                                           annotation_set_id,
+                                           stage_type = "binned_dataframe") {
+      stopifnot(length(sample_ids) > 0)
+
+      all_labels <- vector("list", length(sample_ids))
+      all_meta   <- vector("list", length(sample_ids))
+
+      for (i in seq_along(sample_ids)) {
+        sid <- sample_ids[i]
+
+        feat_df <- load_artifact_by_pipeline(sid, stage_type, pipeline_id)
+        ann_df  <- load_annotation(sid, annotation_set_id)
+
+        merged <- merge(
+          feat_df[, c("x", "y"), drop = FALSE],
+          ann_df[, c("x", "y", "Class"), drop = FALSE],
+          by = c("x", "y"),
+          all = FALSE
+        )
+
+        if (nrow(merged) == 0) {
+          stop("No pixel overlap after joining features and annotations for sample_id=", sid)
+        }
+
+        all_labels[[i]] <- merged$Class
+        all_meta[[i]] <- data.frame(
+          sample_id = sid,
+          x = merged$x,
+          y = merged$y,
+          stringsAsFactors = FALSE
+        )
+      }
+
+      list(
+        y = as.factor(do.call(c, all_labels)),
+        meta = do.call(rbind, all_meta)
+      )
+    }
+
     make_class_count_wide <- function(labels, groups, all_levels = NULL) {
       labels <- as.factor(labels)
       if (is.null(all_levels)) {
@@ -158,6 +199,7 @@ training_module_server <- function(id) {
       names(out)[1] <- "Group"
       out
     }
+    
 
     make_fold_preview_table <- function(cv_idx, y, all_levels = NULL) {
       y <- as.factor(y)
@@ -222,21 +264,37 @@ training_module_server <- function(id) {
       )
     }
 
+    split_preview_params <- reactive({
+      list(
+        block_size = suppressWarnings(as.integer(input$ds_block_size)),
+        buffer_radius = suppressWarnings(as.numeric(input$ds_buffer_radius)),
+        train_frac = suppressWarnings(as.numeric(input$ds_train_frac)),
+        split_seed = suppressWarnings(as.integer(input$ds_seed)),
+        cv_seed = suppressWarnings(as.integer(input$seed %||% 1234L))
+      )
+    })
+
+    split_preview_params_db <- shiny::debounce(split_preview_params, millis = 600)
+
     spatial_preview_tables <- reactive({
       req((input$ds_split_strategy %||% "random") == "spatial_block")
 
       src <- preview_src_rv()
-      req(!is.null(src), is.matrix(src$X), length(src$y) > 0, is.data.frame(src$meta))
+      req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
 
-      block_size <- suppressWarnings(as.integer(input$ds_block_size))
-      buffer_radius <- suppressWarnings(as.numeric(input$ds_buffer_radius))
-      train_frac <- suppressWarnings(as.numeric(input$ds_train_frac))
-      split_seed <- suppressWarnings(as.integer(input$ds_seed))
+      params <- split_preview_params_db()
+
+      block_size <- params$block_size
+      buffer_radius <- params$buffer_radius
+      train_frac <- params$train_frac
+      split_seed <- params$split_seed
+      cv_seed <- params$cv_seed
 
       req(is.finite(block_size), block_size >= 2)
       req(is.finite(buffer_radius), buffer_radius >= 0)
       req(is.finite(train_frac), train_frac > 0, train_frac < 1)
       req(is.finite(split_seed))
+      req(is.finite(cv_seed))
 
       y_all <- as.factor(src$y)
       class_levels <- levels(y_all)
@@ -267,8 +325,11 @@ training_module_server <- function(id) {
         all_levels = class_levels
       )
 
+      train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
+      train_y_preview <- y_all[tr_idx]
+
       spatial_rec <- recommend_spatial_params(
-        meta = src$meta,
+        meta = train_meta_preview,
         block_size = block_size,
         merge_frac = 0.60,
         max_cv_folds = 10L
@@ -278,9 +339,6 @@ training_module_server <- function(id) {
       recommended_folds <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
 
       if (is.finite(recommended_folds) && recommended_folds >= 2 && length(tr_idx) > 0) {
-        train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
-        train_y_preview <- y_all[tr_idx]
-
         split_info_preview <- list(
           strategy = "spatial_block",
           block_size = block_size,
@@ -293,7 +351,7 @@ training_module_server <- function(id) {
             train_meta = train_meta_preview,
             split_info = split_info_preview,
             cv_folds = recommended_folds,
-            seed = split_seed
+            seed = cv_seed
           ),
           error = function(e) NULL
         )
@@ -469,9 +527,21 @@ training_module_server <- function(id) {
           updateNumericInput(session, "ds_block_size", value = as.integer(rec_block))
         }
 
-        spatial_rec <- recommend_spatial_params(
+        split_idx <- make_outer_split_indices(
           meta = src$meta,
-          block_size = rec_block,
+          split_strategy = "spatial_block",
+          split_seed = as.integer(input$ds_seed %||% 42L),
+          train_frac = as.numeric(input$ds_train_frac),
+          block_size = as.integer(rec_block),
+          buffer_radius = as.numeric(rec_buf)
+        )
+
+        tr_idx <- split_idx$train_idx
+        train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
+
+        spatial_rec <- recommend_spatial_params(
+          meta = train_meta_preview,
+          block_size = as.integer(rec_block),
           merge_frac = 0.60,
           max_cv_folds = 10L
         )
@@ -484,29 +554,30 @@ training_module_server <- function(id) {
           moran_tbl <- diag_info$feature_moran_summary
           range_tbl <- diag_info$feature_range_summary
           rec_buf2  <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
+          rec_block2 <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
+
+          prev <- tryCatch(spatial_preview_tables(), error = function(e) NULL)
+          rec_folds2 <- if (!is.null(prev)) suppressWarnings(as.integer(prev$recommended_folds)) else NA_integer_
 
           tagList(
             tags$div(
               class = "alert alert-info",
               style = "padding:8px; margin-top:4px; margin-bottom:8px;",
-              rec_block2 <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1])),
-              spatial_rec2 <- recommend_spatial_params(
-                meta = src$meta,
-                block_size = rec_block2,
-                merge_frac = 0.60,
-                max_cv_folds = 10L
-              ),
 
               tags$b("Suggested buffer radius: "),
               if (is.finite(rec_buf2)) paste0(round(rec_buf2, 2), " px") else "not available",
               tags$br(),
+
               tags$b("Suggested block size: "),
               if (is.finite(rec_block2)) paste0(as.integer(rec_block2), " px") else "not available",
               tags$br(),
+
               tags$b("Suggested CV folds: "),
-              if (is.finite(spatial_rec2$recommended_cv_folds)) spatial_rec2$recommended_cv_folds else "not available",
+              if (is.finite(rec_folds2)) rec_folds2 else "not available",
               tags$br(),
+
               tags$small(estimate_diag_label_rv()),
+
               if (is.data.frame(moran_tbl) && nrow(moran_tbl) > 0) {
                 tags$div(
                   style = "margin-top:4px;",
@@ -518,6 +589,7 @@ training_module_server <- function(id) {
                   )
                 )
               },
+
               if (is.data.frame(range_tbl) && nrow(range_tbl) > 0) {
                 tags$div(
                   style = "margin-top:4px;",
@@ -653,7 +725,7 @@ training_module_server <- function(id) {
         if (!nzchar(ann_id %||% "")) return()
 
         tryCatch({
-          src <- materialize_training_source(
+          src <- materialize_preview_source(
             sample_ids = samp_ids,
             pipeline_id = pid,
             annotation_set_id = ann_id,
@@ -751,7 +823,7 @@ training_module_server <- function(id) {
           prev$cv_tbl,
           title_text = "CV fold class counts",
           subtitle_text = paste0(
-            "Preview of class counts per fold using the current block size and buffer radius. ",
+            "Preview of class counts per fold using the current block size, buffer radius, and training random seed. ",
             "Recommended CV folds: ",
             if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
           )
