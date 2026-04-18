@@ -78,12 +78,11 @@ build_pair_sampling_lag_breaks <- function(max_dist) {
     seq(0, min(20, max_dist), by = 1),
     seq(20, min(50, max_dist), by = 2),
     seq(50, min(100, max_dist), by = 5),
-    seq(100, min(300, max_dist), by = 10),
-    seq(300, min(500, max_dist), by = 25)
+    seq(100, min(200, max_dist), by = 10)
   )
 
-  if (max_dist > 500) {
-    br <- c(br, seq(500, max_dist, by = 25))
+  if (max_dist > 200) {
+    br <- c(br, seq(200, max_dist, by = 20))
   }
 
   br <- sort(unique(as.numeric(br)))
