@@ -75,10 +75,9 @@ build_pair_sampling_lag_breaks <- function(max_dist) {
   }
 
   br <- c(
-    seq(0, min(10, max_dist), by = 1),
-    seq(10, min(20, max_dist), by = 2),
-    seq(20, min(50, max_dist), by = 5),
-    seq(50, min(100, max_dist), by = 10)
+    seq(0, min(20, max_dist), by = 1),
+    seq(20, min(50, max_dist), by = 2),
+    seq(50, min(100, max_dist), by = 5)
   )
 
   if (max_dist > 100) {
