@@ -104,7 +104,7 @@ build_sampled_pair_structure <- function(
     coords,
     lag_breaks = NULL,
     max_dist = NULL,
-    max_pairs_per_bin = 2000L,
+    max_pairs_per_bin = 1000L,
     min_pairs = 30L,
     seed = 1234L
 ) {
@@ -412,7 +412,7 @@ compute_feature_moran_diagnostics <- function(
     max_points = 1000L,
     lag_breaks = NULL,
     max_dist = NULL,
-    max_pairs_per_bin = 2000L,
+    max_pairs_per_bin = 1000L,
     local_decay_threshold = 0.10,
     seed = 1234L,
     workers = 20L
