@@ -54,6 +54,8 @@ training_module_ui <- function(id) {
             ),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
             numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
+            actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
+              class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
             uiOutput(ns("spatial_preview_ui"))
           ),
           numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
@@ -133,7 +135,7 @@ training_module_server <- function(id) {
     estimate_in_progress_rv <- reactiveVal(FALSE)
     preview_src_rv   <- reactiveVal(NULL)
     preview_src_key_rv <- reactiveVal(NULL)
-    preview_tables_cache_rv <- reactiveVal(list(key = NULL, value = NULL))
+    preview_result_rv <- reactiveVal(NULL)
 
     selected_dataset_split_strategy <- reactive({
       did <- input$dataset_id %||% ""
@@ -275,81 +277,14 @@ training_module_server <- function(id) {
       )
     }
 
-    split_preview_params <- reactive({
-      list(
-        block_size = suppressWarnings(as.integer(input$ds_block_size)),
-        buffer_radius = suppressWarnings(as.numeric(input$ds_buffer_radius)),
-        train_frac = suppressWarnings(as.numeric(input$ds_train_frac)),
-        split_seed = suppressWarnings(as.integer(input$ds_seed)),
-        cv_seed = suppressWarnings(as.integer(input$seed %||% 1234L))
-      )
-    })
-
-    split_preview_params_db <- shiny::debounce(split_preview_params, millis = 600)
-
-    split_preview_params_effective <- reactive({
-      params <- split_preview_params_db()
-      mode <- input$spatial_buffer_mode %||% "estimate"
-
-      if (identical(mode, "estimate")) {
-        est <- estimate_params_rv()
-        req(!is.null(est))
-        params$block_size <- suppressWarnings(as.integer(est$block_size))
-        params$buffer_radius <- suppressWarnings(as.numeric(est$buffer_radius))
-      }
-
-      params
-    })
-
-    preview_enabled <- reactive({
-      if ((input$ds_split_strategy %||% "random") != "spatial_block") {
-        return(FALSE)
-      }
-
-      mode <- input$spatial_buffer_mode %||% "estimate"
-
-      if (identical(mode, "manual")) {
-        return(TRUE)
-      }
-
-      if (isTRUE(estimate_in_progress_rv())) {
-        return(FALSE)
-      }
-
-      !is.null(estimate_diag_rv()) && !is.null(estimate_params_rv())
-    })
-
-    spatial_preview_tables <- reactive({
-      req((input$ds_split_strategy %||% "random") == "spatial_block")
-      req(preview_enabled())
-
-      src <- preview_src_rv()
+    compute_spatial_preview_tables <- function(src, params) {
       req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
 
-      params <- split_preview_params_effective()
-
-      mode <- input$spatial_buffer_mode %||% "estimate"
-      cache_key <- paste(
-        src$key %||% "",
-        mode,
-        params$block_size,
-        params$buffer_radius,
-        params$train_frac,
-        params$split_seed,
-        params$cv_seed,
-        sep = "|"
-      )
-
-      cache <- preview_tables_cache_rv()
-      if (!is.null(cache$key) && identical(cache$key, cache_key)) {
-        return(cache$value)
-      }
-
-      block_size <- params$block_size
-      buffer_radius <- params$buffer_radius
-      train_frac <- params$train_frac
-      split_seed <- params$split_seed
-      cv_seed <- params$cv_seed
+      block_size <- suppressWarnings(as.integer(params$block_size))
+      buffer_radius <- suppressWarnings(as.numeric(params$buffer_radius))
+      train_frac <- suppressWarnings(as.numeric(params$train_frac))
+      split_seed <- suppressWarnings(as.integer(params$split_seed))
+      cv_seed <- suppressWarnings(as.integer(params$cv_seed))
 
       req(is.finite(block_size), block_size >= 2)
       req(is.finite(buffer_radius), buffer_radius >= 0)
@@ -426,15 +361,19 @@ training_module_server <- function(id) {
         }
       }
 
-      out <- list(
+      list(
         outer_tbl = outer_tbl,
         cv_tbl = cv_tbl,
-        recommended_folds = recommended_folds
+        recommended_folds = recommended_folds,
+        params = list(
+          block_size = block_size,
+          buffer_radius = buffer_radius,
+          train_frac = train_frac,
+          split_seed = split_seed,
+          cv_seed = cv_seed
+        )
       )
-
-      preview_tables_cache_rv(list(key = cache_key, value = out))
-      out
-    })
+    }
 
     load_ds_studies <- function() {
       tryCatch({
@@ -530,63 +469,8 @@ training_module_server <- function(id) {
         estimate_in_progress_rv(FALSE)
         preview_src_rv(NULL)
         preview_src_key_rv(NULL)
-        preview_tables_cache_rv(list(key = NULL, value = NULL))
+        preview_result_rv(NULL)
         output$estimate_spatial_text <- renderUI(NULL)
-      },
-      ignoreInit = TRUE
-    )
-
-    observeEvent(
-      list(
-        input$ds_study, input$ds_pipeline, input$ds_ann_set,
-        input$ds_samples, input$ds_split_strategy, input$spatial_buffer_mode
-      ),
-      {
-        sid      <- input$ds_study
-        samp_ids <- input$ds_samples
-        pid      <- input$ds_pipeline
-        ann_id   <- input$ds_ann_set
-        strategy <- input$ds_split_strategy %||% "random"
-        mode     <- input$spatial_buffer_mode %||% "estimate"
-
-        preview_src_rv(NULL)
-        preview_src_key_rv(NULL)
-        preview_tables_cache_rv(list(key = NULL, value = NULL))
-
-        if (strategy != "spatial_block") return()
-        if (mode != "manual") return()
-        if (!nzchar(sid %||% "")) return()
-        if (length(samp_ids) == 0) return()
-        if (!nzchar(pid %||% "")) return()
-        if (!nzchar(ann_id %||% "")) return()
-
-        src_key <- paste(
-          sid,
-          paste(sort(as.character(samp_ids)), collapse = ","),
-          pid,
-          ann_id,
-          "manual",
-          sep = "|"
-        )
-
-        if (identical(preview_src_key_rv(), src_key) && !is.null(preview_src_rv())) {
-          return()
-        }
-
-        tryCatch({
-          src <- materialize_preview_source(
-            sample_ids = samp_ids,
-            pipeline_id = pid,
-            annotation_set_id = ann_id,
-            stage_type = "binned_dataframe"
-          )
-          src$key <- src_key
-          preview_src_rv(src)
-          preview_src_key_rv(src_key)
-        }, error = function(e) {
-          preview_src_rv(NULL)
-          preview_src_key_rv(NULL)
-        })
       },
       ignoreInit = TRUE
     )
@@ -605,6 +489,29 @@ training_module_server <- function(id) {
         !isTRUE(estimate_in_progress_rv())
 
       shinyjs::toggleState("estimate_spatial_btn", condition = enabled)
+    })
+
+    observe({
+      strategy <- input$ds_split_strategy %||% "random"
+      mode <- input$spatial_buffer_mode %||% "estimate"
+
+      base_ready <-
+        identical(strategy, "spatial_block") &&
+        nzchar(input$ds_study %||% "") &&
+        length(input$ds_samples %||% character(0)) > 0 &&
+        nzchar(input$ds_pipeline %||% "") &&
+        nzchar(input$ds_ann_set %||% "") &&
+        !isTRUE(estimate_in_progress_rv())
+
+      estimate_ready <- !is.null(estimate_diag_rv()) && !is.null(estimate_params_rv())
+
+      enabled <- if (identical(mode, "estimate")) {
+        base_ready && estimate_ready
+      } else {
+        base_ready
+      }
+
+      shinyjs::toggleState("run_spatial_preview_btn", condition = enabled)
     })
 
     observe({
@@ -675,15 +582,23 @@ training_module_server <- function(id) {
 
       mode <- input$spatial_buffer_mode %||% "estimate"
 
-      if (!preview_enabled()) {
+      prev <- preview_result_rv()
+
+      if (isTRUE(estimate_in_progress_rv())) {
+        return(
+          tags$div(
+            class = "alert alert-secondary",
+            style = "padding:6px; margin-top:8px;",
+            tags$small("Estimating Moran's I + correlogram. Preview is available after estimation finishes.")
+          )
+        )
+      }
+
+      if (is.null(prev)) {
         msg <- if (identical(mode, "estimate")) {
-          if (isTRUE(estimate_in_progress_rv())) {
-            "Estimating Moran's I + correlogram. Preview will unlock when estimation finishes."
-          } else {
-            "Run 'Estimate from Moran's I + correlogram' to enable split preview tables."
-          }
+          "Click 'Estimate from Moran's I + correlogram' first, then click 'Preview spatial split'."
         } else {
-          "Select study, pipeline, annotation set, and samples to enable split preview tables."
+          "Set parameters and click 'Preview spatial split'."
         }
 
         return(
@@ -695,10 +610,20 @@ training_module_server <- function(id) {
         )
       }
 
-      prev <- tryCatch(spatial_preview_tables(), error = function(e) NULL)
-      if (is.null(prev)) return(NULL)
-
       tagList(
+        tags$div(
+          style = "margin-top:6px; margin-bottom:2px;",
+          tags$small(
+            style = "color:#666;",
+            paste0(
+              "Preview snapshot — block=", prev$params$block_size,
+              ", buffer=", prev$params$buffer_radius,
+              ", train_frac=", prev$params$train_frac,
+              ", split_seed=", prev$params$split_seed,
+              ", cv_seed=", prev$params$cv_seed
+            )
+          )
+        ),
         render_preview_table(
           prev$outer_tbl,
           title_text = "Final split class counts",
@@ -726,7 +651,7 @@ training_module_server <- function(id) {
       estimate_diag_rv(NULL)
       estimate_diag_label_rv("")
       estimate_params_rv(NULL)
-      preview_tables_cache_rv(list(key = NULL, value = NULL))
+      preview_result_rv(NULL)
       output$estimate_spatial_text <- renderUI(
         tags$div(
           class = "alert alert-info",
@@ -831,6 +756,8 @@ training_module_server <- function(id) {
           max_cv_folds = 10L
         )
 
+        rec_folds2 <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
+
         if (is.finite(spatial_rec$recommended_cv_folds) && spatial_rec$recommended_cv_folds >= 2) {
           updateNumericInput(session, "cv_folds", value = spatial_rec$recommended_cv_folds)
         }
@@ -840,9 +767,6 @@ training_module_server <- function(id) {
           range_tbl <- diag_info$feature_range_summary
           rec_buf2  <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
           rec_block2 <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
-
-          prev <- tryCatch(spatial_preview_tables(), error = function(e) NULL)
-          rec_folds2 <- if (!is.null(prev)) suppressWarnings(as.integer(prev$recommended_folds)) else NA_integer_
 
           tagList(
             tags$div(
@@ -896,11 +820,72 @@ training_module_server <- function(id) {
         estimate_params_rv(NULL)
         preview_src_rv(NULL)
         preview_src_key_rv(NULL)
-        preview_tables_cache_rv(list(key = NULL, value = NULL))
+        preview_result_rv(NULL)
         output$estimate_spatial_text <- renderUI(
           tags$div(class = "alert alert-danger", style = "padding:8px; margin-top:4px;",
             tags$b("Estimate failed: "), conditionMessage(e))
         )
+        showNotification(conditionMessage(e), type = "error", duration = 15)
+      })
+    })
+
+    observeEvent(input$run_spatial_preview_btn, {
+      sid      <- input$ds_study
+      samp_ids <- input$ds_samples
+      pid      <- input$ds_pipeline
+      ann_id   <- input$ds_ann_set
+      strategy <- input$ds_split_strategy %||% "random"
+      mode     <- input$spatial_buffer_mode %||% "estimate"
+
+      if (strategy != "spatial_block") {
+        showNotification("Choose 'Spatial block' to preview spatial split.", type = "warning")
+        return()
+      }
+      if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
+      if (length(samp_ids) == 0)    { showNotification("Select at least one sample.", type = "warning"); return() }
+      if (!nzchar(pid %||% ""))    { showNotification("Select a pipeline.", type = "warning"); return() }
+      if (!nzchar(ann_id %||% "")) { showNotification("Select an annotation set.", type = "warning"); return() }
+
+      if (identical(mode, "estimate") && (is.null(estimate_diag_rv()) || is.null(estimate_params_rv()))) {
+        showNotification("Run Moran estimate first in estimate mode.", type = "warning")
+        return()
+      }
+
+      params <- list(
+        block_size = suppressWarnings(as.integer(input$ds_block_size)),
+        buffer_radius = suppressWarnings(as.numeric(input$ds_buffer_radius)),
+        train_frac = suppressWarnings(as.numeric(input$ds_train_frac)),
+        split_seed = suppressWarnings(as.integer(input$ds_seed)),
+        cv_seed = suppressWarnings(as.integer(input$seed %||% 1234L))
+      )
+
+      src_key <- paste(
+        sid,
+        paste(sort(as.character(samp_ids)), collapse = ","),
+        pid,
+        ann_id,
+        mode,
+        sep = "|"
+      )
+
+      tryCatch({
+        src <- preview_src_rv()
+
+        if (identical(mode, "manual") || is.null(src) || !identical(preview_src_key_rv(), src_key)) {
+          src <- materialize_preview_source(
+            sample_ids = samp_ids,
+            pipeline_id = pid,
+            annotation_set_id = ann_id,
+            stage_type = "binned_dataframe"
+          )
+          src$key <- src_key
+          preview_src_rv(src)
+          preview_src_key_rv(src_key)
+        }
+
+        prev <- compute_spatial_preview_tables(src = src, params = params)
+        preview_result_rv(prev)
+      }, error = function(e) {
         showNotification(conditionMessage(e), type = "error", duration = 15)
       })
     })
