@@ -1,5 +1,3 @@
-# R/modules/training_module.R
-
 training_module_ui <- function(id) {
   ns <- NS(id)
   tabPanel("Training",
@@ -8,7 +6,7 @@ training_module_ui <- function(id) {
       column(4,
         wellPanel(
           h4("0. Create Dataset"),
-          p(tags$small("Pin samples, pipeline, annotation set and split seed into a frozen snapshot.")),
+          p(tags$small("Pin samples, pipeline, annotation set and dataset split seed into a frozen snapshot.")),
           selectInput(ns("ds_study"), "Study:",
                       choices = c("(loading...)" = ""), width = "100%"),
           actionButton(ns("ds_refresh_study"), "\u21ba", class = "btn-xs"),
@@ -37,15 +35,28 @@ training_module_ui <- function(id) {
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
-            actionButton(ns("estimate_spatial_btn"), "Estimate from Moran's I + correlogram",
-             class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
-            uiOutput(ns("estimate_spatial_text")),
-            plotOutput(ns("estimate_moran_plot"), height = "360px"),
+            radioButtons(
+              ns("spatial_buffer_mode"),
+              "Buffer / block setup:",
+              choices = c(
+                "Estimate from Moran's I" = "estimate",
+                "Set manually" = "manual"
+              ),
+              selected = "estimate",
+              inline = FALSE
+            ),
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'estimate'", ns("spatial_buffer_mode")),
+              actionButton(ns("estimate_spatial_btn"), "Estimate from Moran's I + correlogram",
+                class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
+              uiOutput(ns("estimate_spatial_text")),
+              plotOutput(ns("estimate_moran_plot"), height = "360px")
+            ),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
             numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
             uiOutput(ns("spatial_preview_ui"))
           ),
-          numericInput(ns("ds_seed"), "Split seed:", value = 42, min = 1),
+          numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
           actionButton(ns("create_dataset_btn"), "Create Dataset",
                        class = "btn-success btn-sm", style = "width:100%"),
@@ -83,7 +94,7 @@ training_module_ui <- function(id) {
         selectInput( ns("splitrule"),     "splitrule",
                      choices = c("gini", "extratrees"), selected = "gini"),
         uiOutput(ns("cv_folds_ui")),
-        numericInput(ns("seed"),          "Random seed",         value = 1234, min = 1),
+        numericInput(ns("seed"),          "Training / CV seed",  value = 1234, min = 1),
 
         hr(),
         actionButton(ns("run_training"), "Train model",
@@ -113,13 +124,12 @@ training_module_server <- function(id) {
 
     ns <- session$ns
 
-    log_val         <- reactiveVal("")
-    last_run_id     <- reactiveVal(NULL)
-    selected_run_id <- reactiveVal(NULL)
+    log_val          <- reactiveVal("")
+    last_run_id      <- reactiveVal(NULL)
+    selected_run_id  <- reactiveVal(NULL)
     estimate_diag_rv <- reactiveVal(NULL)
     estimate_diag_label_rv <- reactiveVal("")
-    preview_src_rv  <- reactiveVal(NULL)
-
+    preview_src_rv   <- reactiveVal(NULL)
 
     selected_dataset_split_strategy <- reactive({
       did <- input$dataset_id %||% ""
@@ -130,8 +140,6 @@ training_module_server <- function(id) {
         as.character(sp$strategy %||% "random")
       }, error = function(e) NULL)
     })
-
-
 
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
@@ -199,7 +207,6 @@ training_module_server <- function(id) {
       names(out)[1] <- "Group"
       out
     }
-    
 
     make_fold_preview_table <- function(cv_idx, y, all_levels = NULL) {
       y <- as.factor(y)
@@ -276,8 +283,23 @@ training_module_server <- function(id) {
 
     split_preview_params_db <- shiny::debounce(split_preview_params, millis = 600)
 
+    preview_enabled <- reactive({
+      if ((input$ds_split_strategy %||% "random") != "spatial_block") {
+        return(FALSE)
+      }
+
+      mode <- input$spatial_buffer_mode %||% "estimate"
+
+      if (identical(mode, "manual")) {
+        return(TRUE)
+      }
+
+      !is.null(estimate_diag_rv())
+    })
+
     spatial_preview_tables <- reactive({
       req((input$ds_split_strategy %||% "random") == "spatial_block")
+      req(preview_enabled())
 
       src <- preview_src_rv()
       req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
@@ -372,7 +394,6 @@ training_module_server <- function(id) {
       )
     })
 
-    # ── Study dropdown ────────────────────────────────────────────────────
     load_ds_studies <- function() {
       tryCatch({
         df <- get_studies()
@@ -390,7 +411,6 @@ training_module_server <- function(id) {
     observeEvent(input$ds_refresh_study, load_ds_studies(), ignoreInit = FALSE)
     session$onFlushed(load_ds_studies, once = TRUE)
 
-    # ── Study → samples + pipelines + annotation sets ─────────────────────
     observeEvent(input$ds_study, {
       sid <- input$ds_study
       if (!nzchar(sid %||% "")) return()
@@ -457,14 +477,160 @@ training_module_server <- function(id) {
     }, ignoreInit = FALSE)
 
     observeEvent(
-      list(input$ds_study, input$ds_pipeline, input$ds_ann_set, input$ds_samples, input$ds_split_strategy),
+      list(
+        input$ds_study, input$ds_pipeline, input$ds_ann_set,
+        input$ds_samples, input$ds_split_strategy, input$spatial_buffer_mode
+      ),
       {
         estimate_diag_rv(NULL)
         estimate_diag_label_rv("")
+        preview_src_rv(NULL)
         output$estimate_spatial_text <- renderUI(NULL)
       },
       ignoreInit = TRUE
     )
+
+    observeEvent(
+      list(
+        input$ds_study, input$ds_pipeline, input$ds_ann_set,
+        input$ds_samples, input$ds_split_strategy, input$spatial_buffer_mode
+      ),
+      {
+        sid      <- input$ds_study
+        samp_ids <- input$ds_samples
+        pid      <- input$ds_pipeline
+        ann_id   <- input$ds_ann_set
+        strategy <- input$ds_split_strategy %||% "random"
+        mode     <- input$spatial_buffer_mode %||% "estimate"
+
+        preview_src_rv(NULL)
+
+        if (strategy != "spatial_block") return()
+        if (mode != "manual") return()
+        if (!nzchar(sid %||% "")) return()
+        if (length(samp_ids) == 0) return()
+        if (!nzchar(pid %||% "")) return()
+        if (!nzchar(ann_id %||% "")) return()
+
+        tryCatch({
+          src <- materialize_preview_source(
+            sample_ids = samp_ids,
+            pipeline_id = pid,
+            annotation_set_id = ann_id,
+            stage_type = "binned_dataframe"
+          )
+          preview_src_rv(src)
+        }, error = function(e) {
+          preview_src_rv(NULL)
+        })
+      },
+      ignoreInit = TRUE
+    )
+
+    observe({
+      input$refresh_datasets
+      tryCatch({
+        ds <- list_datasets()
+        if (nrow(ds) == 0) {
+          updateSelectInput(session, "dataset_id", choices = c("No datasets found" = ""))
+        } else {
+          choices <- setNames(ds[["_id"]], paste0(ds$name, " [", ds$study_id, "]"))
+          updateSelectInput(session, "dataset_id", choices = choices)
+        }
+      }, error = function(e)
+        updateSelectInput(session, "dataset_id", choices = c("Error loading datasets" = ""))
+      )
+    })
+
+    output$cv_folds_ui <- renderUI({
+      strategy <- selected_dataset_split_strategy()
+
+      if (identical(strategy, "leave_one_sample_out")) {
+        tagList(
+          tags$label("CV folds"),
+          tags$div(
+            class = "form-control",
+            style = "height:auto; min-height:38px; background:#f8f9fa; color:#555;",
+            "Leave-one-sample-out"
+          ),
+          tags$small(
+            style = "color:#666; display:block; margin-top:4px;",
+            "For leave-one-sample-out, the number of CV folds is determined automatically by the training samples."
+          )
+        )
+      } else {
+        numericInput(ns("cv_folds"), "CV folds (0 = none)", value = 10, min = 0)
+      }
+    })
+
+    output$dataset_info_ui <- renderUI({
+      req(input$dataset_id, nchar(input$dataset_id) > 0)
+      tryCatch({
+        ds <- get_dataset(input$dataset_id)
+        n  <- length(unlist(ds$sample_ids))
+        sp <- if (is.data.frame(ds$split)) as.list(ds$split[1,]) else ds$split[[1]]
+        tagList(tags$small(
+          tags$b("Study: "),    ds$study_id,  tags$br(),
+          tags$b("Samples: "),  n,            tags$br(),
+          tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
+          tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
+          tags$b("Stage: "),    ds$stage_type, tags$br(),
+          tags$b("Split strategy: "), sp$strategy %||% "random", tags$br(),
+          tags$b("Split: "),    if (!is.null(sp$train_frac)) paste0(sp$train_frac * 100, "% train | ") else "", "seed=", sp$seed,
+          if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
+          if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
+          if (!is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
+          if (!is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
+          if (!is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
+          if (!is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
+          if (!is.null(sp$diagnostic_recommended_buffer)) tagList(tags$br(), tags$b("Estimated buffer: "), sp$diagnostic_recommended_buffer)
+        ))
+      }, error = function(e)
+        tags$small(style = "color:red", "Could not load dataset info.")
+      )
+    })
+
+    output$spatial_preview_ui <- renderUI({
+      if ((input$ds_split_strategy %||% "random") != "spatial_block") return(NULL)
+
+      mode <- input$spatial_buffer_mode %||% "estimate"
+
+      if (!preview_enabled()) {
+        msg <- if (identical(mode, "estimate")) {
+          "Run 'Estimate from Moran's I + correlogram' to enable split preview tables."
+        } else {
+          "Select study, pipeline, annotation set, and samples to enable split preview tables."
+        }
+
+        return(
+          tags$div(
+            class = "alert alert-secondary",
+            style = "padding:6px; margin-top:8px;",
+            tags$small(msg)
+          )
+        )
+      }
+
+      prev <- tryCatch(spatial_preview_tables(), error = function(e) NULL)
+      if (is.null(prev)) return(NULL)
+
+      tagList(
+        render_preview_table(
+          prev$outer_tbl,
+          title_text = "Final split class counts",
+          subtitle_text = "Counts per class in final train, final test, and buffer-excluded pixels."
+        ),
+        render_preview_table(
+          prev$cv_tbl,
+          title_text = "CV fold class counts",
+          subtitle_text = paste0(
+            "Preview of class counts per fold using the current block size, buffer radius, and training / CV seed. ",
+            "Recommended CV folds: ",
+            if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
+          )
+        )
+      )
+    })
 
     observeEvent(input$estimate_spatial_btn, {
       sid      <- input$ds_study
@@ -511,6 +677,11 @@ training_module_server <- function(id) {
             input$normalize %||% "none"
           )
         )
+
+        preview_src_rv(list(
+          y = src$y,
+          meta = src$meta
+        ))
 
         rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
         rec_block <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
@@ -608,15 +779,15 @@ training_module_server <- function(id) {
       }, error = function(e) {
         estimate_diag_rv(NULL)
         estimate_diag_label_rv("")
+        preview_src_rv(NULL)
         output$estimate_spatial_text <- renderUI(
           tags$div(class = "alert alert-danger", style = "padding:8px; margin-top:4px;",
-                  tags$b("Estimate failed: "), conditionMessage(e))
+            tags$b("Estimate failed: "), conditionMessage(e))
         )
         showNotification(conditionMessage(e), type = "error", duration = 15)
       })
     })
 
-    # ── Create dataset ────────────────────────────────────────────────────
     observeEvent(input$create_dataset_btn, {
       sid      <- input$ds_study
       samp_ids <- input$ds_samples
@@ -694,174 +865,16 @@ training_module_server <- function(id) {
       })
     })
 
-    # Update run list when dataset changes
     observeEvent(input$dataset_id, {
       req(input$dataset_id, nzchar(input$dataset_id))
       tryCatch({
         runs_rv(list_model_runs(input$dataset_id))
-        selected_run_id(NULL)  # reset selection når dataset skifter
+        selected_run_id(NULL)
       }, error = function(e) {
         runs_rv(data.frame())
         selected_run_id(NULL)
       })
     }, ignoreInit = TRUE)
-
-
-    observeEvent(
-      list(input$ds_study, input$ds_pipeline, input$ds_ann_set, input$ds_samples, input$ds_split_strategy),
-      {
-        sid      <- input$ds_study
-        samp_ids <- input$ds_samples
-        pid      <- input$ds_pipeline
-        ann_id   <- input$ds_ann_set
-        strategy <- input$ds_split_strategy %||% "random"
-
-        preview_src_rv(NULL)
-
-        if (strategy != "spatial_block") return()
-        if (!nzchar(sid %||% "")) return()
-        if (length(samp_ids) == 0) return()
-        if (!nzchar(pid %||% "")) return()
-        if (!nzchar(ann_id %||% "")) return()
-
-        tryCatch({
-          src <- materialize_preview_source(
-            sample_ids = samp_ids,
-            pipeline_id = pid,
-            annotation_set_id = ann_id,
-            stage_type = "binned_dataframe"
-          )
-          preview_src_rv(src)
-        }, error = function(e) {
-          preview_src_rv(NULL)
-        })
-      },
-      ignoreInit = TRUE
-    )
-
-
-    # ── Dataset list ──────────────────────────────────────────────────────
-    observe({
-      input$refresh_datasets
-      tryCatch({
-        ds <- list_datasets()
-        if (nrow(ds) == 0) {
-          updateSelectInput(session, "dataset_id", choices = c("No datasets found" = ""))
-        } else {
-          choices <- setNames(ds[["_id"]], paste0(ds$name, " [", ds$study_id, "]"))
-          updateSelectInput(session, "dataset_id", choices = choices)
-        }
-      }, error = function(e)
-        updateSelectInput(session, "dataset_id", choices = c("Error loading datasets" = ""))
-      )
-    })
-
-
-    output$cv_folds_ui <- renderUI({
-      strategy <- selected_dataset_split_strategy()
-
-      if (identical(strategy, "leave_one_sample_out")) {
-        tagList(
-          tags$label("CV folds"),
-          tags$div(
-            class = "form-control",
-            style = "height:auto; min-height:38px; background:#f8f9fa; color:#555;",
-            "Leave-one-sample-out"
-          ),
-          tags$small(
-            style = "color:#666; display:block; margin-top:4px;",
-            "For leave-one-sample-out, the number of CV folds is determined automatically by the training samples."
-          )
-        )
-      } else {
-        numericInput(ns("cv_folds"), "CV folds (0 = none)", value = 10, min = 0)
-      }
-    })
-
-    # ── Dataset info card ─────────────────────────────────────────────────
-    output$dataset_info_ui <- renderUI({
-      req(input$dataset_id, nchar(input$dataset_id) > 0)
-      tryCatch({
-        ds <- get_dataset(input$dataset_id)
-        n  <- length(unlist(ds$sample_ids))
-        sp <- if (is.data.frame(ds$split)) as.list(ds$split[1,]) else ds$split[[1]]
-        tagList(tags$small(
-          tags$b("Study: "),    ds$study_id,  tags$br(),
-          tags$b("Samples: "),  n,            tags$br(),
-          tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
-          tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
-          tags$b("Stage: "),    ds$stage_type, tags$br(),
-          tags$b("Split strategy: "), sp$strategy %||% "random", tags$br(),
-          tags$b("Split: "),    if (!is.null(sp$train_frac)) paste0(sp$train_frac * 100, "% train | ") else "", "seed=", sp$seed,
-          if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
-          if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
-          if (!is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
-          if (!is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
-          if (!is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
-          if (!is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
-          if (!is.null(sp$diagnostic_recommended_buffer)) tagList(tags$br(), tags$b("Estimated buffer: "), sp$diagnostic_recommended_buffer)
-        ))
-      }, error = function(e)
-        tags$small(style = "color:red", "Could not load dataset info.")
-      )
-    })
-
-
-    output$spatial_preview_ui <- renderUI({
-      if ((input$ds_split_strategy %||% "random") != "spatial_block") return(NULL)
-
-      prev <- tryCatch(spatial_preview_tables(), error = function(e) NULL)
-      if (is.null(prev)) return(NULL)
-
-      tagList(
-        render_preview_table(
-          prev$outer_tbl,
-          title_text = "Final split class counts",
-          subtitle_text = "Counts per class in final train, final test, and buffer-excluded pixels."
-        ),
-        render_preview_table(
-          prev$cv_tbl,
-          title_text = "CV fold class counts",
-          subtitle_text = paste0(
-            "Preview of class counts per fold using the current block size, buffer radius, and training random seed. ",
-            "Recommended CV folds: ",
-            if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
-          )
-        )
-      )
-    })
-
-
-    # ── Train ─────────────────────────────────────────────────────────────
-    observeEvent(input$run_training, {
-      dataset_id <- input$dataset_id
-      if (is.null(dataset_id) || !nzchar(dataset_id)) {
-        showNotification("Select a dataset before training.", type = "warning"); return()
-      }
-      log_val("")
-      add_log(paste0("Starting training on dataset: ", dataset_id))
-      shinyjs::disable("run_training")
-      on.exit(shinyjs::enable("run_training"), add = TRUE)
-
-      tryCatch({
-        run_id <- train_ranger_from_dataset(
-          dataset_id        = dataset_id,
-          normalize_method  = input$normalize,
-          mtry              = input$mtry,
-          splitrule         = input$splitrule,
-          min_node_size     = input$min_node_size,
-          num_trees         = input$num_trees,
-          cv_folds          = input$cv_folds,
-          seed              = input$seed
-        )
-        last_run_id(run_id)
-        add_log(paste0("\u2713 Training complete. model_run_id: ", run_id))
-        showNotification(paste0("Training complete! Run ID: ", run_id), type = "message")
-      }, error = function(e) {
-        add_log(paste0("\u2717 Error: ", conditionMessage(e)))
-        showNotification(conditionMessage(e), type = "error", duration = 15)
-      })
-    })
 
     output$training_log <- renderText({ log_val() })
 
@@ -926,7 +939,6 @@ training_module_server <- function(id) {
       p
     })
 
-    # ── Run list ──────────────────────────────────────────────────────────
     runs_rv <- reactiveVal(data.frame())
 
     observe({
@@ -942,14 +954,42 @@ training_module_server <- function(id) {
       tryCatch(runs_rv(list_model_runs(input$dataset_id)), error = function(e) NULL)
     })
 
-    # ── Run table (DT, clickable) ─────────────────────────────────────────
+    observeEvent(input$run_training, {
+      dataset_id <- input$dataset_id
+      if (is.null(dataset_id) || !nzchar(dataset_id)) {
+        showNotification("Select a dataset before training.", type = "warning"); return()
+      }
+      log_val("")
+      add_log(paste0("Starting training on dataset: ", dataset_id))
+      shinyjs::disable("run_training")
+      on.exit(shinyjs::enable("run_training"), add = TRUE)
+
+      tryCatch({
+        run_id <- train_ranger_from_dataset(
+          dataset_id        = dataset_id,
+          normalize_method  = input$normalize,
+          mtry              = input$mtry,
+          splitrule         = input$splitrule,
+          min_node_size     = input$min_node_size,
+          num_trees         = input$num_trees,
+          cv_folds          = input$cv_folds,
+          seed              = input$seed
+        )
+        last_run_id(run_id)
+        add_log(paste0("\u2713 Training complete. model_run_id: ", run_id))
+        showNotification(paste0("Training complete! Run ID: ", run_id), type = "message")
+      }, error = function(e) {
+        add_log(paste0("\u2717 Error: ", conditionMessage(e)))
+        showNotification(conditionMessage(e), type = "error", duration = 15)
+      })
+    })
+
     output$run_table <- DT::renderDataTable({
       df <- runs_rv()
       if (nrow(df) == 0 || !("_id" %in% names(df))) {
         return(DT::datatable(data.frame(message = "No runs yet."), rownames = FALSE))
       }
 
-      # ---- SAFE accessors (metrics/hyperparams kan være NULL eller mærkeligt formateret)
       as_list1 <- function(x) {
         if (is.null(x)) return(list())
         if (is.data.frame(x)) return(as.list(x[1, , drop = FALSE]))
@@ -971,15 +1011,12 @@ training_module_server <- function(id) {
         as.character(v[1])
       }
 
-      # sortér runs “sikkert”
       df_sorted <- df[order(df$created_at, decreasing = TRUE), , drop = FALSE]
       n <- nrow(df_sorted)
 
-      # --- hyperparams/metrics kan være data.frame (kolonner = keys) ELLER list-column ---
       hp_obj <- df_sorted$hyperparams
       m_obj  <- df_sorted$metrics
 
-      # Hyperparams kolonner
       if (is.data.frame(hp_obj)) {
         norm  <- as.character(hp_obj$normalize_method %||% NA)
         mtry  <- as.character(hp_obj$mtry %||% NA)
@@ -996,7 +1033,6 @@ training_module_server <- function(id) {
         cv    <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "cv_folds"), character(1))
       }
 
-      # Metrics kolonner
       if (is.data.frame(m_obj)) {
         test_acc   <- suppressWarnings(as.numeric(m_obj$test_accuracy %||% NA))
         test_kappa <- suppressWarnings(as.numeric(m_obj$test_kappa %||% NA))
@@ -1031,7 +1067,6 @@ training_module_server <- function(id) {
         options   = list(
           pageLength = 10,
           scrollX = TRUE,
-          # Skjul run_id_full i tabellen, men behold den i data
           columnDefs = list(list(targets = 0, visible = FALSE))
         ),
         class = "compact stripe hover"
@@ -1039,7 +1074,6 @@ training_module_server <- function(id) {
         DT::formatRound(c("test_acc", "test_kappa", "cv_acc"), digits = 4)
     })
 
-    # ── Capture row click → selected_run ─────────────────────────────────
     observeEvent(input$run_table_rows_selected, {
       idx <- input$run_table_rows_selected
       if (is.null(idx) || length(idx) == 0) {
@@ -1047,8 +1081,6 @@ training_module_server <- function(id) {
         return()
       }
 
-      # hent den viste tabel igen (DT sender ikke row data),
-      # så vi bruger runs_rv() + samme sortering som i tabellen:
       df <- runs_rv()
       if (nrow(df) == 0) { selected_run_id(NULL); return() }
 
@@ -1057,13 +1089,11 @@ training_module_server <- function(id) {
       selected_run_id(rid)
     })
 
-    # Also auto-select last trained run
     observeEvent(last_run_id(), {
       rid <- last_run_id()
       if (!is.null(rid) && nzchar(rid)) selected_run_id(rid)
     })
 
-    # ── Shared helper (used by run_details_ui, cm_plot, roc_plot) ─────────
     extract_subdoc <- function(row, field) {
       x <- row[[field]]
       if (is.character(x) && length(x) == 1 && grepl("^\\s*\\{", x)) {
@@ -1076,22 +1106,20 @@ training_module_server <- function(id) {
       list(value = x)
     }
 
-    # ── Run details panel ─────────────────────────────────────────────────
     output$run_details_ui <- renderUI({
       rid <- selected_run_id()
       if (is.null(rid) || !nzchar(rid)) {
         return(tags$p(style="color:#888", "Click a run to see details."))
       }
-      
+
       row <- get_model_run(rid)
-        if (is.null(row) || nrow(row) == 0) {
-          return(tags$p(style="color:#c00", "Could not load run from DB. Try refresh."))
-        }
+      if (is.null(row) || nrow(row) == 0) {
+        return(tags$p(style="color:#c00", "Could not load run from DB. Try refresh."))
+      }
 
       m  <- extract_subdoc(row, "metrics")
       hp <- extract_subdoc(row, "hyperparams")
 
-      # force to list (hvis mongo returner data.frame eller weird)
       if (is.data.frame(m))  m  <- as.list(m[1, , drop=FALSE])
       if (is.data.frame(hp)) hp <- as.list(hp[1, , drop=FALSE])
       if (is.null(m))  m  <- list()
@@ -1116,7 +1144,6 @@ training_module_server <- function(id) {
       lo <- first_num(m[["test_acc_lower"]])
       hi <- first_num(m[["test_acc_upper"]])
 
-      # Per-class keys (kan være 0)
       bc_keys <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
       class_names <- gsub("^byclass_Sensitivity__", "", bc_keys)
 
@@ -1201,7 +1228,7 @@ training_module_server <- function(id) {
             )
           )
         ),
-        
+
         tags$h6(tags$b("Per-Class Metrics (Test Set)")),
         perclass_tbl,
 
@@ -1227,7 +1254,6 @@ training_module_server <- function(id) {
             column(3)
           ),
 
-
           tags$br(),
 
           tags$div(
@@ -1250,7 +1276,6 @@ training_module_server <- function(id) {
       )
     })
 
-        # ── Confusion matrix plot ─────────────────────────────────────────────
     output$cm_plot <- renderPlot({
       rid <- selected_run_id()
       req(rid, nzchar(rid))
@@ -1263,12 +1288,10 @@ training_module_server <- function(id) {
       cm_raw <- m[["cm_table"]]
       if (is.null(cm_raw)) return(NULL)
 
-      # Unpack all nesting layers mongolite may introduce
       cm_df <- cm_raw
       while (is.list(cm_df) && !is.data.frame(cm_df)) cm_df <- cm_df[[1]]
       req(is.data.frame(cm_df))
 
-      # Recompute Rel_Freq in case it was lost during serialisation
       if (!"Rel_Freq" %in% names(cm_df)) {
         cm_df <- cm_df |>
           dplyr::group_by(Reference) |>
@@ -1297,8 +1320,6 @@ training_module_server <- function(id) {
         )
     })
 
-
-    # ── ROC curve plot ────────────────────────────────────────────────────
     output$roc_plot <- renderPlot({
       rid <- selected_run_id()
       req(rid, nzchar(rid))
@@ -1311,7 +1332,6 @@ training_module_server <- function(id) {
       roc_raw <- m[["roc_data"]]
       if (is.null(roc_raw)) return(NULL)
 
-      # --- robust unwrapping ---
       unwrap_once <- function(x) {
         if (is.list(x) && length(x) == 1) return(x[[1]])
         x
@@ -1324,7 +1344,6 @@ training_module_server <- function(id) {
         roc_list <- new_obj
       }
 
-      # Case 1: already a data.frame with one row per class
       if (is.data.frame(roc_list)) {
         roc_entries <- lapply(seq_len(nrow(roc_list)), function(i) {
           list(
@@ -1334,12 +1353,8 @@ training_module_server <- function(id) {
             specificities = unlist(roc_list$specificities[[i]])
           )
         })
-
-      # Case 2: list of per-class objects
       } else if (is.list(roc_list)) {
         roc_entries <- lapply(roc_list, function(r) {
-
-          # if one entry is itself a 1-row data.frame
           if (is.data.frame(r)) {
             return(list(
               class = as.character(r$class[1]),
@@ -1349,7 +1364,6 @@ training_module_server <- function(id) {
             ))
           }
 
-          # if one entry is a plain list
           if (is.list(r)) {
             return(list(
               class = as.character(r$class[1]),
@@ -1363,7 +1377,6 @@ training_module_server <- function(id) {
         })
 
         roc_entries <- Filter(Negate(is.null), roc_entries)
-
       } else {
         return(NULL)
       }
