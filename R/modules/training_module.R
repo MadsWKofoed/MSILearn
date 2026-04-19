@@ -129,7 +129,11 @@ training_module_server <- function(id) {
     selected_run_id  <- reactiveVal(NULL)
     estimate_diag_rv <- reactiveVal(NULL)
     estimate_diag_label_rv <- reactiveVal("")
+    estimate_params_rv <- reactiveVal(NULL)
+    estimate_in_progress_rv <- reactiveVal(FALSE)
     preview_src_rv   <- reactiveVal(NULL)
+    preview_src_key_rv <- reactiveVal(NULL)
+    preview_tables_cache_rv <- reactiveVal(list(key = NULL, value = NULL))
 
     selected_dataset_split_strategy <- reactive({
       did <- input$dataset_id %||% ""
@@ -283,6 +287,20 @@ training_module_server <- function(id) {
 
     split_preview_params_db <- shiny::debounce(split_preview_params, millis = 600)
 
+    split_preview_params_effective <- reactive({
+      params <- split_preview_params_db()
+      mode <- input$spatial_buffer_mode %||% "estimate"
+
+      if (identical(mode, "estimate")) {
+        est <- estimate_params_rv()
+        req(!is.null(est))
+        params$block_size <- suppressWarnings(as.integer(est$block_size))
+        params$buffer_radius <- suppressWarnings(as.numeric(est$buffer_radius))
+      }
+
+      params
+    })
+
     preview_enabled <- reactive({
       if ((input$ds_split_strategy %||% "random") != "spatial_block") {
         return(FALSE)
@@ -294,7 +312,11 @@ training_module_server <- function(id) {
         return(TRUE)
       }
 
-      !is.null(estimate_diag_rv())
+      if (isTRUE(estimate_in_progress_rv())) {
+        return(FALSE)
+      }
+
+      !is.null(estimate_diag_rv()) && !is.null(estimate_params_rv())
     })
 
     spatial_preview_tables <- reactive({
@@ -304,7 +326,24 @@ training_module_server <- function(id) {
       src <- preview_src_rv()
       req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
 
-      params <- split_preview_params_db()
+      params <- split_preview_params_effective()
+
+      mode <- input$spatial_buffer_mode %||% "estimate"
+      cache_key <- paste(
+        src$key %||% "",
+        mode,
+        params$block_size,
+        params$buffer_radius,
+        params$train_frac,
+        params$split_seed,
+        params$cv_seed,
+        sep = "|"
+      )
+
+      cache <- preview_tables_cache_rv()
+      if (!is.null(cache$key) && identical(cache$key, cache_key)) {
+        return(cache$value)
+      }
 
       block_size <- params$block_size
       buffer_radius <- params$buffer_radius
@@ -387,11 +426,14 @@ training_module_server <- function(id) {
         }
       }
 
-      list(
+      out <- list(
         outer_tbl = outer_tbl,
         cv_tbl = cv_tbl,
         recommended_folds = recommended_folds
       )
+
+      preview_tables_cache_rv(list(key = cache_key, value = out))
+      out
     })
 
     load_ds_studies <- function() {
@@ -484,7 +526,11 @@ training_module_server <- function(id) {
       {
         estimate_diag_rv(NULL)
         estimate_diag_label_rv("")
+        estimate_params_rv(NULL)
+        estimate_in_progress_rv(FALSE)
         preview_src_rv(NULL)
+        preview_src_key_rv(NULL)
+        preview_tables_cache_rv(list(key = NULL, value = NULL))
         output$estimate_spatial_text <- renderUI(NULL)
       },
       ignoreInit = TRUE
@@ -504,6 +550,8 @@ training_module_server <- function(id) {
         mode     <- input$spatial_buffer_mode %||% "estimate"
 
         preview_src_rv(NULL)
+        preview_src_key_rv(NULL)
+        preview_tables_cache_rv(list(key = NULL, value = NULL))
 
         if (strategy != "spatial_block") return()
         if (mode != "manual") return()
@@ -512,6 +560,19 @@ training_module_server <- function(id) {
         if (!nzchar(pid %||% "")) return()
         if (!nzchar(ann_id %||% "")) return()
 
+        src_key <- paste(
+          sid,
+          paste(sort(as.character(samp_ids)), collapse = ","),
+          pid,
+          ann_id,
+          "manual",
+          sep = "|"
+        )
+
+        if (identical(preview_src_key_rv(), src_key) && !is.null(preview_src_rv())) {
+          return()
+        }
+
         tryCatch({
           src <- materialize_preview_source(
             sample_ids = samp_ids,
@@ -519,13 +580,32 @@ training_module_server <- function(id) {
             annotation_set_id = ann_id,
             stage_type = "binned_dataframe"
           )
+          src$key <- src_key
           preview_src_rv(src)
+          preview_src_key_rv(src_key)
         }, error = function(e) {
           preview_src_rv(NULL)
+          preview_src_key_rv(NULL)
         })
       },
       ignoreInit = TRUE
     )
+
+    observe({
+      strategy <- input$ds_split_strategy %||% "random"
+      mode <- input$spatial_buffer_mode %||% "estimate"
+
+      enabled <-
+        identical(strategy, "spatial_block") &&
+        identical(mode, "estimate") &&
+        nzchar(input$ds_study %||% "") &&
+        length(input$ds_samples %||% character(0)) > 0 &&
+        nzchar(input$ds_pipeline %||% "") &&
+        nzchar(input$ds_ann_set %||% "") &&
+        !isTRUE(estimate_in_progress_rv())
+
+      shinyjs::toggleState("estimate_spatial_btn", condition = enabled)
+    })
 
     observe({
       input$refresh_datasets
@@ -597,7 +677,11 @@ training_module_server <- function(id) {
 
       if (!preview_enabled()) {
         msg <- if (identical(mode, "estimate")) {
-          "Run 'Estimate from Moran's I + correlogram' to enable split preview tables."
+          if (isTRUE(estimate_in_progress_rv())) {
+            "Estimating Moran's I + correlogram. Preview will unlock when estimation finishes."
+          } else {
+            "Run 'Estimate from Moran's I + correlogram' to enable split preview tables."
+          }
         } else {
           "Select study, pipeline, annotation set, and samples to enable split preview tables."
         }
@@ -638,6 +722,20 @@ training_module_server <- function(id) {
       pid      <- input$ds_pipeline
       ann_id   <- input$ds_ann_set
 
+      estimate_in_progress_rv(TRUE)
+      estimate_diag_rv(NULL)
+      estimate_diag_label_rv("")
+      estimate_params_rv(NULL)
+      preview_tables_cache_rv(list(key = NULL, value = NULL))
+      output$estimate_spatial_text <- renderUI(
+        tags$div(
+          class = "alert alert-info",
+          style = "padding:8px; margin-top:4px; margin-bottom:8px;",
+          "Estimating Moran's I + correlogram..."
+        )
+      )
+      on.exit(estimate_in_progress_rv(FALSE), add = TRUE)
+
       if ((input$ds_split_strategy %||% "random") != "spatial_block") {
         showNotification("Choose 'Spatial block' to estimate buffer from Moran's I.", type = "warning")
         return()
@@ -660,28 +758,30 @@ training_module_server <- function(id) {
         diag_info <- compute_feature_moran_diagnostics(
           X = X_est,
           meta = src$meta,
-          max_points = 1000L,
+          max_points = 800L,
           lag_breaks = NULL,
           max_dist = 100,
-          max_pairs_per_bin = 500L,
+          max_pairs_per_bin = 300L,
           local_decay_threshold = 0.10,
           seed = as.integer(input$ds_seed %||% 42L),
-          workers = max(1L, parallel::detectCores() - 10L)
+          workers = max(1L, min(8L, parallel::detectCores(logical = FALSE) - 1L))
         )
 
-        estimate_diag_rv(diag_info)
-        estimate_diag_label_rv(
-          paste0(
-            length(samp_ids), " sample(s), ",
-            nrow(src$X), " annotated pixels, normalize=",
-            input$normalize %||% "none"
-          )
+        src_key <- paste(
+          sid,
+          paste(sort(as.character(samp_ids)), collapse = ","),
+          pid,
+          ann_id,
+          "estimate",
+          sep = "|"
         )
 
         preview_src_rv(list(
           y = src$y,
-          meta = src$meta
+          meta = src$meta,
+          key = src_key
         ))
+        preview_src_key_rv(src_key)
 
         rec_buf <- suppressWarnings(as.numeric(diag_info$recommended_buffer_radius[1]))
         rec_block <- suppressWarnings(as.numeric(diag_info$recommended_block_size[1]))
@@ -697,6 +797,20 @@ training_module_server <- function(id) {
         if (is.finite(rec_block) && rec_block >= 2) {
           updateNumericInput(session, "ds_block_size", value = as.integer(rec_block))
         }
+
+        estimate_params_rv(list(
+          block_size = as.integer(rec_block),
+          buffer_radius = as.numeric(rec_buf)
+        ))
+
+        estimate_diag_rv(diag_info)
+        estimate_diag_label_rv(
+          paste0(
+            length(samp_ids), " sample(s), ",
+            nrow(src$X), " annotated pixels, normalize=",
+            input$normalize %||% "none"
+          )
+        )
 
         split_idx <- make_outer_split_indices(
           meta = src$meta,
@@ -779,7 +893,10 @@ training_module_server <- function(id) {
       }, error = function(e) {
         estimate_diag_rv(NULL)
         estimate_diag_label_rv("")
+        estimate_params_rv(NULL)
         preview_src_rv(NULL)
+        preview_src_key_rv(NULL)
+        preview_tables_cache_rv(list(key = NULL, value = NULL))
         output$estimate_spatial_text <- renderUI(
           tags$div(class = "alert alert-danger", style = "padding:8px; margin-top:4px;",
             tags$b("Estimate failed: "), conditionMessage(e))
