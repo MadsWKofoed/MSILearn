@@ -618,13 +618,54 @@ make_random_cv_indices <- function(n, cv_folds, seed = 1234L) {
   list(index = index, indexOut = indexOut)
 }
 
-make_loso_cv_indices <- function(train_meta) {
-  sample_ids <- unique(train_meta$sample_id)
-  if (length(sample_ids) < 2) stop("Need at least 2 training samples for leave-one-sample-out CV.")
-  indexOut <- lapply(sample_ids, function(sid) which(train_meta$sample_id == sid))
-  names(indexOut) <- paste0("sample_", seq_along(indexOut))
-  index <- lapply(indexOut, function(te) setdiff(seq_len(nrow(train_meta)), te))
-  names(index) <- names(indexOut)
+make_loso_cv_indices <- function(train_meta, cv_folds = 10L, seed = 1234L) {
+  if (is.null(train_meta) || !is.data.frame(train_meta) || !("sample_id" %in% names(train_meta))) {
+    stop("leave_one_sample_out CV requires train_meta with column: sample_id")
+  }
+
+  samp_tbl <- train_meta |>
+    dplyr::count(sample_id, name = "n_pixels")
+
+  n_samples <- nrow(samp_tbl)
+  if (n_samples < 2L) {
+    stop("Need at least 2 training samples for leave_one_sample_out CV.")
+  }
+
+  n_groups <- min(as.integer(cv_folds), n_samples)
+  if (!is.finite(n_groups) || n_groups < 2L) {
+    stop("leave_one_sample_out CV requires at least 2 folds.")
+  }
+
+  set.seed(as.integer(seed))
+  samp_tbl <- samp_tbl |>
+    dplyr::mutate(rand = stats::runif(dplyr::n())) |>
+    dplyr::arrange(dplyr::desc(n_pixels), rand)
+
+  group_load <- rep(0, n_groups)
+  group_assign <- integer(nrow(samp_tbl))
+
+  for (i in seq_len(nrow(samp_tbl))) {
+    g <- which.min(group_load)
+    group_assign[i] <- g
+    group_load[g] <- group_load[g] + samp_tbl$n_pixels[i]
+  }
+
+  samp_tbl$group_id <- group_assign
+
+  group_map <- setNames(samp_tbl$group_id, as.character(samp_tbl$sample_id))
+  pixel_group <- unname(group_map[as.character(train_meta$sample_id)])
+
+  index <- vector("list", n_groups)
+  indexOut <- vector("list", n_groups)
+
+  for (g in seq_len(n_groups)) {
+    indexOut[[g]] <- which(pixel_group == g)
+    index[[g]] <- which(pixel_group != g)
+  }
+
+  names(index) <- paste0("sample_group_", seq_along(index))
+  names(indexOut) <- names(index)
+
   list(index = index, indexOut = indexOut)
 }
 
@@ -1011,7 +1052,7 @@ build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) 
   if (!is.finite(cv_folds) || cv_folds <= 1L) return(NULL)
 
   if (identical(strategy, "leave_one_sample_out")) {
-    return(make_loso_cv_indices(train_meta))
+    return(make_loso_cv_indices(train_meta, cv_folds = cv_folds, seed = seed))
   }
 
   if (identical(strategy, "spatial_block")) {
