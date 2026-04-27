@@ -59,6 +59,9 @@ training_module_ui <- function(id) {
             uiOutput(ns("spatial_preview_ui"))
           ),
           numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
+          numericInput(ns("ds_cv_folds"), "CV folds (0 = none):", value = 10, min = 0),
+          tags$small(style = "color:#666; display:block; margin-top:4px;",
+                     "CV folds are stored in the dataset snapshot."),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
           actionButton(ns("create_dataset_btn"), "Create Dataset",
                        class = "btn-success btn-sm", style = "width:100%"),
@@ -95,7 +98,11 @@ training_module_ui <- function(id) {
         numericInput(ns("min_node_size"), "min.node.size",       value = 10,   min = 1),
         selectInput( ns("splitrule"),     "splitrule",
                      choices = c("gini", "extratrees"), selected = "gini"),
-        uiOutput(ns("cv_folds_ui")),
+        tags$div(
+          class = "form-control",
+          style = "height:auto; min-height:38px; background:#f8f9fa; color:#555;",
+          "CV folds are fixed in the dataset snapshot"
+        ),
         numericInput(ns("seed"),          "Training / CV seed",  value = 1234, min = 1),
 
         hr(),
@@ -450,7 +457,7 @@ training_module_server <- function(id) {
         "Spatial block" = "spatial_block"
       )
       if (n_samples >= 3) {
-        choices <- c(choices, "Leave-one-sample-out" = "leave_one_sample_out")
+        choices <- c(choices, "Grouped sample-out" = "leave_one_sample_out")
       }
       selected <- input$ds_split_strategy
       if (is.null(selected) || !(selected %in% unname(choices))) selected <- unname(choices)[1]
@@ -529,41 +536,26 @@ training_module_server <- function(id) {
       )
     })
 
-    output$cv_folds_ui <- renderUI({
-      strategy <- selected_dataset_split_strategy()
-
-      if (identical(strategy, "leave_one_sample_out")) {
-        tagList(
-          tags$label("CV folds"),
-          tags$div(
-            class = "form-control",
-            style = "height:auto; min-height:38px; background:#f8f9fa; color:#555;",
-            "Leave-one-sample-out"
-          ),
-          tags$small(
-            style = "color:#666; display:block; margin-top:4px;",
-            "For leave-one-sample-out, the number of CV folds is determined automatically by the training samples."
-          )
-        )
-      } else {
-        numericInput(ns("cv_folds"), "CV folds (0 = none)", value = 10, min = 0)
-      }
-    })
-
     output$dataset_info_ui <- renderUI({
       req(input$dataset_id, nchar(input$dataset_id) > 0)
       tryCatch({
         ds <- get_dataset(input$dataset_id)
         n  <- length(unlist(ds$sample_ids))
         sp <- if (is.data.frame(ds$split)) as.list(ds$split[1,]) else ds$split[[1]]
+        split_label <- if (identical(sp$strategy, "leave_one_sample_out")) {
+          "Grouped sample-out"
+        } else {
+          sp$strategy %||% "random"
+        }
         tagList(tags$small(
           tags$b("Study: "),    ds$study_id,  tags$br(),
           tags$b("Samples: "),  n,            tags$br(),
           tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
           tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
           tags$b("Stage: "),    ds$stage_type, tags$br(),
-          tags$b("Split strategy: "), sp$strategy %||% "random", tags$br(),
+          tags$b("Split strategy: "), split_label, tags$br(),
           tags$b("Split: "),    if (!is.null(sp$train_frac)) paste0(sp$train_frac * 100, "% train | ") else "", "seed=", sp$seed,
+          if (!is.null(sp$cv_folds)) tagList(tags$br(), tags$b("CV folds: "), sp$cv_folds),
           if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
           if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
           if (!is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
@@ -634,7 +626,7 @@ training_module_server <- function(id) {
           title_text = "CV fold class counts",
           subtitle_text = paste0(
             "Preview of class counts per fold using the current block size, buffer radius, and training / CV seed. ",
-            "Recommended CV folds: ",
+            "Recommended CV folds (store in dataset): ",
             if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
           )
         )
@@ -759,7 +751,7 @@ training_module_server <- function(id) {
         rec_folds2 <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
 
         if (is.finite(spatial_rec$recommended_cv_folds) && spatial_rec$recommended_cv_folds >= 2) {
-          updateNumericInput(session, "cv_folds", value = spatial_rec$recommended_cv_folds)
+          updateNumericInput(session, "ds_cv_folds", value = spatial_rec$recommended_cv_folds)
         }
 
         output$estimate_spatial_text <- renderUI({
@@ -907,7 +899,8 @@ training_module_server <- function(id) {
         split_strategy <- input$ds_split_strategy %||% "random"
         split_obj <- list(
           strategy = split_strategy,
-          seed = as.integer(input$ds_seed)
+          seed = as.integer(input$ds_seed),
+          cv_folds = as.integer(input$ds_cv_folds %||% 0L)
         )
         if (split_strategy != "leave_one_sample_out") {
           split_obj$train_frac <- as.numeric(input$ds_train_frac)
@@ -934,7 +927,7 @@ training_module_server <- function(id) {
         }
 
         if (split_strategy == "leave_one_sample_out" && length(samp_ids) < 3) {
-          showNotification("Leave-one-sample-out requires at least 3 samples.", type = "warning")
+          showNotification("Grouped sample-out requires at least 3 samples.", type = "warning")
           return()
         }
 
@@ -1074,7 +1067,6 @@ training_module_server <- function(id) {
           splitrule         = input$splitrule,
           min_node_size     = input$min_node_size,
           num_trees         = input$num_trees,
-          cv_folds          = input$cv_folds,
           seed              = input$seed
         )
         last_run_id(run_id)
@@ -1233,6 +1225,11 @@ training_module_server <- function(id) {
         if (is.null(x) || length(x) == 0) return(default)
         as.character(x[1])
       }
+      split_label <- function(x) {
+        if (is.null(x) || length(x) == 0) return("—")
+        val <- as.character(x[1])
+        if (identical(val, "leave_one_sample_out")) "Grouped sample-out" else val
+      }
       first_num <- function(x) {
         if (is.null(x) || length(x) == 0) return(NA_real_)
         suppressWarnings(as.numeric(x[1]))
@@ -1298,7 +1295,7 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("splitrule"), tags$td(first_chr(hp[["splitrule"]]))),
                 tags$tr(tags$td("CV folds"), tags$td(first_chr(hp[["cv_folds"]]))),
                 tags$tr(tags$td("Seed"), tags$td(first_chr(hp[["seed"]]))),
-                tags$tr(tags$td("Split strategy"), tags$td(first_chr(hp[["split_strategy"]]))),
+                tags$tr(tags$td("Split strategy"), tags$td(split_label(hp[["split_strategy"]]))),
                 tags$tr(tags$td("Block size"), tags$td(first_chr(hp[["split_block_size"]]))),
                 tags$tr(tags$td("Buffer radius"), tags$td(first_chr(hp[["split_buffer_radius"]]))),
                 tags$tr(tags$td("Min pixels per merged block"), tags$td(first_chr(hp[["split_min_pixels_per_block"]])))

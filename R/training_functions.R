@@ -620,7 +620,7 @@ make_random_cv_indices <- function(n, cv_folds, seed = 1234L) {
 
 make_loso_cv_indices <- function(train_meta, cv_folds = 10L, seed = 1234L) {
   if (is.null(train_meta) || !is.data.frame(train_meta) || !("sample_id" %in% names(train_meta))) {
-    stop("leave_one_sample_out CV requires train_meta with column: sample_id")
+    stop("Grouped sample-out CV requires train_meta with column: sample_id")
   }
 
   samp_tbl <- train_meta |>
@@ -628,12 +628,12 @@ make_loso_cv_indices <- function(train_meta, cv_folds = 10L, seed = 1234L) {
 
   n_samples <- nrow(samp_tbl)
   if (n_samples < 2L) {
-    stop("Need at least 2 training samples for leave_one_sample_out CV.")
+    stop("Need at least 2 training samples for grouped sample-out CV.")
   }
 
   n_groups <- min(as.integer(cv_folds), n_samples)
   if (!is.finite(n_groups) || n_groups < 2L) {
-    stop("leave_one_sample_out CV requires at least 2 folds.")
+    stop("Grouped sample-out CV requires at least 2 folds.")
   }
 
   set.seed(as.integer(seed))
@@ -690,6 +690,7 @@ normalize_split_info <- function(split_info) {
     strategy = as.character(first_scalar(split_info$strategy, "random")),
     train_frac = suppressWarnings(as.numeric(first_scalar(split_info$train_frac, NA_real_))),
     seed = suppressWarnings(as.integer(first_scalar(split_info$seed, NA_integer_))),
+    cv_folds = suppressWarnings(as.integer(first_scalar(split_info$cv_folds, NA_integer_))),
     block_size = suppressWarnings(as.integer(first_scalar(split_info$block_size, NA_integer_))),
     buffer_radius = suppressWarnings(as.numeric(first_scalar(split_info$buffer_radius, NA_real_))),
     min_pixels_per_block = suppressWarnings(as.integer(first_scalar(split_info$min_pixels_per_block, NA_integer_)))
@@ -1125,6 +1126,11 @@ train_ranger_from_dataset <- function(
   split_info <- data$split_info %||% list(strategy = "random")
   dataset_meta <- data$dataset_meta %||% NULL
 
+  split_info <- normalize_split_info(split_info)
+  cv_folds <- split_info$cv_folds %||% cv_folds
+  cv_folds <- suppressWarnings(as.integer(cv_folds))
+  if (!is.finite(cv_folds)) cv_folds <- as.integer(0)
+
   message("[train] Applying normalization: ", normalize_method)
   train_X <- normalize_feature_matrix(train_X, normalize_method)
   test_X  <- normalize_feature_matrix(test_X,  normalize_method)
@@ -1133,7 +1139,13 @@ train_ranger_from_dataset <- function(
           " | Test pixels: ", nrow(test_X),
           " | Features: ", ncol(train_X),
           " | Classes: ", nlevels(train_y))
-  message("[train] Split strategy: ", split_info$strategy %||% "random")
+  display_strategy <- if (identical(split_info$strategy, "leave_one_sample_out")) {
+    "grouped_sample_out"
+  } else {
+    split_info$strategy %||% "random"
+  }
+  message("[train] Split strategy: ", display_strategy)
+    message("[train] CV folds (dataset): ", cv_folds)
 
 
   set.seed(seed)
@@ -1207,7 +1219,8 @@ train_ranger_from_dataset <- function(
     num_threads   = as.integer(num_threads),
     split_strategy = as.character(split_info$strategy %||% "random"),
     split_block_size = as.integer(split_info$block_size %||% NA_integer_),
-    split_buffer_radius = as.numeric(split_info$buffer_radius %||% NA_real_)
+    split_buffer_radius = as.numeric(split_info$buffer_radius %||% NA_real_),
+    split_cv_folds = as.integer(split_info$cv_folds %||% NA_integer_)
   )
 
   tune_grid <- expand.grid(

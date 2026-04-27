@@ -854,7 +854,7 @@ make_outer_split_indices <- function(meta, split_strategy = "random", split_seed
 
   if (split_strategy == "leave_one_sample_out") {
     u <- unique(meta$sample_id)
-    if (length(u) < 3) stop("leave_one_sample_out requires at least 3 samples.")
+    if (length(u) < 3) stop("Grouped sample-out requires at least 3 samples.")
     test_sample <- sample(u, 1)
     te_idx <- which(meta$sample_id == test_sample)
     tr_idx <- setdiff(all_idx, te_idx)
@@ -956,6 +956,7 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
   split_strategy <- sp$strategy  %||% "random"
   split_seed     <- as.integer(sp$seed %||% 42L)
   split_frac     <- as.numeric(sp$train_frac %||% 0.8)
+  split_cv_folds <- suppressWarnings(as.integer(sp$cv_folds %||% NA_integer_))
 
   message("[dataset] Materialising dataset ", dataset_id,
           " (", length(sample_ids), " samples)")
@@ -998,6 +999,7 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
       strategy   = split_strategy,
       seed       = split_seed,
       train_frac = split_frac,
+      cv_folds   = split_cv_folds,
       block_size = block_size,
       buffer_radius = buffer_radius,
       n_train    = length(tr_idx),
