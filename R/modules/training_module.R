@@ -98,11 +98,7 @@ training_module_ui <- function(id) {
         numericInput(ns("min_node_size"), "min.node.size",       value = 10,   min = 1),
         selectInput( ns("splitrule"),     "splitrule",
                      choices = c("gini", "extratrees"), selected = "gini"),
-        tags$div(
-          class = "form-control",
-          style = "height:auto; min-height:38px; background:#f8f9fa; color:#555;",
-          "CV folds are fixed in the dataset snapshot"
-        ),
+
         numericInput(ns("seed"),          "Training / CV seed",  value = 1234, min = 1),
 
         hr(),
@@ -679,7 +675,7 @@ training_module_server <- function(id) {
           lag_breaks = NULL,
           max_dist = 100,
           max_pairs_per_bin = 300L,
-          local_decay_threshold = 0.10,
+          local_decay_threshold = 0,
           seed = as.integer(input$ds_seed %||% 42L),
           workers = max(1L, min(8L, parallel::detectCores(logical = FALSE) - 1L))
         )
