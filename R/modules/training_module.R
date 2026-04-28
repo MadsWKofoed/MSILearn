@@ -20,6 +20,15 @@ training_module_ui <- function(id) {
                       choices  = c("— select study first —" = ""),
                       multiple = TRUE, width = "100%"),
           selectInput(
+            ns("ds_evaluation_mode"),
+            "Evaluation mode:",
+            choices = c(
+              "CV + held-out test" = "cv_plus_test",
+              "CV only" = "cv_only"
+            ),
+            selected = "cv_plus_test"
+          ),
+          selectInput(
             ns("ds_split_strategy"),
             "Split strategy:",
             choices = c(
@@ -29,7 +38,11 @@ training_module_ui <- function(id) {
             selected = "random"
           ),
           conditionalPanel(
-            condition = sprintf("input['%s'] != 'leave_one_sample_out'", ns("ds_split_strategy")),
+            condition = sprintf(
+              "input['%s'] == 'cv_plus_test' && input['%s'] != 'leave_one_sample_out'",
+              ns("ds_evaluation_mode"),
+              ns("ds_split_strategy")
+            ),
             numericInput(ns("ds_train_frac"), "Train fraction:", value = 0.8,
                          min = 0.5, max = 0.95, step = 0.05)
           ),
@@ -54,14 +67,17 @@ training_module_ui <- function(id) {
             ),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
             numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
-            actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
-              class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
-            uiOutput(ns("spatial_preview_ui"))
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'cv_plus_test'", ns("ds_evaluation_mode")),
+              actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
+                class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
+              uiOutput(ns("spatial_preview_ui"))
+            )
           ),
           numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
           numericInput(ns("ds_cv_folds"), "CV folds (0 = none):", value = 10, min = 0),
           tags$small(style = "color:#666; display:block; margin-top:4px;",
-                     "CV folds are stored in the dataset snapshot."),
+                     "CV folds are stored in the dataset snapshot. CV-only mode requires folds greater than 1."),
           textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
           actionButton(ns("create_dataset_btn"), "Create Dataset",
                        class = "btn-success btn-sm", style = "width:100%"),
@@ -128,6 +144,17 @@ training_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
 
     ns <- session$ns
+
+    normalize_eval_mode <- function(x) {
+      mode <- as.character(x %||% "cv_plus_test")
+      if (!mode %in% c("cv_plus_test", "cv_only")) mode <- "cv_plus_test"
+      mode
+    }
+
+    evaluation_mode_label <- function(x) {
+      mode <- normalize_eval_mode(x)
+      if (identical(mode, "cv_only")) "CV only" else "CV + held-out test"
+    }
 
     log_val          <- reactiveVal("")
     last_run_id      <- reactiveVal(NULL)
@@ -448,13 +475,15 @@ training_module_server <- function(id) {
       )
     }, ignoreInit = TRUE)
 
-    observeEvent(input$ds_samples, {
+    observeEvent(list(input$ds_samples, input$ds_evaluation_mode), {
       n_samples <- length(input$ds_samples %||% character(0))
+      evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
       choices <- c(
         "Random" = "random",
         "Spatial block" = "spatial_block"
       )
-      if (n_samples >= 3) {
+      min_grouped_samples <- if (identical(evaluation_mode, "cv_only")) 2 else 3
+      if (n_samples >= min_grouped_samples) {
         choices <- c(choices, "Grouped sample-out" = "leave_one_sample_out")
       }
       selected <- input$ds_split_strategy
@@ -465,7 +494,8 @@ training_module_server <- function(id) {
     observeEvent(
       list(
         input$ds_study, input$ds_pipeline, input$ds_ann_set,
-        input$ds_samples, input$ds_split_strategy, input$spatial_buffer_mode
+        input$ds_samples, input$ds_split_strategy, input$ds_evaluation_mode,
+        input$spatial_buffer_mode
       ),
       {
         estimate_diag_rv(NULL)
@@ -499,8 +529,10 @@ training_module_server <- function(id) {
     observe({
       strategy <- input$ds_split_strategy %||% "random"
       mode <- input$spatial_buffer_mode %||% "estimate"
+      evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
 
       base_ready <-
+        identical(evaluation_mode, "cv_plus_test") &&
         identical(strategy, "spatial_block") &&
         nzchar(input$ds_study %||% "") &&
         length(input$ds_samples %||% character(0)) > 0 &&
@@ -540,6 +572,7 @@ training_module_server <- function(id) {
         ds <- get_dataset(input$dataset_id)
         n  <- length(unlist(ds$sample_ids))
         sp <- if (is.data.frame(ds$split)) as.list(ds$split[1,]) else ds$split[[1]]
+        eval_mode <- normalize_eval_mode(sp$evaluation_mode)
         split_label <- if (identical(sp$strategy, "leave_one_sample_out")) {
           "Grouped sample-out"
         } else {
@@ -551,8 +584,15 @@ training_module_server <- function(id) {
           tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
           tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
           tags$b("Stage: "),    ds$stage_type, tags$br(),
+          tags$b("Evaluation mode: "), evaluation_mode_label(eval_mode), tags$br(),
           tags$b("Split strategy: "), split_label, tags$br(),
-          tags$b("Split: "),    if (!is.null(sp$train_frac)) paste0(sp$train_frac * 100, "% train | ") else "", "seed=", sp$seed,
+          tags$b("Split: "),
+          if (identical(eval_mode, "cv_plus_test") && !is.null(sp$train_frac)) {
+            paste0(sp$train_frac * 100, "% train | ")
+          } else {
+            ""
+          },
+          "seed=", sp$seed,
           if (!is.null(sp$cv_folds)) tagList(tags$br(), tags$b("CV folds: "), sp$cv_folds),
           if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
           if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
@@ -568,6 +608,7 @@ training_module_server <- function(id) {
     })
 
     output$spatial_preview_ui <- renderUI({
+      if (normalize_eval_mode(input$ds_evaluation_mode) != "cv_plus_test") return(NULL)
       if ((input$ds_split_strategy %||% "random") != "spatial_block") return(NULL)
 
       mode <- input$spatial_buffer_mode %||% "estimate"
@@ -643,6 +684,7 @@ training_module_server <- function(id) {
       samp_ids <- input$ds_samples
       pid      <- input$ds_pipeline
       ann_id   <- input$ds_ann_set
+      evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
 
       estimate_in_progress_rv(TRUE)
       estimate_diag_rv(NULL)
@@ -734,17 +776,19 @@ training_module_server <- function(id) {
           )
         )
 
-        split_idx <- make_outer_split_indices(
-          meta = src$meta,
-          split_strategy = "spatial_block",
-          split_seed = as.integer(input$ds_seed %||% 42L),
-          train_frac = as.numeric(input$ds_train_frac),
-          block_size = as.integer(rec_block),
-          buffer_radius = as.numeric(rec_buf)
-        )
-
-        tr_idx <- split_idx$train_idx
-        train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
+        train_meta_preview <- if (identical(evaluation_mode, "cv_only")) {
+          src$meta
+        } else {
+          split_idx <- make_outer_split_indices(
+            meta = src$meta,
+            split_strategy = "spatial_block",
+            split_seed = as.integer(input$ds_seed %||% 42L),
+            train_frac = as.numeric(input$ds_train_frac),
+            block_size = as.integer(rec_block),
+            buffer_radius = as.numeric(rec_buf)
+          )
+          src$meta[split_idx$train_idx, , drop = FALSE]
+        }
 
         spatial_rec <- recommend_spatial_params(
           meta = train_meta_preview,
@@ -833,9 +877,14 @@ training_module_server <- function(id) {
       ann_id   <- input$ds_ann_set
       strategy <- input$ds_split_strategy %||% "random"
       mode     <- input$spatial_buffer_mode %||% "estimate"
+      evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
 
       if (strategy != "spatial_block") {
         showNotification("Choose 'Spatial block' to preview spatial split.", type = "warning")
+        return()
+      }
+      if (evaluation_mode != "cv_plus_test") {
+        showNotification("Spatial outer split preview is only available in 'CV + held-out test' mode.", type = "warning")
         return()
       }
       if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
@@ -902,12 +951,19 @@ training_module_server <- function(id) {
 
       tryCatch({
         split_strategy <- input$ds_split_strategy %||% "random"
+        evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
+        cv_folds <- as.integer(input$ds_cv_folds %||% 0L)
         split_obj <- list(
           strategy = split_strategy,
           seed = as.integer(input$ds_seed),
-          cv_folds = as.integer(input$ds_cv_folds %||% 0L)
+          cv_folds = cv_folds,
+          evaluation_mode = evaluation_mode
         )
-        if (split_strategy != "leave_one_sample_out") {
+        if (identical(evaluation_mode, "cv_only") && cv_folds <= 1L) {
+          showNotification("CV-only mode requires CV folds greater than 1.", type = "warning")
+          return()
+        }
+        if (identical(evaluation_mode, "cv_plus_test") && split_strategy != "leave_one_sample_out") {
           split_obj$train_frac <- as.numeric(input$ds_train_frac)
         }
         if (split_strategy == "spatial_block") {
@@ -931,8 +987,12 @@ training_module_server <- function(id) {
           }
         }
 
-        if (split_strategy == "leave_one_sample_out" && length(samp_ids) < 3) {
-          showNotification("Grouped sample-out requires at least 3 samples.", type = "warning")
+        min_grouped_samples <- if (identical(evaluation_mode, "cv_only")) 2 else 3
+        if (split_strategy == "leave_one_sample_out" && length(samp_ids) < min_grouped_samples) {
+          showNotification(
+            paste0("Grouped sample-out requires at least ", min_grouped_samples, " samples in this evaluation mode."),
+            type = "warning"
+          )
           return()
         }
 
@@ -1110,6 +1170,10 @@ training_module_server <- function(id) {
         as.character(v[1])
       }
 
+      eval_mode_display <- function(x) {
+        evaluation_mode_label(x)
+      }
+
       df_sorted <- df[order(df$created_at, decreasing = TRUE), , drop = FALSE]
       n <- nrow(df_sorted)
 
@@ -1123,6 +1187,7 @@ training_module_server <- function(id) {
         node  <- as.character(hp_obj$min_node_size %||% NA)
         rule  <- as.character(hp_obj$splitrule %||% NA)
         cv    <- as.character(hp_obj$cv_folds %||% NA)
+        eval_mode <- vapply(hp_obj$evaluation_mode %||% rep("cv_plus_test", n), eval_mode_display, character(1))
       } else {
         norm  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "normalize_method"), character(1))
         mtry  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "mtry"), character(1))
@@ -1130,6 +1195,7 @@ training_module_server <- function(id) {
         node  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "min_node_size"), character(1))
         rule  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "splitrule"), character(1))
         cv    <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "cv_folds"), character(1))
+        eval_mode <- vapply(seq_len(n), \(i) eval_mode_display(hp_get(hp_obj[[i]], "evaluation_mode")), character(1))
       }
 
       if (is.data.frame(m_obj)) {
@@ -1142,16 +1208,20 @@ training_module_server <- function(id) {
         cv_acc     <- vapply(seq_len(n), \(i) m_get(m_obj[[i]], "cv_mean_accuracy"), numeric(1))
       }
 
+      primary_score <- ifelse(grepl("^CV only$", eval_mode), cv_acc, test_acc)
+
       tbl <- data.frame(
         run_id_full = df_sorted[["_id"]],
         run_id      = substr(df_sorted[["_id"]], 1, 30),
         model_type  = df_sorted$model_type,
+        evaluation  = eval_mode,
         normalisation = norm,
         mtry        = mtry,
         trees       = trees,
         node        = node,
         rule        = rule,
         cv          = cv,
+        primary_score = primary_score,
         test_acc    = test_acc,
         test_kappa  = test_kappa,
         cv_acc      = cv_acc,
@@ -1170,7 +1240,7 @@ training_module_server <- function(id) {
         ),
         class = "compact stripe hover"
       ) |>
-        DT::formatRound(c("test_acc", "test_kappa", "cv_acc"), digits = 4)
+        DT::formatRound(c("primary_score", "test_acc", "test_kappa", "cv_acc"), digits = 4)
     })
 
     observeEvent(input$run_table_rows_selected, {
@@ -1205,26 +1275,168 @@ training_module_server <- function(id) {
       list(value = x)
     }
 
+    unwrap_nested_metric <- function(x) {
+      obj <- x
+      repeat {
+        if (is.data.frame(obj) || is.null(obj) || !is.list(obj) || length(obj) != 1) break
+        obj <- obj[[1]]
+      }
+      obj
+    }
+
+    get_run_payload <- function(rid) {
+      row <- get_model_run(rid)
+      if (is.null(row) || nrow(row) == 0) return(NULL)
+
+      m <- extract_subdoc(row, "metrics")
+      hp <- extract_subdoc(row, "hyperparams")
+
+      if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
+      if (is.data.frame(hp)) hp <- as.list(hp[1, , drop = FALSE])
+      if (is.null(m)) m <- list()
+      if (is.null(hp)) hp <- list()
+      if (!is.list(m)) m <- list(value = m)
+      if (!is.list(hp)) hp <- list(value = hp)
+
+      list(row = row, metrics = m, hyperparams = hp)
+    }
+
+    extract_cm_df_from_metrics <- function(metrics, key) {
+      cm_obj <- unwrap_nested_metric(metrics[[key]])
+      if (is.null(cm_obj) || !is.data.frame(cm_obj) || nrow(cm_obj) == 0) return(NULL)
+
+      cm_df <- cm_obj
+      if (!"Rel_Freq" %in% names(cm_df) && all(c("Reference", "Freq") %in% names(cm_df))) {
+        cm_df <- cm_df |>
+          dplyr::group_by(Reference) |>
+          dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
+          dplyr::ungroup()
+      }
+      cm_df
+    }
+
+    extract_roc_df_from_metrics <- function(metrics, key) {
+      roc_raw <- metrics[[key]]
+      if (is.null(roc_raw)) return(NULL)
+
+      roc_list <- unwrap_nested_metric(roc_raw)
+
+      if (is.data.frame(roc_list)) {
+        roc_entries <- lapply(seq_len(nrow(roc_list)), function(i) {
+          list(
+            class = as.character(roc_list$class[i]),
+            auc = suppressWarnings(as.numeric(roc_list$auc[i])),
+            sensitivities = unlist(roc_list$sensitivities[[i]]),
+            specificities = unlist(roc_list$specificities[[i]])
+          )
+        })
+      } else if (is.list(roc_list)) {
+        roc_entries <- lapply(roc_list, function(r) {
+          r <- unwrap_nested_metric(r)
+          if (is.data.frame(r)) {
+            return(list(
+              class = as.character(r$class[1]),
+              auc = suppressWarnings(as.numeric(r$auc[1])),
+              sensitivities = unlist(r$sensitivities[[1]]),
+              specificities = unlist(r$specificities[[1]])
+            ))
+          }
+          if (is.list(r)) {
+            return(list(
+              class = as.character(r$class[1]),
+              auc = suppressWarnings(as.numeric(r$auc[1])),
+              sensitivities = unlist(r$sensitivities),
+              specificities = unlist(r$specificities)
+            ))
+          }
+          NULL
+        })
+        roc_entries <- Filter(Negate(is.null), roc_entries)
+      } else {
+        return(NULL)
+      }
+
+      roc_rows <- lapply(roc_entries, function(r) {
+        if (length(r$sensitivities) == 0 || length(r$specificities) == 0) return(NULL)
+        n <- min(length(r$sensitivities), length(r$specificities))
+        data.frame(
+          class = r$class,
+          fpr = 1 - as.numeric(r$specificities[seq_len(n)]),
+          tpr = as.numeric(r$sensitivities[seq_len(n)]),
+          auc = as.numeric(r$auc),
+          stringsAsFactors = FALSE
+        )
+      })
+
+      roc_df <- dplyr::bind_rows(Filter(Negate(is.null), roc_rows))
+      if (nrow(roc_df) == 0) return(NULL)
+
+      auc_labels <- roc_df |>
+        dplyr::group_by(class) |>
+        dplyr::summarise(auc = dplyr::first(auc), .groups = "drop") |>
+        dplyr::mutate(label = sprintf("%s (AUC = %.3f)", class, auc))
+
+      dplyr::left_join(roc_df, auc_labels[, c("class", "label")], by = "class")
+    }
+
+    build_cm_plot <- function(cm_df) {
+      cm_df$Text_Color <- ifelse(cm_df$Rel_Freq > 0.5, "white", "black")
+
+      ggplot2::ggplot(cm_df, ggplot2::aes(x = Prediction, y = Reference, fill = Rel_Freq)) +
+        ggplot2::geom_tile(color = "white", linewidth = 0.6) +
+        ggplot2::geom_text(
+          ggplot2::aes(label = sprintf("%.3f", Rel_Freq), color = Text_Color),
+          size = 5, fontface = "bold", show.legend = FALSE
+        ) +
+        ggplot2::scale_color_identity() +
+        ggplot2::scale_fill_gradient(low = "white", high = "navy", name = "Relative\nFreq") +
+        ggplot2::labs(x = "Predicted", y = "Actual") +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          axis.text.x = ggplot2::element_text(face = "bold", size = 11),
+          axis.text.y = ggplot2::element_text(face = "bold", size = 11),
+          panel.grid = ggplot2::element_blank()
+        )
+    }
+
+    build_roc_plot <- function(roc_df) {
+      n_classes <- length(unique(roc_df$class))
+      legend_nrow <- ceiling(n_classes / 3)
+
+      ggplot2::ggplot(roc_df, ggplot2::aes(x = fpr, y = tpr, color = label)) +
+        ggplot2::geom_line(linewidth = 1.2) +
+        ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey60") +
+        ggplot2::scale_x_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+        ggplot2::scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+        ggplot2::labs(x = "False Positive Rate", y = "True Positive Rate", color = NULL) +
+        ggplot2::guides(color = ggplot2::guide_legend(nrow = legend_nrow, byrow = TRUE)) +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          legend.position = "bottom",
+          legend.text = ggplot2::element_text(size = 13),
+          legend.title = ggplot2::element_blank(),
+          legend.key.width = grid::unit(1.6, "cm"),
+          legend.key.height = grid::unit(0.7, "cm"),
+          axis.title = ggplot2::element_text(size = 13),
+          axis.text = ggplot2::element_text(size = 11),
+          plot.margin = ggplot2::margin(10, 15, 10, 15)
+        )
+    }
+
     output$run_details_ui <- renderUI({
       rid <- selected_run_id()
       if (is.null(rid) || !nzchar(rid)) {
-        return(tags$p(style="color:#888", "Click a run to see details."))
+        return(tags$p(style = "color:#888", "Click a run to see details."))
       }
 
-      row <- get_model_run(rid)
-      if (is.null(row) || nrow(row) == 0) {
-        return(tags$p(style="color:#c00", "Could not load run from DB. Try refresh."))
+      payload <- get_run_payload(rid)
+      if (is.null(payload)) {
+        return(tags$p(style = "color:#c00", "Could not load run from DB. Try refresh."))
       }
 
-      m  <- extract_subdoc(row, "metrics")
-      hp <- extract_subdoc(row, "hyperparams")
-
-      if (is.data.frame(m))  m  <- as.list(m[1, , drop=FALSE])
-      if (is.data.frame(hp)) hp <- as.list(hp[1, , drop=FALSE])
-      if (is.null(m))  m  <- list()
-      if (is.null(hp)) hp <- list()
-      if (!is.list(m))  m  <- list(value = m)
-      if (!is.list(hp)) hp <- list(value = hp)
+      row <- payload$row
+      m <- payload$metrics
+      hp <- payload$hyperparams
 
       first_chr <- function(x, default = "—") {
         if (is.null(x) || length(x) == 0) return(default)
@@ -1241,26 +1453,41 @@ training_module_server <- function(id) {
       }
       fmt_num <- function(x, digits = 4) {
         v <- first_num(x)
-        if (!is.finite(v)) return(tags$span(style="color:#aaa", "—"))
+        if (!is.finite(v)) return(tags$span(style = "color:#aaa", "—"))
         tags$b(round(v, digits))
+      }
+
+      evaluation_mode <- normalize_eval_mode(hp[["evaluation_mode"]] %||% m[["evaluation_mode"]])
+      has_test_set <- {
+        flag <- first_chr(m[["has_test_set"]], "")
+        if (nzchar(flag)) {
+          tolower(flag) %in% c("true", "1")
+        } else {
+          is.finite(first_num(m[["test_accuracy"]])) || !is.null(extract_cm_df_from_metrics(m, "cm_table"))
+        }
       }
 
       lo <- first_num(m[["test_acc_lower"]])
       hi <- first_num(m[["test_acc_upper"]])
 
+      cv_cm_df <- extract_cm_df_from_metrics(m, "cv_cm_table")
+      cv_roc_df <- extract_roc_df_from_metrics(m, "cv_roc_data")
+      test_cm_df <- extract_cm_df_from_metrics(m, "cm_table")
+      test_roc_df <- extract_roc_df_from_metrics(m, "roc_data")
+      cv_warning <- first_chr(m[["cv_warning"]], "")
+
       bc_keys <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
       class_names <- gsub("^byclass_Sensitivity__", "", bc_keys)
 
-      perclass_tbl <- if (length(class_names) > 0) {
+      perclass_tbl <- if (has_test_set && length(class_names) > 0) {
         safe_key <- function(metric, cls) {
-          k <- paste0("byclass_", metric, "__", cls)
-          v <- tryCatch(m[[k]], error = function(e) NULL)
-          num <- first_num(v)
+          key <- paste0("byclass_", metric, "__", cls)
+          num <- first_num(m[[key]])
           if (!is.finite(num)) "—" else sprintf("%.4f", num)
         }
         tags$table(
-          class="table table-condensed table-bordered",
-          style="font-size:13px; margin-top:8px;",
+          class = "table table-condensed table-bordered",
+          style = "font-size:13px; margin-top:8px;",
           tags$thead(tags$tr(
             tags$th("Class"),
             tags$th("Sensitivity"), tags$th("Specificity"),
@@ -1269,7 +1496,7 @@ training_module_server <- function(id) {
           )),
           tags$tbody(lapply(class_names, function(cls) {
             tags$tr(
-              tags$td(tags$b(gsub("_"," ", cls))),
+              tags$td(tags$b(gsub("_", " ", cls))),
               tags$td(safe_key("Sensitivity", cls)),
               tags$td(safe_key("Specificity", cls)),
               tags$td(safe_key("Precision", cls)),
@@ -1279,25 +1506,106 @@ training_module_server <- function(id) {
             )
           }))
         )
+      } else if (has_test_set) {
+        tags$p(style = "color:#aaa", "No per-class held-out test metrics stored.")
       } else {
-        tags$p(style="color:#aaa", "No per-class metrics stored.")
+        NULL
+      }
+
+      cv_section <- tagList(
+        tags$h5("Cross-validation evaluation"),
+        if (!is.null(m[["cv_mean_accuracy"]])) {
+          tags$table(class = "table table-condensed", style = "font-size:13px;",
+            tags$tr(tags$td("CV accuracy"), tags$td(fmt_num(m[["cv_mean_accuracy"]]))),
+            tags$tr(tags$td("CV accuracy SD"), tags$td(fmt_num(m[["cv_acc_sd"]]))),
+            tags$tr(tags$td("CV kappa"), tags$td(fmt_num(m[["cv_mean_kappa"]]))),
+            tags$tr(tags$td("CV mean F1"), tags$td(fmt_num(m[["cv_mean_f1"]]))),
+            tags$tr(tags$td("CV macro F1 from predictions"), tags$td(fmt_num(m[["cv_macro_f1_from_predictions"]]))),
+            tags$tr(tags$td("CV predictions"), tags$td(first_chr(m[["n_cv_predictions"]])))
+          )
+        } else {
+          tags$p(style = "color:#aaa", "No CV scalar metrics stored.")
+        },
+        if (nzchar(cv_warning)) {
+          tags$div(class = "alert alert-warning", style = "padding:8px; margin-top:8px;", cv_warning)
+        } else if (is.null(cv_cm_df) && is.null(cv_roc_df) && !is.null(m[["cv_mean_accuracy"]])) {
+          tags$div(
+            class = "alert alert-secondary",
+            style = "padding:8px; margin-top:8px;",
+            "CV confusion matrix / ROC were not stored for this run."
+          )
+        },
+        if (!is.null(cv_cm_df)) {
+          tagList(
+            tags$h6("CV confusion matrix"),
+            plotOutput(ns("cv_cm_plot"), height = "300px")
+          )
+        },
+        if (!is.null(cv_roc_df)) {
+          tagList(
+            tags$h6("CV ROC curves"),
+            plotOutput(ns("cv_roc_plot"), height = "650px")
+          )
+        }
+      )
+
+      test_section <- if (has_test_set) {
+        tagList(
+          tags$h5("Held-out test evaluation"),
+          tags$table(class = "table table-condensed", style = "font-size:13px;",
+            tags$tr(tags$td("Accuracy"), tags$td(fmt_num(m[["test_accuracy"]]))),
+            tags$tr(tags$td("95% CI"), tags$td({
+              if (is.finite(lo) && is.finite(hi)) paste0("[", round(lo, 4), ", ", round(hi, 4), "]") else "—"
+            })),
+            tags$tr(tags$td("Kappa"), tags$td(fmt_num(m[["test_kappa"]]))),
+            tags$tr(tags$td("Test pixels"), tags$td(first_chr(m[["n_test"]])))
+          ),
+          tags$h6("Per-class metrics"),
+          perclass_tbl,
+          if (!is.null(test_cm_df)) {
+            tagList(
+              tags$h6("Held-out confusion matrix"),
+              plotOutput(ns("test_cm_plot"), height = "300px")
+            )
+          },
+          if (!is.null(test_roc_df)) {
+            tagList(
+              tags$h6("Held-out ROC curves"),
+              plotOutput(ns("test_roc_plot"), height = "650px")
+            )
+          }
+        )
+      } else {
+        tagList(
+          tags$h5("Held-out test evaluation"),
+          tags$div(
+            class = "alert alert-info",
+            style = "padding:8px; margin-top:8px;",
+            "No held-out test set was used for this run."
+          )
+        )
       }
 
       tagList(
         tags$div(
-          style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:14px; margin-bottom:12px;",
-          tags$h5(style="margin-top:0", tags$code(rid)),
-
+          style = "background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:14px; margin-bottom:12px;",
+          tags$h5(style = "margin-top:0", tags$code(rid)),
           fluidRow(
             column(4,
-              tags$h6(tags$b("Hyperparameters")),
-              tags$table(class="table table-condensed", style="font-size:13px;",
+              tags$h6(tags$b("Run setup")),
+              tags$table(class = "table table-condensed", style = "font-size:13px;",
                 tags$tr(tags$td("Model"), tags$td(first_chr(row$model_type))),
+                tags$tr(tags$td("Evaluation mode"), tags$td(evaluation_mode_label(evaluation_mode))),
                 tags$tr(tags$td("Normalisation"), tags$td(first_chr(hp[["normalize_method"]]))),
                 tags$tr(tags$td("mtry"), tags$td(first_chr(hp[["mtry"]]))),
                 tags$tr(tags$td("num.trees"), tags$td(first_chr(hp[["num_trees"]]))),
                 tags$tr(tags$td("min.node.size"), tags$td(first_chr(hp[["min_node_size"]]))),
-                tags$tr(tags$td("splitrule"), tags$td(first_chr(hp[["splitrule"]]))),
+                tags$tr(tags$td("splitrule"), tags$td(first_chr(hp[["splitrule"]])))
+              )
+            ),
+            column(4,
+              tags$h6(tags$b("Split / CV setup")),
+              tags$table(class = "table table-condensed", style = "font-size:13px;",
                 tags$tr(tags$td("CV folds"), tags$td(first_chr(hp[["cv_folds"]]))),
                 tags$tr(tags$td("Seed"), tags$td(first_chr(hp[["seed"]]))),
                 tags$tr(tags$td("Split strategy"), tags$td(split_label(hp[["split_strategy"]]))),
@@ -1307,247 +1615,61 @@ training_module_server <- function(id) {
               )
             ),
             column(4,
-              tags$h6(tags$b("Test Set Metrics")),
-              tags$table(class="table table-condensed", style="font-size:13px;",
-                tags$tr(tags$td("Accuracy"), tags$td(fmt_num(m[["test_accuracy"]]))),
-                tags$tr(tags$td("95% CI"), tags$td({
-                  if (is.finite(lo) && is.finite(hi)) paste0("[", round(lo,4), ", ", round(hi,4), "]") else "—"
-                })),
-                tags$tr(tags$td("Kappa"), tags$td(fmt_num(m[["test_kappa"]])))
+              tags$h6(tags$b("Dataset size")),
+              tags$table(class = "table table-condensed", style = "font-size:13px;",
+                tags$tr(tags$td("Train pixels"), tags$td(first_chr(m[["n_train"]]))),
+                tags$tr(tags$td("Test pixels"), tags$td(first_chr(m[["n_test"]]))),
+                tags$tr(tags$td("Classes"), tags$td(first_chr(m[["n_classes"]]))),
+                tags$tr(tags$td("Features"), tags$td(first_chr(m[["n_features"]]))),
+                tags$tr(tags$td("Primary score"), tags$td(
+                  if (identical(evaluation_mode, "cv_only")) fmt_num(m[["cv_mean_accuracy"]]) else fmt_num(m[["test_accuracy"]])
+                ))
               )
-            ),
-            column(4,
-              tags$h6(tags$b("Cross-Validation Metrics")),
-              if (!is.null(m[["cv_mean_accuracy"]])) {
-                tags$table(class="table table-condensed", style="font-size:13px;",
-                  tags$tr(tags$td("CV Accuracy"), tags$td(fmt_num(m[["cv_mean_accuracy"]]))),
-                  tags$tr(tags$td("CV Acc SD"), tags$td(fmt_num(m[["cv_acc_sd"]]))),
-                  tags$tr(tags$td("CV Kappa"), tags$td(fmt_num(m[["cv_mean_kappa"]]))),
-                  tags$tr(tags$td("CV Mean F1"), tags$td(fmt_num(m[["cv_mean_f1"]]))),
-                  tags$tr(tags$td("Suggested buffer radius"), tags$td(fmt_num(m[["recommended_buffer_radius"]], digits = 2)))
-                )
-              } else {
-                tags$p(style="color:#aaa; font-size:13px;", "No CV metrics stored.")
-              }
             )
           )
         ),
-
-        tags$h6(tags$b("Per-Class Metrics (Test Set)")),
-        perclass_tbl,
-
-        tags$hr(),
-
-        tags$div(
-          style="max-width:1100px; margin:auto;",
-
-          tags$div(
-            style="margin-bottom:10px;",
-            tags$h4(
-              "Confusion Matrix",
-              style="font-weight:600; margin-bottom:6px;"
-            )
-          ),
-
-          fluidRow(
-            column(3),
-            column(
-              6,
-              plotOutput(ns("cm_plot"), height = "300px")
-            ),
-            column(3)
-          ),
-
-          tags$br(),
-
-          tags$div(
-            style="margin-bottom:10px;",
-            tags$h4(
-              "ROC Curves",
-              style="font-weight:600; margin-bottom:6px;"
-            )
-          ),
-
-          fluidRow(
-            column(2),
-            column(
-              8,
-              plotOutput(ns("roc_plot"), height = "650px")
-            ),
-            column(2)
-          )
-        )
+        tags$div(style = "max-width:1100px; margin:auto;", cv_section, tags$hr(), test_section)
       )
     })
 
-    output$cm_plot <- renderPlot({
+    output$cv_cm_plot <- renderPlot({
       rid <- selected_run_id()
       req(rid, nzchar(rid))
-      row <- get_model_run(rid)
-      req(!is.null(row) && nrow(row) > 0)
-
-      m <- extract_subdoc(row, "metrics")
-      if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
-
-      cm_raw <- m[["cm_table"]]
-      if (is.null(cm_raw)) return(NULL)
-
-      cm_df <- cm_raw
-      while (is.list(cm_df) && !is.data.frame(cm_df)) cm_df <- cm_df[[1]]
-      req(is.data.frame(cm_df))
-
-      if (!"Rel_Freq" %in% names(cm_df)) {
-        cm_df <- cm_df |>
-          dplyr::group_by(Reference) |>
-          dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
-          dplyr::ungroup()
-      }
-      cm_df$Text_Color <- ifelse(cm_df$Rel_Freq > 0.5, "white", "black")
-
-      ggplot2::ggplot(cm_df,
-                      ggplot2::aes(x = Prediction, y = Reference, fill = Rel_Freq)) +
-        ggplot2::geom_tile(color = "white", linewidth = 0.6) +
-        ggplot2::geom_text(
-          ggplot2::aes(label = sprintf("%.3f", Rel_Freq), color = Text_Color),
-          size = 5, fontface = "bold", show.legend = FALSE
-        ) +
-        ggplot2::scale_color_identity() +
-        ggplot2::scale_fill_gradient(low = "white", high = "navy",
-                                     name = "Relative\nFreq") +
-        ggplot2::labs(x = "Predicted", y = "Actual") +
-        ggplot2::theme_minimal(base_size = 13) +
-        ggplot2::theme(
-          axis.text.x  = ggplot2::element_text(face = "bold", size = 11),
-          axis.text.y  = ggplot2::element_text(face = "bold", size = 11),
-          plot.title   = ggplot2::element_text(face = "bold", hjust = 0.5),
-          panel.grid   = ggplot2::element_blank()
-        )
+      payload <- get_run_payload(rid)
+      req(!is.null(payload))
+      cm_df <- extract_cm_df_from_metrics(payload$metrics, "cv_cm_table")
+      req(!is.null(cm_df), nrow(cm_df) > 0)
+      build_cm_plot(cm_df)
     })
 
-    output$roc_plot <- renderPlot({
+    output$test_cm_plot <- renderPlot({
       rid <- selected_run_id()
       req(rid, nzchar(rid))
-      row <- get_model_run(rid)
-      req(!is.null(row) && nrow(row) > 0)
+      payload <- get_run_payload(rid)
+      req(!is.null(payload))
+      cm_df <- extract_cm_df_from_metrics(payload$metrics, "cm_table")
+      req(!is.null(cm_df), nrow(cm_df) > 0)
+      build_cm_plot(cm_df)
+    })
 
-      m <- extract_subdoc(row, "metrics")
-      if (is.data.frame(m)) m <- as.list(m[1, , drop = FALSE])
-
-      roc_raw <- m[["roc_data"]]
-      if (is.null(roc_raw)) return(NULL)
-
-      unwrap_once <- function(x) {
-        if (is.list(x) && length(x) == 1) return(x[[1]])
-        x
-      }
-
-      roc_list <- roc_raw
-      repeat {
-        new_obj <- unwrap_once(roc_list)
-        if (identical(new_obj, roc_list)) break
-        roc_list <- new_obj
-      }
-
-      if (is.data.frame(roc_list)) {
-        roc_entries <- lapply(seq_len(nrow(roc_list)), function(i) {
-          list(
-            class = as.character(roc_list$class[i]),
-            auc   = suppressWarnings(as.numeric(roc_list$auc[i])),
-            sensitivities = unlist(roc_list$sensitivities[[i]]),
-            specificities = unlist(roc_list$specificities[[i]])
-          )
-        })
-      } else if (is.list(roc_list)) {
-        roc_entries <- lapply(roc_list, function(r) {
-          if (is.data.frame(r)) {
-            return(list(
-              class = as.character(r$class[1]),
-              auc   = suppressWarnings(as.numeric(r$auc[1])),
-              sensitivities = unlist(r$sensitivities[[1]]),
-              specificities = unlist(r$specificities[[1]])
-            ))
-          }
-
-          if (is.list(r)) {
-            return(list(
-              class = as.character(r$class[1]),
-              auc   = suppressWarnings(as.numeric(r$auc[1])),
-              sensitivities = unlist(r$sensitivities),
-              specificities = unlist(r$specificities)
-            ))
-          }
-
-          NULL
-        })
-
-        roc_entries <- Filter(Negate(is.null), roc_entries)
-      } else {
-        return(NULL)
-      }
-
-      roc_df <- do.call(rbind, lapply(roc_entries, function(r) {
-        if (length(r$sensitivities) == 0 || length(r$specificities) == 0) return(NULL)
-
-        n <- min(length(r$sensitivities), length(r$specificities))
-        data.frame(
-          class = r$class,
-          fpr   = 1 - as.numeric(r$specificities[seq_len(n)]),
-          tpr   = as.numeric(r$sensitivities[seq_len(n)]),
-          auc   = as.numeric(r$auc),
-          stringsAsFactors = FALSE
-        )
-      }))
-
+    output$cv_roc_plot <- renderPlot({
+      rid <- selected_run_id()
+      req(rid, nzchar(rid))
+      payload <- get_run_payload(rid)
+      req(!is.null(payload))
+      roc_df <- extract_roc_df_from_metrics(payload$metrics, "cv_roc_data")
       req(!is.null(roc_df), nrow(roc_df) > 0)
+      build_roc_plot(roc_df)
+    })
 
-      auc_labels <- roc_df |>
-        dplyr::group_by(class) |>
-        dplyr::summarise(auc = dplyr::first(auc), .groups = "drop") |>
-        dplyr::mutate(label = sprintf("%s (AUC = %.3f)", class, auc))
-
-      roc_df <- dplyr::left_join(roc_df, auc_labels[, c("class", "label")], by = "class")
-
-      n_classes <- length(unique(roc_df$class))
-      legend_nrow <- ceiling(n_classes / 3)
-
-      ggplot2::ggplot(roc_df, ggplot2::aes(x = fpr, y = tpr, color = label)) +
-        ggplot2::geom_line(linewidth = 1.2) +
-        ggplot2::geom_abline(
-          slope = 1,
-          intercept = 0,
-          linetype = "dashed",
-          color = "grey60"
-        ) +
-        ggplot2::scale_x_continuous(
-          limits = c(0, 1),
-          labels = scales::percent_format()
-        ) +
-        ggplot2::scale_y_continuous(
-          limits = c(0, 1),
-          labels = scales::percent_format()
-        ) +
-        ggplot2::labs(
-          x = "False Positive Rate",
-          y = "True Positive Rate",
-          color = NULL
-        ) +
-        ggplot2::guides(
-          color = ggplot2::guide_legend(
-            nrow = legend_nrow,
-            byrow = TRUE
-          )
-        ) +
-        ggplot2::theme_minimal(base_size = 13) +
-        ggplot2::theme(
-          legend.position = "bottom",
-          legend.text = ggplot2::element_text(size = 13),
-          legend.title = ggplot2::element_blank(),
-          legend.key.width = grid::unit(1.6, "cm"),
-          legend.key.height = grid::unit(0.7, "cm"),
-          axis.title = ggplot2::element_text(size = 13),
-          axis.text = ggplot2::element_text(size = 11),
-          plot.margin = ggplot2::margin(10, 15, 10, 15)
-        )
+    output$test_roc_plot <- renderPlot({
+      rid <- selected_run_id()
+      req(rid, nzchar(rid))
+      payload <- get_run_payload(rid)
+      req(!is.null(payload))
+      roc_df <- extract_roc_df_from_metrics(payload$metrics, "roc_data")
+      req(!is.null(roc_df), nrow(roc_df) > 0)
+      build_roc_plot(roc_df)
     })
   })
 }

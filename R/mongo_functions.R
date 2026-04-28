@@ -1027,6 +1027,10 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
   # split params may arrive as a list or as a single-row data.frame
   sp             <- if (is.data.frame(ds$split)) as.list(ds$split[1, ]) else ds$split[[1]]
   split_strategy <- sp$strategy  %||% "random"
+  evaluation_mode <- sp$evaluation_mode %||% "cv_plus_test"
+  if (!evaluation_mode %in% c("cv_plus_test", "cv_only")) {
+    evaluation_mode <- "cv_plus_test"
+  }
   split_seed     <- as.integer(sp$seed %||% 42L)
   split_frac     <- as.numeric(sp$train_frac %||% 0.8)
   split_cv_folds <- suppressWarnings(as.integer(sp$cv_folds %||% NA_integer_))
@@ -1050,26 +1054,38 @@ load_dataset_for_training <- function(dataset_id, db = DB_NAME, url = MONGO_URL)
   block_size <- as.integer(sp$block_size %||% 25L)
   buffer_radius <- as.numeric(sp$buffer_radius %||% 0)
 
-  split_idx <- make_outer_split_indices(
-    meta = meta,
-    split_strategy = split_strategy,
-    split_seed = split_seed,
-    train_frac = split_frac,
-    block_size = block_size,
-    buffer_radius = buffer_radius
-  )
-  tr_idx <- split_idx$train_idx
-  te_idx <- split_idx$test_idx
+  if (identical(evaluation_mode, "cv_only")) {
+    tr_idx <- seq_len(nrow(X))
+    te_idx <- integer(0)
+    split_idx <- list(
+      split_details = list(
+        n_train = length(tr_idx),
+        n_test = 0L
+      )
+    )
+  } else {
+    split_idx <- make_outer_split_indices(
+      meta = meta,
+      split_strategy = split_strategy,
+      split_seed = split_seed,
+      train_frac = split_frac,
+      block_size = block_size,
+      buffer_radius = buffer_radius
+    )
+    tr_idx <- split_idx$train_idx
+    te_idx <- split_idx$test_idx
+  }
 
   list(
     train_X      = X[tr_idx, , drop = FALSE],
     train_y      = y[tr_idx],
     train_meta   = meta[tr_idx, , drop = FALSE],
-    test_X       = X[te_idx, , drop = FALSE],
-    test_y       = y[te_idx],
-    test_meta    = meta[te_idx, , drop = FALSE],
+    test_X       = if (length(te_idx) > 0) X[te_idx, , drop = FALSE] else NULL,
+    test_y       = if (length(te_idx) > 0) y[te_idx] else NULL,
+    test_meta    = if (length(te_idx) > 0) meta[te_idx, , drop = FALSE] else NULL,
     split_info   = c(list(
       strategy   = split_strategy,
+      evaluation_mode = evaluation_mode,
       seed       = split_seed,
       train_frac = split_frac,
       cv_folds   = split_cv_folds,

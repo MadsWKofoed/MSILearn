@@ -688,12 +688,120 @@ normalize_split_info <- function(split_info) {
 
   list(
     strategy = as.character(first_scalar(split_info$strategy, "random")),
+    evaluation_mode = as.character(first_scalar(split_info$evaluation_mode, "cv_plus_test")),
     train_frac = suppressWarnings(as.numeric(first_scalar(split_info$train_frac, NA_real_))),
     seed = suppressWarnings(as.integer(first_scalar(split_info$seed, NA_integer_))),
     cv_folds = suppressWarnings(as.integer(first_scalar(split_info$cv_folds, NA_integer_))),
     block_size = suppressWarnings(as.integer(first_scalar(split_info$block_size, NA_integer_))),
     buffer_radius = suppressWarnings(as.numeric(first_scalar(split_info$buffer_radius, NA_real_))),
     min_pixels_per_block = suppressWarnings(as.integer(first_scalar(split_info$min_pixels_per_block, NA_integer_)))
+  )
+}
+
+normalize_evaluation_mode <- function(evaluation_mode) {
+  mode <- as.character(first_scalar(evaluation_mode, "cv_plus_test"))
+  if (!mode %in% c("cv_plus_test", "cv_only")) {
+    mode <- "cv_plus_test"
+  }
+  mode
+}
+
+compute_macro_f1_from_predictions <- function(truth, pred, levels_ref = NULL) {
+  if (is.null(levels_ref)) {
+    levels_ref <- levels(as.factor(truth))
+  }
+
+  truth <- factor(truth, levels = levels_ref)
+  pred <- factor(pred, levels = levels_ref)
+
+  f1_vals <- vapply(levels_ref, function(cls) {
+    tp <- sum(truth == cls & pred == cls, na.rm = TRUE)
+    fp <- sum(truth != cls & pred == cls, na.rm = TRUE)
+    fn <- sum(truth == cls & pred != cls, na.rm = TRUE)
+
+    precision <- if ((tp + fp) == 0) NA_real_ else tp / (tp + fp)
+    recall <- if ((tp + fn) == 0) NA_real_ else tp / (tp + fn)
+
+    if (!is.finite(precision) || !is.finite(recall) || (precision + recall) == 0) {
+      return(0)
+    }
+
+    2 * precision * recall / (precision + recall)
+  }, numeric(1))
+
+  mean(f1_vals, na.rm = TRUE)
+}
+
+compute_relative_cm_table <- function(cm_obj) {
+  as.data.frame(cm_obj$table) |>
+    dplyr::group_by(Reference) |>
+    dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
+    dplyr::ungroup()
+}
+
+compute_multiclass_roc_payload <- function(truth, prob_df, class_levels) {
+  if (!requireNamespace("pROC", quietly = TRUE)) return(NULL)
+  if (is.null(prob_df) || nrow(prob_df) == 0) return(NULL)
+
+  available_levels <- intersect(class_levels, colnames(prob_df))
+  if (length(available_levels) == 0) return(NULL)
+
+  roc_data <- lapply(available_levels, function(cls) {
+    binary_truth <- as.integer(truth == cls)
+    if (length(unique(binary_truth)) < 2L) return(NULL)
+
+    predictor <- suppressWarnings(as.numeric(prob_df[[cls]]))
+    if (length(predictor) == 0 || all(!is.finite(predictor))) return(NULL)
+
+    rr <- tryCatch(
+      pROC::roc(response = binary_truth, predictor = predictor, quiet = TRUE, direction = "<"),
+      error = function(e) NULL
+    )
+
+    if (is.null(rr)) return(NULL)
+
+    list(
+      class = cls,
+      auc = as.numeric(pROC::auc(rr)),
+      sensitivities = as.numeric(rr$sensitivities),
+      specificities = as.numeric(rr$specificities)
+    )
+  })
+
+  roc_data <- Filter(Negate(is.null), roc_data)
+  if (length(roc_data) == 0) return(NULL)
+  roc_data
+}
+
+extract_best_cv_predictions <- function(fit, class_levels) {
+  cv_pred_df <- fit$pred
+  if (is.null(cv_pred_df) || !is.data.frame(cv_pred_df) || nrow(cv_pred_df) == 0) {
+    return(NULL)
+  }
+
+  best_tune <- fit$bestTune
+  if (is.null(best_tune) || !is.data.frame(best_tune) || nrow(best_tune) == 0) {
+    best_tune <- fit$results[which.max(fit$results$Accuracy), , drop = FALSE]
+  }
+
+  tune_cols <- intersect(c("mtry", "splitrule", "min.node.size"), names(cv_pred_df))
+  for (tc in tune_cols) {
+    if (tc %in% names(best_tune)) {
+      cv_pred_df <- cv_pred_df[cv_pred_df[[tc]] == best_tune[[tc]][1], , drop = FALSE]
+    }
+  }
+
+  if (nrow(cv_pred_df) == 0) return(NULL)
+
+  truth_cv <- factor(cv_pred_df$obs, levels = class_levels)
+  preds_cv <- factor(cv_pred_df$pred, levels = class_levels)
+  probs_cv <- cv_pred_df[, intersect(class_levels, names(cv_pred_df)), drop = FALSE]
+
+  list(
+    pred_df = cv_pred_df,
+    truth = truth_cv,
+    pred = preds_cv,
+    prob = probs_cv
   )
 }
 
@@ -1127,16 +1235,30 @@ train_ranger_from_dataset <- function(
   dataset_meta <- data$dataset_meta %||% NULL
 
   split_info <- normalize_split_info(split_info)
+  evaluation_mode <- normalize_evaluation_mode(split_info$evaluation_mode)
   cv_folds <- split_info$cv_folds %||% cv_folds
   cv_folds <- suppressWarnings(as.integer(cv_folds))
   if (!is.finite(cv_folds)) cv_folds <- as.integer(0)
 
+  has_test_data <-
+    !is.null(test_X) &&
+    !is.null(test_y) &&
+    nrow(train_X) > 0 &&
+    nrow(test_X) > 0 &&
+    length(test_y) > 0
+
+  if (identical(evaluation_mode, "cv_only") && cv_folds <= 1L) {
+    stop("CV-only datasets require cv_folds > 1.")
+  }
+
   message("[train] Applying normalization: ", normalize_method)
   train_X <- normalize_feature_matrix(train_X, normalize_method)
-  test_X  <- normalize_feature_matrix(test_X,  normalize_method)
+  if (has_test_data) {
+    test_X <- normalize_feature_matrix(test_X, normalize_method)
+  }
 
   message("[train] Train pixels: ", nrow(train_X),
-          " | Test pixels: ", nrow(test_X),
+          " | Test pixels: ", if (has_test_data) nrow(test_X) else 0L,
           " | Features: ", ncol(train_X),
           " | Classes: ", nlevels(train_y))
   display_strategy <- if (identical(split_info$strategy, "leave_one_sample_out")) {
@@ -1145,7 +1267,8 @@ train_ranger_from_dataset <- function(
     split_info$strategy %||% "random"
   }
   message("[train] Split strategy: ", display_strategy)
-    message("[train] CV folds (dataset): ", cv_folds)
+  message("[train] Evaluation mode: ", evaluation_mode)
+  message("[train] CV folds (dataset): ", cv_folds)
 
 
   set.seed(seed)
@@ -1217,10 +1340,12 @@ train_ranger_from_dataset <- function(
                       else
                         NA_integer_,
     num_threads   = as.integer(num_threads),
+    evaluation_mode = evaluation_mode,
     split_strategy = as.character(split_info$strategy %||% "random"),
     split_block_size = as.integer(split_info$block_size %||% NA_integer_),
     split_buffer_radius = as.numeric(split_info$buffer_radius %||% NA_real_),
-    split_cv_folds = as.integer(split_info$cv_folds %||% NA_integer_)
+    split_cv_folds = as.integer(split_info$cv_folds %||% NA_integer_),
+    split_min_pixels_per_block = as.integer(split_info$min_pixels_per_block %||% NA_integer_)
   )
 
   tune_grid <- expand.grid(
@@ -1289,7 +1414,8 @@ train_ranger_from_dataset <- function(
         indexOut        = cv_idx$indexOut,
         classProbs      = TRUE,
         summaryFunction = caret::multiClassSummary,
-        allowParallel   = workers > 1L
+        allowParallel   = workers > 1L,
+        savePredictions = "final"
       )
     } else {
       caret::trainControl(
@@ -1297,7 +1423,8 @@ train_ranger_from_dataset <- function(
         number          = cv_folds,
         classProbs      = TRUE,
         summaryFunction = caret::multiClassSummary,
-        allowParallel   = workers > 1L
+        allowParallel   = workers > 1L,
+        savePredictions = "final"
       )
     }
 
@@ -1328,18 +1455,14 @@ train_ranger_from_dataset <- function(
     num.threads  = num_threads
   )
   message("[train] Model fitting finished.")
-  message("[train] Starting prediction on held-out test set...")
-
-  # ── 4. Evaluate on held-out test set ─────────────────────────────
-  preds <- predict(fit, newdata = test_X)
-  cm    <- caret::confusionMatrix(preds, test_y)
-
   metrics_scalar <- list(
-    test_accuracy  = as.numeric(cm$overall["Accuracy"]),
-    test_kappa     = as.numeric(cm$overall["Kappa"]),
-    test_acc_lower = as.numeric(cm$overall["AccuracyLower"]),
-    test_acc_upper = as.numeric(cm$overall["AccuracyUpper"]),
-    n_test         = nrow(test_X),
+    evaluation_mode = evaluation_mode,
+    has_test_set    = has_test_data,
+    test_accuracy  = NA_real_,
+    test_kappa     = NA_real_,
+    test_acc_lower = NA_real_,
+    test_acc_upper = NA_real_,
+    n_test         = if (has_test_data) nrow(test_X) else 0L,
     n_train        = nrow(train_X),
     n_classes      = nlevels(train_y),
     n_features     = ncol(train_X),
@@ -1348,69 +1471,97 @@ train_ranger_from_dataset <- function(
 
   # CV metrics
   if (cv_folds > 1L) {
-    best_row <- fit$results[which.max(fit$results$Accuracy), ]
+    best_row <- fit$bestTune
+    if (is.null(best_row) || !is.data.frame(best_row) || nrow(best_row) == 0) {
+      best_row <- fit$results[which.max(fit$results$Accuracy), , drop = FALSE]
+    } else {
+      tune_cols <- intersect(names(best_row), names(fit$results))
+      best_match <- rep(TRUE, nrow(fit$results))
+      for (tc in tune_cols) {
+        best_match <- best_match & (fit$results[[tc]] == best_row[[tc]][1])
+      }
+      best_row <- fit$results[best_match, , drop = FALSE]
+      if (nrow(best_row) == 0) {
+        best_row <- fit$results[which.max(fit$results$Accuracy), , drop = FALSE]
+      }
+    }
+
     metrics_scalar$cv_mean_accuracy <- as.numeric(best_row$Accuracy)
     metrics_scalar$cv_mean_kappa    <- as.numeric(best_row$Kappa)
     metrics_scalar$cv_mean_f1       <- as.numeric(best_row$Mean_F1)
     metrics_scalar$cv_acc_sd        <- as.numeric(best_row$AccuracySD)
-  }
 
-  # Per-class stats — one scalar per class×metric
-  bc <- as.data.frame(cm$byClass)
-  for (col in colnames(bc)) {
-    for (cls in rownames(bc)) {
-      key <- paste0(
-        "byclass_",
-        gsub("[^A-Za-z0-9]", "_", col), "__",
-        gsub("[^A-Za-z0-9]", "_", gsub("^Class: ", "", cls))
+    cv_pred_payload <- extract_best_cv_predictions(fit, levels(train_y))
+
+    if (is.null(cv_pred_payload)) {
+      metrics_scalar$cv_warning <- "Cross-validation plots require savePredictions = 'final' and available fit$pred data."
+    } else {
+      truth_cv <- cv_pred_payload$truth
+      preds_cv <- cv_pred_payload$pred
+      probs_cv <- cv_pred_payload$prob
+
+      cm_cv <- caret::confusionMatrix(preds_cv, truth_cv)
+      metrics_scalar$cv_cm_table <- list(compute_relative_cm_table(cm_cv))
+      metrics_scalar$n_cv_predictions <- nrow(cv_pred_payload$pred_df)
+      metrics_scalar$cv_macro_f1_from_predictions <- compute_macro_f1_from_predictions(
+        truth = truth_cv,
+        pred = preds_cv,
+        levels_ref = levels(train_y)
       )
-      metrics_scalar[[key]] <- as.numeric(bc[cls, col])
+
+      roc_data_cv <- compute_multiclass_roc_payload(
+        truth = truth_cv,
+        prob_df = probs_cv,
+        class_levels = levels(train_y)
+      )
+      if (!is.null(roc_data_cv)) {
+        metrics_scalar$cv_roc_data <- list(roc_data_cv)
+      }
     }
   }
 
-  # Confusion matrix table
-  cm_df <- as.data.frame(cm$table) |>
-    dplyr::group_by(Reference) |>
-    dplyr::mutate(Rel_Freq = Freq / sum(Freq)) |>
-    dplyr::ungroup()
-  metrics_scalar[["cm_table"]] <- list(cm_df)
+  if (has_test_data) {
+    message("[train] Starting prediction on held-out test set...")
 
+    preds <- factor(predict(fit, newdata = test_X), levels = levels(train_y))
+    truth_test <- factor(test_y, levels = levels(train_y))
+    cm <- caret::confusionMatrix(preds, truth_test)
 
-  # ROC data
-  if (requireNamespace("pROC", quietly = TRUE)) {
-    probs <- predict(fit, newdata = test_X, type = "prob")
-    class_levels <- levels(test_y)
+    metrics_scalar$test_accuracy <- as.numeric(cm$overall["Accuracy"])
+    metrics_scalar$test_kappa <- as.numeric(cm$overall["Kappa"])
+    metrics_scalar$test_acc_lower <- as.numeric(cm$overall["AccuracyLower"])
+    metrics_scalar$test_acc_upper <- as.numeric(cm$overall["AccuracyUpper"])
 
-    roc_data <- lapply(class_levels, function(cls) {
-      binary <- as.integer(test_y == cls)
-      prob   <- probs[[cls]]
-
-      tryCatch({
-        r   <- pROC::roc(binary, prob, quiet = TRUE)
-        auc <- as.numeric(pROC::auc(r))
-        list(
-          class         = cls,
-          auc           = auc,
-          sensitivities = as.numeric(r$sensitivities),
-          specificities = as.numeric(r$specificities)
+    bc <- as.data.frame(cm$byClass)
+    for (col in colnames(bc)) {
+      for (cls in rownames(bc)) {
+        key <- paste0(
+          "byclass_",
+          gsub("[^A-Za-z0-9]", "_", col), "__",
+          gsub("[^A-Za-z0-9]", "_", gsub("^Class: ", "", cls))
         )
-      }, error = function(e) {
-        list(
-          class         = cls,
-          auc           = NA_real_,
-          sensitivities = numeric(0),
-          specificities = numeric(0)
-        )
-      })
-    })
+        metrics_scalar[[key]] <- as.numeric(bc[cls, col])
+      }
+    }
 
-    metrics_scalar[["roc_data"]] <- list(roc_data)
+    metrics_scalar$cm_table <- list(compute_relative_cm_table(cm))
+
+    probs_test <- predict(fit, newdata = test_X, type = "prob")
+    roc_data_test <- compute_multiclass_roc_payload(
+      truth = truth_test,
+      prob_df = probs_test,
+      class_levels = levels(train_y)
+    )
+    if (!is.null(roc_data_test)) {
+      metrics_scalar$roc_data <- list(roc_data_test)
+    }
+
+    message("[train] Test accuracy: ", round(metrics_scalar$test_accuracy, 4),
+            " | Kappa: ", round(metrics_scalar$test_kappa, 4))
+  } else {
+    message("[train] No held-out test set configured for this dataset.")
   }
 
-  message("[train] Test accuracy: ", round(metrics_scalar$test_accuracy, 4),
-          " | Kappa: ", round(metrics_scalar$test_kappa, 4))
-    
-  
   # ── 6. Save model run ─────────────────────────────────────────────
   run_id <- save_model_run(
     dataset_id  = dataset_id,
@@ -1425,5 +1576,3 @@ train_ranger_from_dataset <- function(
   message("[train] Done. model_run_id: ", run_id)
   invisible(run_id)
 }
-
-
