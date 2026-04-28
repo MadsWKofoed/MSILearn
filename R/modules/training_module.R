@@ -66,7 +66,14 @@ training_module_ui <- function(id) {
               plotOutput(ns("estimate_moran_plot"), height = "360px")
             ),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
-            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
+            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
+          ),
+          conditionalPanel(
+            condition = sprintf(
+              "input['%s'] == 'spatial_block' || input['%s'] == 'leave_one_sample_out'",
+              ns("ds_split_strategy"),
+              ns("ds_split_strategy")
+            ),
             actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
               class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
             uiOutput(ns("spatial_preview_ui"))
