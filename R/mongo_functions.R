@@ -744,43 +744,81 @@ materialize_training_source <- function(sample_ids,
 
 compute_buffer_exclusion_idx <- function(meta, test_idx, buffer_radius, block_size) {
   buffer_radius <- suppressWarnings(as.numeric(buffer_radius))
-  block_size <- suppressWarnings(as.numeric(block_size))
 
   if (!is.finite(buffer_radius) || buffer_radius <= 0 || length(test_idx) == 0) {
     return(integer(0))
   }
-  if (!is.finite(block_size) || block_size <= 0) {
-    stop("block_size must be positive in compute_buffer_exclusion_idx().")
+
+  req_cols <- c("sample_id", "x", "y")
+  meta <- as.data.frame(meta)
+  if (!all(req_cols %in% names(meta))) {
+    stop("compute_buffer_exclusion_idx() requires columns: sample_id, x, y.")
   }
 
-  built <- build_samplewise_blocks(meta, block_size)
-  block_map <- built$meta
-
+  meta$.row_id <- seq_len(nrow(meta))
   test_idx <- unique(as.integer(test_idx))
-  train_cand <- setdiff(seq_len(nrow(block_map)), test_idx)
-
+  train_cand <- setdiff(seq_len(nrow(meta)), test_idx)
   if (length(train_cand) == 0) return(integer(0))
 
-  buffer_blocks <- ceiling(buffer_radius / block_size)
+  cell_size <- buffer_radius
+  if (!is.finite(cell_size) || cell_size <= 0) return(integer(0))
 
-  test_blocks <- unique(block_map[test_idx, c("sample_id", "bx", "by"), drop = FALSE])
+  meta$cell_x <- floor(as.numeric(meta$x) / cell_size)
+  meta$cell_y <- floor(as.numeric(meta$y) / cell_size)
 
-  exclude <- rep(FALSE, nrow(block_map))
+  test_rows <- meta[test_idx, , drop = FALSE]
+  r2 <- buffer_radius^2
 
-  for (i in seq_len(nrow(test_blocks))) {
-    tb <- test_blocks[i, , drop = FALSE]
+  exclude_idx <- integer(0)
+  sample_ids <- intersect(unique(meta$sample_id), unique(test_rows$sample_id))
 
-    hit <- block_map$sample_id == tb$sample_id &
-      abs(block_map$bx - tb$bx) <= buffer_blocks &
-      abs(block_map$by - tb$by) <= buffer_blocks
+  for (sid in sample_ids) {
+    test_s <- test_rows[test_rows$sample_id == sid, , drop = FALSE]
+    if (nrow(test_s) == 0) next
 
-    exclude <- exclude | hit
+    cand_idx <- train_cand[meta$sample_id[train_cand] == sid]
+    if (length(cand_idx) == 0) next
+
+    cand_s <- meta[cand_idx, , drop = FALSE]
+
+    test_keys <- paste(test_s$cell_x, test_s$cell_y, sep = "::")
+    test_map <- split(seq_len(nrow(test_s)), test_keys)
+
+    cand_keys <- paste(cand_s$cell_x, cand_s$cell_y, sep = "::")
+    cand_groups <- split(seq_len(nrow(cand_s)), cand_keys)
+
+    for (key in names(cand_groups)) {
+      parts <- strsplit(key, "::", fixed = TRUE)[[1]]
+      cx <- as.integer(parts[1])
+      cy <- as.integer(parts[2])
+
+      neigh_keys <- as.vector(outer((cx - 1):(cx + 1), (cy - 1):(cy + 1), function(a, b) {
+        paste(a, b, sep = "::")
+      }))
+
+      test_ids <- unlist(test_map[neigh_keys], use.names = FALSE)
+      if (length(test_ids) == 0) next
+
+      tx <- test_s$x[test_ids]
+      ty <- test_s$y[test_ids]
+
+      cand_rows <- cand_groups[[key]]
+      cx_vals <- cand_s$x[cand_rows]
+      cy_vals <- cand_s$y[cand_rows]
+
+      hit <- vapply(seq_along(cand_rows), function(i) {
+        dx <- cx_vals[i] - tx
+        dy <- cy_vals[i] - ty
+        any((dx * dx + dy * dy) <= r2)
+      }, logical(1))
+
+      if (any(hit)) {
+        exclude_idx <- c(exclude_idx, cand_s$.row_id[cand_rows[hit]])
+      }
+    }
   }
 
-  excl_idx <- block_map$.row_id[exclude]
-  excl_idx <- setdiff(excl_idx, test_idx)
-
-  unique(as.integer(intersect(excl_idx, train_cand)))
+  unique(as.integer(exclude_idx))
 }
 
 build_samplewise_blocks <- function(meta, block_size) {
@@ -806,37 +844,51 @@ build_samplewise_blocks <- function(meta, block_size) {
   list(meta = meta2, block_tbl = block_tbl)
 }
 
-choose_contiguous_test_blocks <- function(block_tbl_one_sample, target_test_pixels, seed = 42L) {
+choose_contiguous_test_blocks <- function(block_tbl_one_sample, target_test_pixels, seed = 42L,
+                                          max_regions = 3L) {
   if (!is.data.frame(block_tbl_one_sample) || nrow(block_tbl_one_sample) == 0) {
     return(character(0))
   }
 
   set.seed(as.integer(seed))
 
-  start_i <- sample(seq_len(nrow(block_tbl_one_sample)), 1)
-  chosen <- block_tbl_one_sample$block_id[start_i]
-  chosen_pixels <- block_tbl_one_sample$n[start_i]
+  remaining_tbl <- block_tbl_one_sample
+  chosen <- character(0)
+  chosen_pixels <- 0L
+  regions_used <- 0L
 
-  while (chosen_pixels < target_test_pixels) {
-    chosen_tbl <- block_tbl_one_sample[block_tbl_one_sample$block_id %in% chosen, , drop = FALSE]
+  while (chosen_pixels < target_test_pixels && nrow(remaining_tbl) > 0 && regions_used < max_regions) {
+    regions_used <- regions_used + 1L
 
-    neigh_idx <- which(
-      !(block_tbl_one_sample$block_id %in% chosen) &
-        vapply(seq_len(nrow(block_tbl_one_sample)), function(i) {
-          any(abs(block_tbl_one_sample$bx[i] - chosen_tbl$bx) +
-                abs(block_tbl_one_sample$by[i] - chosen_tbl$by) == 1)
-        }, logical(1))
-    )
+    start_i <- sample(seq_len(nrow(remaining_tbl)), 1)
+    region_blocks <- remaining_tbl$block_id[start_i]
+    region_pixels <- remaining_tbl$n[start_i]
 
-    if (length(neigh_idx) == 0) break
+    while (region_pixels < target_test_pixels) {
+      region_tbl <- remaining_tbl[remaining_tbl$block_id %in% region_blocks, , drop = FALSE]
 
-    # vælg nabo der bringer os tættest på target uden at springe for voldsomt
-    cand <- block_tbl_one_sample[neigh_idx, , drop = FALSE]
-    cand$score <- abs((chosen_pixels + cand$n) - target_test_pixels)
+      neigh_idx <- which(
+        !(remaining_tbl$block_id %in% region_blocks) &
+          vapply(seq_len(nrow(remaining_tbl)), function(i) {
+            any(abs(remaining_tbl$bx[i] - region_tbl$bx) +
+                  abs(remaining_tbl$by[i] - region_tbl$by) == 1)
+          }, logical(1))
+      )
 
-    best_i <- neigh_idx[which.min(cand$score)]
-    chosen <- c(chosen, block_tbl_one_sample$block_id[best_i])
-    chosen_pixels <- chosen_pixels + block_tbl_one_sample$n[best_i]
+      if (length(neigh_idx) == 0) break
+
+      cand <- remaining_tbl[neigh_idx, , drop = FALSE]
+      cand$score <- abs((region_pixels + cand$n) - target_test_pixels)
+
+      best_i <- neigh_idx[which.min(cand$score)]
+      region_blocks <- c(region_blocks, remaining_tbl$block_id[best_i])
+      region_pixels <- region_pixels + remaining_tbl$n[best_i]
+    }
+
+    chosen <- c(chosen, region_blocks)
+    chosen_pixels <- chosen_pixels + region_pixels
+
+    remaining_tbl <- remaining_tbl[!(remaining_tbl$block_id %in% region_blocks), , drop = FALSE]
   }
 
   unique(chosen)
@@ -879,58 +931,79 @@ make_outer_split_indices <- function(meta, split_strategy = "random", split_seed
       stop("Spatial block split requires at least 2 blocks.")
     }
 
-    test_block_ids <- character(0)
+    best_split <- NULL
+    best_train_n <- -Inf
+    warning_msg <- NULL
 
     sample_ids <- unique(meta2$sample_id)
+    total_n <- nrow(meta2)
+    min_train_n <- max(20L, floor(0.10 * total_n))
 
-    for (sid in sample_ids) {
-      bt <- block_tbl[block_tbl$sample_id == sid, , drop = FALSE]
-      if (nrow(bt) < 2L) next
+    for (attempt in seq_len(5L)) {
+      test_block_ids <- character(0)
 
-      n_pix_sample <- sum(bt$n)
-      target_test_pixels <- max(1L, floor((1 - train_frac) * n_pix_sample))
+      for (sid in sample_ids) {
+        bt <- block_tbl[block_tbl$sample_id == sid, , drop = FALSE]
+        if (nrow(bt) < 2L) next
 
-      chosen_ids <- choose_contiguous_test_blocks(
-        block_tbl_one_sample = bt,
-        target_test_pixels = target_test_pixels,
-        seed = split_seed + match(sid, sample_ids)
+        n_pix_sample <- sum(bt$n)
+        target_test_pixels <- max(1L, floor((1 - train_frac) * n_pix_sample))
+
+        chosen_ids <- choose_contiguous_test_blocks(
+          block_tbl_one_sample = bt,
+          target_test_pixels = target_test_pixels,
+          seed = split_seed + (attempt - 1L) * 1000L + match(sid, sample_ids)
+        )
+
+        test_block_ids <- c(test_block_ids, chosen_ids)
+      }
+
+      test_block_ids <- unique(test_block_ids)
+
+      te_idx <- meta2$.row_id[meta2$block_id %in% test_block_ids]
+      tr_idx <- setdiff(meta2$.row_id, te_idx)
+
+      excl_idx <- compute_buffer_exclusion_idx(
+        meta = meta2,
+        test_idx = te_idx,
+        buffer_radius = buffer_radius,
+        block_size = block_size
       )
 
-      test_block_ids <- c(test_block_ids, chosen_ids)
+      tr_idx <- setdiff(tr_idx, excl_idx)
+
+      if (length(tr_idx) > best_train_n) {
+        best_train_n <- length(tr_idx)
+        best_split <- list(te_idx = te_idx, tr_idx = tr_idx, excl_idx = excl_idx)
+      }
+
+      if (length(tr_idx) >= min_train_n) break
     }
 
-    test_block_ids <- unique(test_block_ids)
-
-    te_idx <- meta2$.row_id[meta2$block_id %in% test_block_ids]
-    tr_idx <- setdiff(meta2$.row_id, te_idx)
-
-    excl_idx <- compute_buffer_exclusion_idx(
-      meta = meta2,
-      test_idx = te_idx,
-      buffer_radius = buffer_radius,
-      block_size = block_size
-    )
-
-    tr_idx <- setdiff(tr_idx, excl_idx)
-
-    if (length(te_idx) == 0) {
+    if (is.null(best_split) || length(best_split$te_idx) == 0) {
       stop("No test pixels selected in spatial block split.")
     }
-    if (length(tr_idx) == 0) {
-      stop("No training pixels left after applying spatial block split and buffer.")
+
+    if (length(best_split$tr_idx) < min_train_n) {
+      warning_msg <- paste0(
+        "Warning: spatial buffer excluded most training pixels (",
+        length(best_split$tr_idx), " remaining). Consider reducing buffer_radius or test fraction."
+      )
     }
 
     return(list(
-      train_idx = sort(unique(tr_idx)),
-      test_idx = sort(unique(te_idx)),
+      train_idx = sort(unique(best_split$tr_idx)),
+      test_idx = sort(unique(best_split$te_idx)),
       split_details = list(
         block_size = as.integer(block_size),
         buffer_radius = as.numeric(buffer_radius),
         n_blocks = nrow(block_tbl),
-        train_blocks = length(unique(meta2$block_id[meta2$.row_id %in% tr_idx])),
-        test_blocks = length(unique(meta2$block_id[meta2$.row_id %in% te_idx])),
-        n_train = length(tr_idx),
-        n_test = length(te_idx)
+        train_blocks = length(unique(meta2$block_id[meta2$.row_id %in% best_split$tr_idx])),
+        test_blocks = length(unique(meta2$block_id[meta2$.row_id %in% best_split$te_idx])),
+        n_train = length(best_split$tr_idx),
+        n_test = length(best_split$te_idx),
+        n_buffer = length(best_split$excl_idx),
+        warning_msg = warning_msg
       )
     ))
   }

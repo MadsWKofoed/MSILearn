@@ -336,6 +336,7 @@ training_module_server <- function(id) {
 
       cv_tbl <- NULL
       recommended_folds <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
+      warning_msg <- split_idx$split_details$warning_msg %||% NULL
 
       if (is.finite(recommended_folds) && recommended_folds >= 2 && length(tr_idx) > 0) {
         split_info_preview <- list(
@@ -368,6 +369,7 @@ training_module_server <- function(id) {
         outer_tbl = outer_tbl,
         cv_tbl = cv_tbl,
         recommended_folds = recommended_folds,
+        warning_msg = warning_msg,
         params = list(
           block_size = block_size,
           buffer_radius = buffer_radius,
@@ -612,6 +614,13 @@ training_module_server <- function(id) {
             )
           )
         ),
+        if (!is.null(prev$warning_msg) && nzchar(prev$warning_msg)) {
+          tags$div(
+            class = "alert alert-warning",
+            style = "padding:6px; margin-top:6px;",
+            tags$small(prev$warning_msg)
+          )
+        },
         render_preview_table(
           prev$outer_tbl,
           title_text = "Final split class counts",
