@@ -672,17 +672,6 @@ list_datasets <- function(study_id = NULL, db = DB_NAME, url = MONGO_URL) {
   )
 }
 
-#' List datasets with extra metadata for the Training module browser.
-list_datasets_for_browser <- function(study_id = NULL, db = DB_NAME, url = MONGO_URL) {
-  q <- if (is.null(study_id)) "{}" else sprintf('{"study_id": "%s"}', study_id)
-  .con("datasets", db, url)$find(
-    q,
-    fields = '{"name":1,"study_id":1,"pipeline_id":1,
-               "annotation_set_id":1,"stage_type":1,"created_at":1,
-               "sample_ids":1,"split":1}'
-  )
-}
-
 
 
 #' Materialise features, labels and pixel metadata from explicit selections.

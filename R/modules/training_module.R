@@ -95,27 +95,9 @@ training_module_ui <- function(id) {
         )),
         actionButton(ns("refresh_datasets"), "Refresh dataset list",
                      class = "btn-sm btn-default"),
-        actionButton(ns("clear_dataset_filters"), "Clear filters",
-                     class = "btn-sm btn-default"),
         br(), br(),
-        selectInput(ns("dataset_filter_study"), "Study:",
-                    choices = c("All studies" = ""), width = "100%"),
-        selectInput(ns("dataset_filter_eval_mode"), "Evaluation mode:",
-                    choices = c("All" = "", "CV only" = "cv_only", "CV + held-out test" = "cv_plus_test"),
-                    width = "100%"),
-        selectInput(ns("dataset_filter_split_strategy"), "Split strategy:",
-                    choices = c("All" = "", "Random" = "random", "Spatial block" = "spatial_block", "Grouped sample-out" = "leave_one_sample_out"),
-                    width = "100%"),
-        selectInput(ns("dataset_filter_pipeline"), "Processing pipeline:",
-                    choices = c("All pipelines" = ""), width = "100%"),
-        selectInput(ns("dataset_filter_ann_set"), "Annotation set:",
-                    choices = c("All annotation sets" = ""), width = "100%"),
-        textInput(ns("dataset_filter_search"), "Search dataset name / id:", placeholder = "Type to filter datasets"),
-        DT::dataTableOutput(ns("dataset_table")),
-        tags$div(style = "display:none;",
-          selectInput(ns("dataset_id"), "Dataset:",
-                      choices = c("(loading...)" = ""), width = "100%")
-        ),
+        selectInput(ns("dataset_id"), "Dataset:",
+                    choices = c("(loading...)" = ""), width = "100%"),
         uiOutput(ns("dataset_info_ui")),
 
         hr(),
@@ -189,9 +171,6 @@ training_module_server <- function(id) {
     preview_src_key_rv <- reactiveVal(NULL)
     preview_result_rv <- reactiveVal(NULL)
     cv_fold_suggestion_key_rv <- reactiveVal(NULL)
-    datasets_browser_rv <- reactiveVal(data.frame())
-    dataset_table_proxy <- DT::dataTableProxy(ns("dataset_table"))
-    study_name_map_rv <- reactiveVal(setNames(character(0), character(0)))
 
     selected_dataset_split_strategy <- reactive({
       did <- input$dataset_id %||% ""
@@ -205,131 +184,6 @@ training_module_server <- function(id) {
 
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
-    }
-
-    split_strategy_label <- function(x) {
-      val <- as.character(x %||% "random")
-      if (identical(val, "leave_one_sample_out")) "Grouped sample-out"
-      else if (identical(val, "spatial_block")) "Spatial block"
-      else if (identical(val, "random")) "Random"
-      else val
-    }
-
-    extract_browser_split <- function(split_obj) {
-      if (is.null(split_obj)) return(list())
-      if (is.data.frame(split_obj)) return(as.list(split_obj[1, , drop = FALSE]))
-      if (is.list(split_obj) && length(split_obj) == 1 && is.list(split_obj[[1]])) return(split_obj[[1]])
-      if (is.list(split_obj)) return(split_obj)
-      list()
-    }
-
-    count_dataset_samples <- function(sample_ids_obj) {
-      if (is.null(sample_ids_obj)) return(0L)
-      if (is.data.frame(sample_ids_obj)) return(nrow(sample_ids_obj))
-      if (is.list(sample_ids_obj)) return(length(unlist(sample_ids_obj, use.names = FALSE)))
-      length(sample_ids_obj)
-    }
-
-    normalize_dataset_browser_df <- function(ds_raw) {
-      if (is.null(ds_raw) || !is.data.frame(ds_raw) || nrow(ds_raw) == 0 || !("_id" %in% names(ds_raw))) {
-        return(data.frame(
-          dataset_id = character(),
-          dataset_name = character(),
-          study_id = character(),
-          study = character(),
-          evaluation_mode = character(),
-          evaluation_mode_label = character(),
-          split_strategy = character(),
-          split_strategy_label = character(),
-          cv_folds = integer(),
-          sample_count = integer(),
-          pipeline_id = character(),
-          pipeline_short_id = character(),
-          annotation_set_id = character(),
-          annotation_set_short_id = character(),
-          created_at = character(),
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      study_map <- study_name_map_rv()
-
-      rows <- lapply(seq_len(nrow(ds_raw)), function(i) {
-        split_info <- extract_browser_split(ds_raw$split[[i]])
-        study_id <- as.character(ds_raw$study_id[i] %||% "")
-        evaluation_mode <- normalize_eval_mode(split_info$evaluation_mode)
-        split_strategy <- as.character(split_info$strategy %||% "random")
-        data.frame(
-          dataset_id = as.character(ds_raw$`_id`[i]),
-          dataset_name = as.character(ds_raw$name[i] %||% ""),
-          study_id = study_id,
-          study = unname(study_map[[study_id]] %||% study_id),
-          evaluation_mode = evaluation_mode,
-          evaluation_mode_label = evaluation_mode_label(evaluation_mode),
-          split_strategy = split_strategy,
-          split_strategy_label = split_strategy_label(split_strategy),
-          cv_folds = suppressWarnings(as.integer(split_info$cv_folds %||% NA_integer_)),
-          sample_count = count_dataset_samples(ds_raw$sample_ids[[i]]),
-          pipeline_id = as.character(ds_raw$pipeline_id[i] %||% ""),
-          pipeline_short_id = substr(as.character(ds_raw$pipeline_id[i] %||% ""), 1, 12),
-          annotation_set_id = as.character(ds_raw$annotation_set_id[i] %||% ""),
-          annotation_set_short_id = substr(as.character(ds_raw$annotation_set_id[i] %||% ""), 1, 12),
-          created_at = as.character(ds_raw$created_at[i] %||% ""),
-          stringsAsFactors = FALSE
-        )
-      })
-
-      dplyr::bind_rows(rows)
-    }
-
-    clear_dataset_filters <- function() {
-      updateSelectInput(session, "dataset_filter_study", selected = "")
-      updateSelectInput(session, "dataset_filter_eval_mode", selected = "")
-      updateSelectInput(session, "dataset_filter_split_strategy", selected = "")
-      updateSelectInput(session, "dataset_filter_pipeline", selected = "")
-      updateSelectInput(session, "dataset_filter_ann_set", selected = "")
-      updateTextInput(session, "dataset_filter_search", value = "")
-    }
-
-    refresh_dataset_browser <- function(selected_dataset_id = NULL, clear_filters = FALSE) {
-      if (isTRUE(clear_filters)) {
-        clear_dataset_filters()
-      }
-
-      ds <- list_datasets_for_browser()
-      browser_df <- normalize_dataset_browser_df(ds)
-      datasets_browser_rv(browser_df)
-
-      all_choices <- if (nrow(browser_df) == 0) c("No datasets found" = "") else {
-        setNames(browser_df$dataset_id, paste0(browser_df$dataset_name, " [", browser_df$study, "]"))
-      }
-      updateSelectInput(session, "dataset_id", choices = all_choices,
-                        selected = selected_dataset_id %||% input$dataset_id %||% "")
-
-      study_choices <- c("All studies" = "")
-      if (nrow(browser_df) > 0) {
-        study_vals <- unique(browser_df[, c("study_id", "study"), drop = FALSE])
-        study_vals <- study_vals[order(tolower(study_vals$study)), , drop = FALSE]
-        study_choices <- c(study_choices, stats::setNames(study_vals$study_id, study_vals$study))
-      }
-      updateSelectInput(session, "dataset_filter_study", choices = study_choices,
-                        selected = if (isTRUE(clear_filters)) "" else input$dataset_filter_study %||% "")
-
-      pipeline_choices <- c("All pipelines" = "")
-      if (nrow(browser_df) > 0) {
-        pipeline_vals <- unique(browser_df[, c("pipeline_id", "pipeline_short_id"), drop = FALSE])
-        pipeline_choices <- c(pipeline_choices, stats::setNames(pipeline_vals$pipeline_id, pipeline_vals$pipeline_short_id))
-      }
-      updateSelectInput(session, "dataset_filter_pipeline", choices = pipeline_choices,
-                        selected = if (isTRUE(clear_filters)) "" else input$dataset_filter_pipeline %||% "")
-
-      ann_choices <- c("All annotation sets" = "")
-      if (nrow(browser_df) > 0) {
-        ann_vals <- unique(browser_df[, c("annotation_set_id", "annotation_set_short_id"), drop = FALSE])
-        ann_choices <- c(ann_choices, stats::setNames(ann_vals$annotation_set_id, ann_vals$annotation_set_short_id))
-      }
-      updateSelectInput(session, "dataset_filter_ann_set", choices = ann_choices,
-                        selected = if (isTRUE(clear_filters)) "" else input$dataset_filter_ann_set %||% "")
     }
 
     current_cv_suggestion_context_key <- reactive({
@@ -735,32 +589,18 @@ training_module_server <- function(id) {
       tryCatch({
         df <- get_studies()
         if (nrow(df) == 0 || !("_id" %in% names(df))) {
-          study_name_map_rv(setNames(character(0), character(0)))
           updateSelectInput(session, "ds_study", choices = c("No studies" = ""))
           return()
         }
-        study_name_map_rv(stats::setNames(as.character(df$name), as.character(df[["_id"]])))
         ch <- setNames(df[["_id"]], df$name)
         updateSelectInput(session, "ds_study", choices = c("— select —" = "", ch))
       }, error = function(e)
-        {
-          study_name_map_rv(setNames(character(0), character(0)))
-          updateSelectInput(session, "ds_study", choices = c("Error" = ""))
-        }
+        updateSelectInput(session, "ds_study", choices = c("Error" = ""))
       )
     }
 
     observeEvent(input$ds_refresh_study, load_ds_studies(), ignoreInit = FALSE)
     session$onFlushed(load_ds_studies, once = TRUE)
-
-    observeEvent(study_name_map_rv(), {
-      if (nrow(datasets_browser_rv()) > 0) {
-        tryCatch(
-          refresh_dataset_browser(selected_dataset_id = input$dataset_id %||% ""),
-          error = function(e) NULL
-        )
-      }
-    }, ignoreInit = TRUE)
 
     observeEvent(input$ds_study, {
       sid <- input$ds_study
@@ -901,108 +741,16 @@ training_module_server <- function(id) {
     observe({
       input$refresh_datasets
       tryCatch({
-        refresh_dataset_browser()
-      }, error = function(e) {
-        datasets_browser_rv(data.frame())
+        ds <- list_datasets()
+        if (nrow(ds) == 0) {
+          updateSelectInput(session, "dataset_id", choices = c("No datasets found" = ""))
+        } else {
+          choices <- setNames(ds[["_id"]], paste0(ds$name, " [", ds$study_id, "]"))
+          updateSelectInput(session, "dataset_id", choices = choices)
+        }
+      }, error = function(e)
         updateSelectInput(session, "dataset_id", choices = c("Error loading datasets" = ""))
-      }
       )
-    })
-
-    observeEvent(input$clear_dataset_filters, {
-      clear_dataset_filters()
-    })
-
-    filtered_dataset_browser <- reactive({
-      df <- datasets_browser_rv()
-      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(df)
-
-      out <- df
-
-      study_filter <- input$dataset_filter_study %||% ""
-      if (nzchar(study_filter)) {
-        out <- out[out$study_id == study_filter, , drop = FALSE]
-      }
-
-      eval_filter <- input$dataset_filter_eval_mode %||% ""
-      if (nzchar(eval_filter)) {
-        out <- out[out$evaluation_mode == eval_filter, , drop = FALSE]
-      }
-
-      split_filter <- input$dataset_filter_split_strategy %||% ""
-      if (nzchar(split_filter)) {
-        out <- out[out$split_strategy == split_filter, , drop = FALSE]
-      }
-
-      pipeline_filter <- input$dataset_filter_pipeline %||% ""
-      if (nzchar(pipeline_filter)) {
-        out <- out[out$pipeline_id == pipeline_filter, , drop = FALSE]
-      }
-
-      ann_filter <- input$dataset_filter_ann_set %||% ""
-      if (nzchar(ann_filter)) {
-        out <- out[out$annotation_set_id == ann_filter, , drop = FALSE]
-      }
-
-      search_filter <- trimws(tolower(input$dataset_filter_search %||% ""))
-      if (nzchar(search_filter)) {
-        hits <- grepl(search_filter, tolower(out$dataset_name), fixed = TRUE) |
-          grepl(search_filter, tolower(out$dataset_id), fixed = TRUE)
-        out <- out[hits, , drop = FALSE]
-      }
-
-      out[order(out$created_at, decreasing = TRUE), , drop = FALSE]
-    })
-
-    output$dataset_table <- DT::renderDataTable({
-      df <- filtered_dataset_browser()
-      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
-        return(DT::datatable(data.frame(message = "No datasets match the current filters."), rownames = FALSE))
-      }
-
-      tbl <- df[, c(
-        "dataset_id", "dataset_name", "study", "evaluation_mode_label",
-        "split_strategy_label", "cv_folds", "sample_count", "pipeline_short_id",
-        "annotation_set_short_id", "created_at"
-      ), drop = FALSE]
-      names(tbl) <- c(
-        "dataset_id", "dataset name", "study", "evaluation mode",
-        "split strategy", "CV folds", "sample count", "pipeline short id",
-        "annotation set short id", "created_at"
-      )
-
-      DT::datatable(
-        tbl,
-        selection = "single",
-        rownames = FALSE,
-        options = list(
-          pageLength = 8,
-          scrollX = TRUE,
-          columnDefs = list(list(targets = 0, visible = FALSE))
-        ),
-        class = "compact stripe hover"
-      )
-    })
-
-    observe({
-      df <- filtered_dataset_browser()
-      rid <- input$dataset_id %||% ""
-      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || !nzchar(rid)) return()
-      idx <- which(df$dataset_id == rid)
-      if (length(idx) == 1) {
-        DT::selectRows(dataset_table_proxy, idx)
-      }
-    })
-
-    observeEvent(input$dataset_table_rows_selected, {
-      idx <- input$dataset_table_rows_selected
-      df <- filtered_dataset_browser()
-      if (is.null(idx) || length(idx) == 0 || is.null(df) || nrow(df) == 0) return()
-      rid <- df$dataset_id[idx[1]]
-      choices <- if (nrow(datasets_browser_rv()) == 0) c("No datasets found" = "") else {
-        setNames(datasets_browser_rv()$dataset_id, paste0(datasets_browser_rv()$dataset_name, " [", datasets_browser_rv()$study, "]"))
-      }
-      updateSelectInput(session, "dataset_id", choices = choices, selected = rid)
     })
 
     output$dataset_info_ui <- renderUI({
@@ -1482,7 +1230,11 @@ training_module_server <- function(id) {
           )
         )
         showNotification(paste0("Dataset created: ", dataset_id), type = "message")
-        refresh_dataset_browser(selected_dataset_id = dataset_id, clear_filters = TRUE)
+        ds <- list_datasets()
+        if (nrow(ds) > 0 && "_id" %in% names(ds)) {
+          choices <- setNames(ds[["_id"]], paste0(ds$name, " [", ds$study_id, "]"))
+          updateSelectInput(session, "dataset_id", choices = choices, selected = dataset_id)
+        }
       }, error = function(e) {
         output$create_dataset_status <- renderUI(
           tags$div(class = "alert alert-danger", style = "padding:6px; margin-top:6px;",
