@@ -170,6 +170,7 @@ training_module_server <- function(id) {
     preview_src_rv   <- reactiveVal(NULL)
     preview_src_key_rv <- reactiveVal(NULL)
     preview_result_rv <- reactiveVal(NULL)
+    cv_fold_suggestion_key_rv <- reactiveVal(NULL)
 
     selected_dataset_split_strategy <- reactive({
       did <- input$dataset_id %||% ""
@@ -183,6 +184,36 @@ training_module_server <- function(id) {
 
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
+    }
+
+    current_cv_suggestion_context_key <- reactive({
+      paste(
+        normalize_eval_mode(input$ds_evaluation_mode),
+        input$ds_split_strategy %||% "random",
+        input$ds_study %||% "",
+        input$ds_pipeline %||% "",
+        input$ds_ann_set %||% "",
+        paste(sort(as.character(input$ds_samples %||% character(0))), collapse = ","),
+        suppressWarnings(as.integer(input$ds_block_size %||% NA_integer_)),
+        suppressWarnings(as.numeric(input$ds_buffer_radius %||% NA_real_)),
+        suppressWarnings(as.numeric(input$ds_train_frac %||% NA_real_)),
+        suppressWarnings(as.integer(input$ds_seed %||% NA_integer_)),
+        sep = "|"
+      )
+    })
+
+    maybe_apply_cv_fold_suggestion <- function(suggested_folds) {
+      suggested_folds <- suppressWarnings(as.integer(suggested_folds))
+      if (!is.finite(suggested_folds) || suggested_folds < 2L) return(invisible(FALSE))
+
+      suggestion_key <- paste(current_cv_suggestion_context_key(), suggested_folds, sep = "|")
+      if (identical(cv_fold_suggestion_key_rv(), suggestion_key)) {
+        return(invisible(FALSE))
+      }
+
+      updateNumericInput(session, "ds_cv_folds", value = suggested_folds)
+      cv_fold_suggestion_key_rv(suggestion_key)
+      invisible(TRUE)
     }
 
     materialize_preview_source <- function(sample_ids,
@@ -652,6 +683,7 @@ training_module_server <- function(id) {
         preview_src_rv(NULL)
         preview_src_key_rv(NULL)
         preview_result_rv(NULL)
+        cv_fold_suggestion_key_rv(NULL)
         output$estimate_spatial_text <- renderUI(NULL)
       },
       ignoreInit = TRUE
@@ -974,7 +1006,7 @@ training_module_server <- function(id) {
         rec_folds2 <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
 
         if (is.finite(spatial_rec$recommended_cv_folds) && spatial_rec$recommended_cv_folds >= 2) {
-          updateNumericInput(session, "ds_cv_folds", value = spatial_rec$recommended_cv_folds)
+          maybe_apply_cv_fold_suggestion(spatial_rec$recommended_cv_folds)
         }
 
         output$estimate_spatial_text <- renderUI({
@@ -1116,6 +1148,7 @@ training_module_server <- function(id) {
             cv_folds = cv_folds
           )
         }
+        maybe_apply_cv_fold_suggestion(prev$recommended_folds)
         preview_result_rv(prev)
       }, error = function(e) {
         showNotification(conditionMessage(e), type = "error", duration = 15)
