@@ -67,12 +67,9 @@ training_module_ui <- function(id) {
             ),
             numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
             numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1),
-            conditionalPanel(
-              condition = sprintf("input['%s'] == 'cv_plus_test'", ns("ds_evaluation_mode")),
-              actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
-                class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
-              uiOutput(ns("spatial_preview_ui"))
-            )
+            actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
+              class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
+            uiOutput(ns("spatial_preview_ui"))
           ),
           numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
           numericInput(ns("ds_cv_folds"), "CV folds (0 = none):", value = 10, min = 0),
@@ -250,23 +247,29 @@ training_module_server <- function(id) {
         all_levels <- levels(y)
       }
 
+      all_idx <- seq_along(y)
+
       fold_rows <- lapply(seq_along(cv_idx$index), function(i) {
         tr_idx <- cv_idx$index[[i]]
         te_idx <- cv_idx$indexOut[[i]]
+        excl_idx <- setdiff(all_idx, union(tr_idx, te_idx))
 
         tr_tab <- table(factor(y[tr_idx], levels = all_levels))
         te_tab <- table(factor(y[te_idx], levels = all_levels))
+        excl_tab <- table(factor(y[excl_idx], levels = all_levels))
 
         row <- data.frame(
           Fold = i,
           Train_n = length(tr_idx),
           Test_n = length(te_idx),
+          Excluded_n = length(excl_idx),
           stringsAsFactors = FALSE
         )
 
         for (cls in all_levels) {
           row[[paste0("Train_", cls)]] <- as.integer(tr_tab[[cls]])
           row[[paste0("Test_", cls)]]  <- as.integer(te_tab[[cls]])
+          row[[paste0("Excluded_", cls)]] <- as.integer(excl_tab[[cls]])
         }
 
         row
@@ -307,7 +310,7 @@ training_module_server <- function(id) {
       )
     }
 
-    compute_spatial_preview_tables <- function(src, params) {
+    compute_spatial_preview_tables <- function(src, params, evaluation_mode = "cv_plus_test") {
       req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
 
       block_size <- suppressWarnings(as.integer(params$block_size))
@@ -315,41 +318,61 @@ training_module_server <- function(id) {
       train_frac <- suppressWarnings(as.numeric(params$train_frac))
       split_seed <- suppressWarnings(as.integer(params$split_seed))
       cv_seed <- suppressWarnings(as.integer(params$cv_seed))
+      evaluation_mode <- normalize_eval_mode(evaluation_mode)
 
       req(is.finite(block_size), block_size >= 2)
       req(is.finite(buffer_radius), buffer_radius >= 0)
-      req(is.finite(train_frac), train_frac > 0, train_frac < 1)
+      if (identical(evaluation_mode, "cv_plus_test")) {
+        req(is.finite(train_frac), train_frac > 0, train_frac < 1)
+      }
       req(is.finite(split_seed))
       req(is.finite(cv_seed))
 
       y_all <- as.factor(src$y)
       class_levels <- levels(y_all)
 
-      split_idx <- make_outer_split_indices(
-        meta = src$meta,
-        split_strategy = "spatial_block",
-        split_seed = split_seed,
-        train_frac = train_frac,
-        block_size = block_size,
-        buffer_radius = buffer_radius
-      )
+      if (identical(evaluation_mode, "cv_only")) {
+        tr_idx <- seq_len(nrow(src$meta))
+        te_idx <- integer(0)
+        excl_idx <- integer(0)
+        outer_tbl <- data.frame(
+          Group = c("Final train", "Final test"),
+          stringsAsFactors = FALSE
+        )
+        train_tab <- table(factor(y_all[tr_idx], levels = class_levels))
+        zero_tab <- stats::setNames(integer(length(class_levels)), class_levels)
+        for (cls in class_levels) {
+          outer_tbl[[cls]] <- c(as.integer(train_tab[[cls]]), zero_tab[[cls]])
+        }
+        warning_msg <- NULL
+      } else {
+        split_idx <- make_outer_split_indices(
+          meta = src$meta,
+          split_strategy = "spatial_block",
+          split_seed = split_seed,
+          train_frac = train_frac,
+          block_size = block_size,
+          buffer_radius = buffer_radius
+        )
 
-      tr_idx <- split_idx$train_idx
-      te_idx <- split_idx$test_idx
-      excl_idx <- setdiff(seq_len(nrow(src$meta)), c(tr_idx, te_idx))
+        tr_idx <- split_idx$train_idx
+        te_idx <- split_idx$test_idx
+        excl_idx <- setdiff(seq_len(nrow(src$meta)), c(tr_idx, te_idx))
 
-      outer_groups <- rep(NA_character_, nrow(src$meta))
-      outer_groups[tr_idx] <- "Final train"
-      outer_groups[te_idx] <- "Final test"
-      if (length(excl_idx) > 0) {
-        outer_groups[excl_idx] <- "Buffer excluded"
+        outer_groups <- rep(NA_character_, nrow(src$meta))
+        outer_groups[tr_idx] <- "Final train"
+        outer_groups[te_idx] <- "Final test"
+        if (length(excl_idx) > 0) {
+          outer_groups[excl_idx] <- "Buffer excluded"
+        }
+
+        outer_tbl <- make_class_count_wide(
+          labels = y_all,
+          groups = outer_groups,
+          all_levels = class_levels
+        )
+        warning_msg <- split_idx$split_details$warning_msg %||% NULL
       }
-
-      outer_tbl <- make_class_count_wide(
-        labels = y_all,
-        groups = outer_groups,
-        all_levels = class_levels
-      )
 
       train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
       train_y_preview <- y_all[tr_idx]
@@ -363,7 +386,6 @@ training_module_server <- function(id) {
 
       cv_tbl <- NULL
       recommended_folds <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
-      warning_msg <- split_idx$split_details$warning_msg %||% NULL
 
       if (is.finite(recommended_folds) && recommended_folds >= 2 && length(tr_idx) > 0) {
         split_info_preview <- list(
@@ -397,6 +419,12 @@ training_module_server <- function(id) {
         cv_tbl = cv_tbl,
         recommended_folds = recommended_folds,
         warning_msg = warning_msg,
+        evaluation_mode = evaluation_mode,
+        no_test_message = if (identical(evaluation_mode, "cv_only")) {
+          "No held-out test set will be created. The final model will train on all available non-excluded pixels."
+        } else {
+          NULL
+        },
         params = list(
           block_size = block_size,
           buffer_radius = buffer_radius,
@@ -529,10 +557,8 @@ training_module_server <- function(id) {
     observe({
       strategy <- input$ds_split_strategy %||% "random"
       mode <- input$spatial_buffer_mode %||% "estimate"
-      evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
 
       base_ready <-
-        identical(evaluation_mode, "cv_plus_test") &&
         identical(strategy, "spatial_block") &&
         nzchar(input$ds_study %||% "") &&
         length(input$ds_samples %||% character(0)) > 0 &&
@@ -608,10 +634,10 @@ training_module_server <- function(id) {
     })
 
     output$spatial_preview_ui <- renderUI({
-      if (normalize_eval_mode(input$ds_evaluation_mode) != "cv_plus_test") return(NULL)
       if ((input$ds_split_strategy %||% "random") != "spatial_block") return(NULL)
 
       mode <- input$spatial_buffer_mode %||% "estimate"
+      evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
 
       prev <- preview_result_rv()
 
@@ -649,12 +675,21 @@ training_module_server <- function(id) {
             paste0(
               "Preview snapshot — block=", prev$params$block_size,
               ", buffer=", prev$params$buffer_radius,
-              ", train_frac=", prev$params$train_frac,
+              if (identical(evaluation_mode, "cv_plus_test")) paste0(", train_frac=", prev$params$train_frac) else "",
               ", split_seed=", prev$params$split_seed,
               ", cv_seed=", prev$params$cv_seed
             )
           )
         ),
+        if (identical(evaluation_mode, "cv_only")) {
+          tags$div(
+            class = "alert alert-info",
+            style = "padding:8px; margin-top:6px;",
+            tags$b("CV-only fold preview"),
+            tags$br(),
+            tags$small("No held-out test set will be created. The final model will train on all available non-excluded pixels.")
+          )
+        },
         if (!is.null(prev$warning_msg) && nzchar(prev$warning_msg)) {
           tags$div(
             class = "alert alert-warning",
@@ -664,14 +699,19 @@ training_module_server <- function(id) {
         },
         render_preview_table(
           prev$outer_tbl,
-          title_text = "Final split class counts",
-          subtitle_text = "Counts per class in final train, final test, and buffer-excluded pixels."
+          title_text = if (identical(evaluation_mode, "cv_only")) "CV-only available training pool" else "Final split class counts",
+          subtitle_text = if (identical(evaluation_mode, "cv_only")) {
+            "Counts per class in the full training pool and a zero-count held-out test row for CV-only mode."
+          } else {
+            "Counts per class in final train, final test, and buffer-excluded pixels."
+          }
         ),
         render_preview_table(
           prev$cv_tbl,
-          title_text = "CV fold class counts",
+          title_text = if (identical(evaluation_mode, "cv_only")) "CV-only fold preview" else "CV fold class counts",
           subtitle_text = paste0(
             "Preview of class counts per fold using the current block size, buffer radius, and training / CV seed. ",
+            "Excluded counts show pixels left out by CV buffering when applicable. ",
             "Recommended CV folds (store in dataset): ",
             if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
           )
@@ -726,7 +766,7 @@ training_module_server <- function(id) {
           lag_breaks = NULL,
           max_dist = 100,
           max_pairs_per_bin = 300L,
-          local_decay_threshold = 0,
+          local_decay_threshold = 0.2,
           seed = as.integer(input$ds_seed %||% 42L),
           workers = max(1L, min(8L, parallel::detectCores(logical = FALSE) - 1L))
         )
@@ -883,10 +923,6 @@ training_module_server <- function(id) {
         showNotification("Choose 'Spatial block' to preview spatial split.", type = "warning")
         return()
       }
-      if (evaluation_mode != "cv_plus_test") {
-        showNotification("Spatial outer split preview is only available in 'CV + held-out test' mode.", type = "warning")
-        return()
-      }
       if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
       if (length(samp_ids) == 0)    { showNotification("Select at least one sample.", type = "warning"); return() }
       if (!nzchar(pid %||% ""))    { showNotification("Select a pipeline.", type = "warning"); return() }
@@ -929,7 +965,11 @@ training_module_server <- function(id) {
           preview_src_key_rv(src_key)
         }
 
-        prev <- compute_spatial_preview_tables(src = src, params = params)
+        prev <- compute_spatial_preview_tables(
+          src = src,
+          params = params,
+          evaluation_mode = evaluation_mode
+        )
         preview_result_rv(prev)
       }, error = function(e) {
         showNotification(conditionMessage(e), type = "error", duration = 15)
