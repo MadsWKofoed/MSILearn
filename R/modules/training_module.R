@@ -724,30 +724,48 @@ training_module_server <- function(id) {
       )
     }
 
-    load_ds_studies <- function() {
+    fetch_studies_for_selectors <- function() {
+      df <- get_studies()
+      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || !("_id" %in% names(df))) {
+        return(NULL)
+      }
+      df
+    }
+
+    load_creation_studies <- function() {
       tryCatch({
-        df <- get_studies()
-        if (nrow(df) == 0 || !("_id" %in% names(df))) {
-          study_map_rv(setNames(character(0), character(0)))
-          updateSelectInput(session, "dataset_filter_study", choices = c("All studies" = ""))
+        df <- fetch_studies_for_selectors()
+        if (is.null(df)) {
           updateSelectInput(session, "ds_study", choices = c("No studies" = ""))
+          return()
+        }
+        ch <- setNames(df[["_id"]], df$name)
+        updateSelectInput(session, "ds_study", choices = c("— select —" = "", ch))
+      }, error = function(e) {
+        updateSelectInput(session, "ds_study", choices = c("Error" = ""))
+      })
+    }
+
+    load_browser_study_filter <- function() {
+      tryCatch({
+        df <- fetch_studies_for_selectors()
+        if (is.null(df)) {
+          study_map_rv(setNames(character(0), character(0)))
+          update_dataset_filter("dataset_filter_study", c("All studies" = ""), selected = "")
           return()
         }
         study_map_rv(stats::setNames(as.character(df$name), as.character(df[["_id"]])))
         ch <- setNames(df[["_id"]], df$name)
-        updateSelectInput(session, "ds_study", choices = c("— select —" = "", ch))
-        updateSelectInput(session, "dataset_filter_study", choices = c("All studies" = "", ch))
-      }, error = function(e)
-        {
-          study_map_rv(setNames(character(0), character(0)))
-          updateSelectInput(session, "ds_study", choices = c("Error" = ""))
-          updateSelectInput(session, "dataset_filter_study", choices = c("All studies" = ""))
-        }
-      )
+        update_dataset_filter("dataset_filter_study", c("All studies" = "", ch))
+      }, error = function(e) {
+        study_map_rv(setNames(character(0), character(0)))
+        update_dataset_filter("dataset_filter_study", c("All studies" = ""), selected = "")
+      })
     }
 
-    observeEvent(input$ds_refresh_study, load_ds_studies(), ignoreInit = FALSE)
-    session$onFlushed(load_ds_studies, once = TRUE)
+    observeEvent(input$ds_refresh_study, load_creation_studies(), ignoreInit = FALSE)
+    session$onFlushed(load_creation_studies, once = TRUE)
+    session$onFlushed(load_browser_study_filter, once = TRUE)
 
     observeEvent(input$ds_study, {
       sid <- input$ds_study
@@ -888,6 +906,7 @@ training_module_server <- function(id) {
     observe({
       input$refresh_datasets
       tryCatch({
+        load_browser_study_filter()
         refresh_dataset_browser()
       }, error = function(e) {
         dataset_browser_rv(empty_dataset_summary())
@@ -987,6 +1006,7 @@ training_module_server <- function(id) {
       req(input$dataset_id, nchar(input$dataset_id) > 0)
       tryCatch({
         ds <- get_dataset(input$dataset_id)
+        selected_name <- as.character(ds$name[1] %||% input$dataset_id)
         n  <- length(unlist(ds$sample_ids))
         sp <- if (is.data.frame(ds$split)) as.list(ds$split[1,]) else ds$split[[1]]
         eval_mode <- normalize_eval_mode(sp$evaluation_mode)
@@ -996,30 +1016,37 @@ training_module_server <- function(id) {
         } else {
           sp$strategy %||% "random"
         }
-        tagList(tags$small(
-          tags$b("Study: "),    ds$study_id,  tags$br(),
-          tags$b("Samples: "),  n,            tags$br(),
-          tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
-          tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
-          tags$b("Stage: "),    ds$stage_type, tags$br(),
-          tags$b("Evaluation mode: "), evaluation_mode_label(eval_mode), tags$br(),
-          tags$b("Split strategy: "), split_label, tags$br(),
-          tags$b("Split: "),
-          if (identical(eval_mode, "cv_plus_test") && !is.null(sp$train_frac)) {
-            paste0(sp$train_frac * 100, "% train | ")
-          } else {
-            ""
-          },
-          "seed=", sp$seed,
-          if (!is.null(sp$cv_folds)) tagList(tags$br(), tags$b("CV folds: "), sp$cv_folds),
-          if (is_spatial_split && !is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
-          if (is_spatial_split && !is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
-          if (is_spatial_split && !is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
-          if (is_spatial_split && !is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
-          if (is_spatial_split && !is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
-          if (is_spatial_split && !is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
-          if (is_spatial_split && !is.null(sp$diagnostic_recommended_buffer)) tagList(tags$br(), tags$b("Estimated buffer: "), sp$diagnostic_recommended_buffer)
-        ))
+        tagList(
+          tags$div(
+            style = "margin-bottom:6px;",
+            tags$b("Selected dataset: "),
+            selected_name
+          ),
+          tags$small(
+            tags$b("Study: "),    ds$study_id,  tags$br(),
+            tags$b("Samples: "),  n,            tags$br(),
+            tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
+            tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
+            tags$b("Stage: "),    ds$stage_type, tags$br(),
+            tags$b("Evaluation mode: "), evaluation_mode_label(eval_mode), tags$br(),
+            tags$b("Split strategy: "), split_label, tags$br(),
+            tags$b("Split: "),
+            if (identical(eval_mode, "cv_plus_test") && !is.null(sp$train_frac)) {
+              paste0(sp$train_frac * 100, "% train | ")
+            } else {
+              ""
+            },
+            "seed=", sp$seed,
+            if (!is.null(sp$cv_folds)) tagList(tags$br(), tags$b("CV folds: "), sp$cv_folds),
+            if (is_spatial_split && !is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
+            if (is_spatial_split && !is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
+            if (is_spatial_split && !is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
+            if (is_spatial_split && !is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
+            if (is_spatial_split && !is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
+            if (is_spatial_split && !is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
+            if (is_spatial_split && !is.null(sp$diagnostic_recommended_buffer)) tagList(tags$br(), tags$b("Estimated buffer: "), sp$diagnostic_recommended_buffer)
+          )
+        )
       }, error = function(e)
         tags$small(style = "color:red", "Could not load dataset info.")
       )
