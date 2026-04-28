@@ -310,7 +310,7 @@ training_module_server <- function(id) {
       )
     }
 
-    compute_spatial_preview_tables <- function(src, params, evaluation_mode = "cv_plus_test") {
+    compute_spatial_preview_tables <- function(src, params, evaluation_mode = "cv_plus_test", cv_folds = NA_integer_) {
       req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
 
       block_size <- suppressWarnings(as.integer(params$block_size))
@@ -318,6 +318,7 @@ training_module_server <- function(id) {
       train_frac <- suppressWarnings(as.numeric(params$train_frac))
       split_seed <- suppressWarnings(as.integer(params$split_seed))
       cv_seed <- suppressWarnings(as.integer(params$cv_seed))
+      cv_folds <- suppressWarnings(as.integer(cv_folds))
       evaluation_mode <- normalize_eval_mode(evaluation_mode)
 
       req(is.finite(block_size), block_size >= 2)
@@ -386,8 +387,10 @@ training_module_server <- function(id) {
 
       cv_tbl <- NULL
       recommended_folds <- suppressWarnings(as.integer(spatial_rec$recommended_cv_folds))
+      selected_cv_folds <- cv_folds
+      effective_cv_folds <- NA_integer_
 
-      if (is.finite(recommended_folds) && recommended_folds >= 2 && length(tr_idx) > 0) {
+      if (is.finite(selected_cv_folds) && selected_cv_folds >= 2 && length(tr_idx) > 0) {
         split_info_preview <- list(
           strategy = "spatial_block",
           block_size = block_size,
@@ -399,13 +402,14 @@ training_module_server <- function(id) {
           build_cv_indices_from_split(
             train_meta = train_meta_preview,
             split_info = split_info_preview,
-            cv_folds = recommended_folds,
+            cv_folds = selected_cv_folds,
             seed = cv_seed
           ),
           error = function(e) NULL
         )
 
         if (!is.null(cv_idx)) {
+          effective_cv_folds <- length(cv_idx$index)
           cv_tbl <- make_fold_preview_table(
             cv_idx = cv_idx,
             y = train_y_preview,
@@ -417,6 +421,8 @@ training_module_server <- function(id) {
       list(
         outer_tbl = outer_tbl,
         cv_tbl = cv_tbl,
+        selected_cv_folds = selected_cv_folds,
+        effective_cv_folds = effective_cv_folds,
         recommended_folds = recommended_folds,
         warning_msg = warning_msg,
         evaluation_mode = evaluation_mode,
@@ -428,6 +434,112 @@ training_module_server <- function(id) {
         params = list(
           block_size = block_size,
           buffer_radius = buffer_radius,
+          train_frac = train_frac,
+          split_seed = split_seed,
+          cv_seed = cv_seed
+        )
+      )
+    }
+
+    compute_grouped_preview_tables <- function(src, params, evaluation_mode = "cv_plus_test", cv_folds = NA_integer_) {
+      req(!is.null(src), length(src$y) > 0, is.data.frame(src$meta))
+
+      train_frac <- suppressWarnings(as.numeric(params$train_frac))
+      split_seed <- suppressWarnings(as.integer(params$split_seed))
+      cv_seed <- suppressWarnings(as.integer(params$cv_seed))
+      cv_folds <- suppressWarnings(as.integer(cv_folds))
+      evaluation_mode <- normalize_eval_mode(evaluation_mode)
+
+      if (identical(evaluation_mode, "cv_plus_test")) {
+        req(is.finite(train_frac), train_frac > 0, train_frac < 1)
+      }
+      req(is.finite(split_seed))
+      req(is.finite(cv_seed))
+
+      y_all <- as.factor(src$y)
+      class_levels <- levels(y_all)
+
+      if (identical(evaluation_mode, "cv_only")) {
+        tr_idx <- seq_len(nrow(src$meta))
+        te_idx <- integer(0)
+        outer_tbl <- data.frame(
+          Group = c("Final train", "Final test"),
+          stringsAsFactors = FALSE
+        )
+        train_tab <- table(factor(y_all[tr_idx], levels = class_levels))
+        zero_tab <- stats::setNames(integer(length(class_levels)), class_levels)
+        for (cls in class_levels) {
+          outer_tbl[[cls]] <- c(as.integer(train_tab[[cls]]), zero_tab[[cls]])
+        }
+      } else {
+        split_idx <- make_outer_split_indices(
+          meta = src$meta,
+          split_strategy = "leave_one_sample_out",
+          split_seed = split_seed,
+          train_frac = train_frac
+        )
+
+        tr_idx <- split_idx$train_idx
+        te_idx <- split_idx$test_idx
+
+        outer_groups <- rep(NA_character_, nrow(src$meta))
+        outer_groups[tr_idx] <- "Final train"
+        outer_groups[te_idx] <- "Final test"
+
+        outer_tbl <- make_class_count_wide(
+          labels = y_all,
+          groups = outer_groups,
+          all_levels = class_levels
+        )
+      }
+
+      train_meta_preview <- src$meta[tr_idx, , drop = FALSE]
+      train_y_preview <- y_all[tr_idx]
+      n_training_samples <- length(unique(as.character(train_meta_preview$sample_id)))
+
+      selected_cv_folds <- cv_folds
+      suggested_cv_folds <- n_training_samples
+      effective_cv_folds <- if (is.finite(selected_cv_folds) && selected_cv_folds >= 2) {
+        min(selected_cv_folds, n_training_samples)
+      } else {
+        NA_integer_
+      }
+
+      cv_tbl <- NULL
+      if (is.finite(selected_cv_folds) && selected_cv_folds >= 2 && n_training_samples >= 2) {
+        cv_idx <- tryCatch(
+          make_loso_cv_indices(
+            train_meta = train_meta_preview,
+            cv_folds = selected_cv_folds,
+            seed = cv_seed
+          ),
+          error = function(e) NULL
+        )
+
+        if (!is.null(cv_idx)) {
+          effective_cv_folds <- length(cv_idx$index)
+          cv_tbl <- make_fold_preview_table(
+            cv_idx = cv_idx,
+            y = train_y_preview,
+            all_levels = class_levels
+          )
+        }
+      }
+
+      list(
+        outer_tbl = outer_tbl,
+        cv_tbl = cv_tbl,
+        selected_cv_folds = selected_cv_folds,
+        effective_cv_folds = effective_cv_folds,
+        recommended_folds = suggested_cv_folds,
+        warning_msg = NULL,
+        evaluation_mode = evaluation_mode,
+        no_test_message = if (identical(evaluation_mode, "cv_only")) {
+          "No held-out test set will be created. The final model will train on all available non-excluded pixels."
+        } else {
+          NULL
+        },
+        params = list(
           train_frac = train_frac,
           split_seed = split_seed,
           cv_seed = cv_seed
@@ -559,7 +671,7 @@ training_module_server <- function(id) {
       mode <- input$spatial_buffer_mode %||% "estimate"
 
       base_ready <-
-        identical(strategy, "spatial_block") &&
+        strategy %in% c("spatial_block", "leave_one_sample_out") &&
         nzchar(input$ds_study %||% "") &&
         length(input$ds_samples %||% character(0)) > 0 &&
         nzchar(input$ds_pipeline %||% "") &&
@@ -568,13 +680,23 @@ training_module_server <- function(id) {
 
       estimate_ready <- !is.null(estimate_diag_rv()) && !is.null(estimate_params_rv())
 
-      enabled <- if (identical(mode, "estimate")) {
+      enabled <- if (identical(strategy, "spatial_block") && identical(mode, "estimate")) {
         base_ready && estimate_ready
       } else {
         base_ready
       }
 
       shinyjs::toggleState("run_spatial_preview_btn", condition = enabled)
+    })
+
+    observe({
+      strategy <- input$ds_split_strategy %||% "random"
+      label <- if (identical(strategy, "leave_one_sample_out")) {
+        "Preview grouped sample-out split"
+      } else {
+        "Preview spatial split"
+      }
+      shiny::updateActionButton(session, "run_spatial_preview_btn", label = label)
     })
 
     observe({
@@ -599,6 +721,7 @@ training_module_server <- function(id) {
         n  <- length(unlist(ds$sample_ids))
         sp <- if (is.data.frame(ds$split)) as.list(ds$split[1,]) else ds$split[[1]]
         eval_mode <- normalize_eval_mode(sp$evaluation_mode)
+        is_spatial_split <- identical(sp$strategy, "spatial_block")
         split_label <- if (identical(sp$strategy, "leave_one_sample_out")) {
           "Grouped sample-out"
         } else {
@@ -620,13 +743,13 @@ training_module_server <- function(id) {
           },
           "seed=", sp$seed,
           if (!is.null(sp$cv_folds)) tagList(tags$br(), tags$b("CV folds: "), sp$cv_folds),
-          if (!is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
-          if (!is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
-          if (!is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
-          if (!is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
-          if (!is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
-          if (!is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
-          if (!is.null(sp$diagnostic_recommended_buffer)) tagList(tags$br(), tags$b("Estimated buffer: "), sp$diagnostic_recommended_buffer)
+          if (is_spatial_split && !is.null(sp$block_size)) tagList(tags$br(), tags$b("Block size: "), sp$block_size),
+          if (is_spatial_split && !is.null(sp$buffer_radius)) tagList(tags$br(), tags$b("Buffer radius: "), sp$buffer_radius),
+          if (is_spatial_split && !is.null(sp$min_pixels_per_block)) tagList(tags$br(), tags$b("Min pixels per merged block: "), sp$min_pixels_per_block),
+          if (is_spatial_split && !is.null(sp$diagnostic_method)) tagList(tags$br(), tags$b("Diagnostic: "), sp$diagnostic_method),
+          if (is_spatial_split && !is.null(sp$diagnostic_n_features)) tagList(tags$br(), tags$b("Features evaluated: "), sp$diagnostic_n_features),
+          if (is_spatial_split && !is.null(sp$diagnostic_n_correlogram_features)) tagList(tags$br(), tags$b("Correlogram features: "), sp$diagnostic_n_correlogram_features),
+          if (is_spatial_split && !is.null(sp$diagnostic_recommended_buffer)) tagList(tags$br(), tags$b("Estimated buffer: "), sp$diagnostic_recommended_buffer)
         ))
       }, error = function(e)
         tags$small(style = "color:red", "Could not load dataset info.")
@@ -634,7 +757,8 @@ training_module_server <- function(id) {
     })
 
     output$spatial_preview_ui <- renderUI({
-      if ((input$ds_split_strategy %||% "random") != "spatial_block") return(NULL)
+      strategy <- input$ds_split_strategy %||% "random"
+      if (!(strategy %in% c("spatial_block", "leave_one_sample_out"))) return(NULL)
 
       mode <- input$spatial_buffer_mode %||% "estimate"
       evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
@@ -673,8 +797,7 @@ training_module_server <- function(id) {
           tags$small(
             style = "color:#666;",
             paste0(
-              "Preview snapshot — block=", prev$params$block_size,
-              ", buffer=", prev$params$buffer_radius,
+              if (identical(strategy, "spatial_block")) paste0("Preview snapshot — block=", prev$params$block_size, ", buffer=", prev$params$buffer_radius) else "Preview snapshot — grouped sample-out",
               if (identical(evaluation_mode, "cv_plus_test")) paste0(", train_frac=", prev$params$train_frac) else "",
               ", split_seed=", prev$params$split_seed,
               ", cv_seed=", prev$params$cv_seed
@@ -703,16 +826,20 @@ training_module_server <- function(id) {
           subtitle_text = if (identical(evaluation_mode, "cv_only")) {
             "Counts per class in the full training pool and a zero-count held-out test row for CV-only mode."
           } else {
-            "Counts per class in final train, final test, and buffer-excluded pixels."
+            if (identical(strategy, "spatial_block")) {
+              "Counts per class in final train, final test, and buffer-excluded pixels."
+            } else {
+              "Counts per class in final train and final held-out grouped sample-out test split."
+            }
           }
         ),
         render_preview_table(
           prev$cv_tbl,
-          title_text = if (identical(evaluation_mode, "cv_only")) "CV-only fold preview" else "CV fold class counts",
+          title_text = if (identical(strategy, "leave_one_sample_out")) "Grouped sample-out fold preview" else if (identical(evaluation_mode, "cv_only")) "CV-only fold preview" else "CV fold class counts",
           subtitle_text = paste0(
-            "Preview of class counts per fold using the current block size, buffer radius, and training / CV seed. ",
-            "Excluded counts show pixels left out by CV buffering when applicable. ",
-            "Recommended CV folds (store in dataset): ",
+            "Selected CV folds input: ", if (is.finite(prev$selected_cv_folds)) prev$selected_cv_folds else "not available",
+            " | Effective CV folds used: ", if (is.finite(prev$effective_cv_folds)) prev$effective_cv_folds else "not available",
+            " | Suggested CV folds: ",
             if (is.finite(prev$recommended_folds)) prev$recommended_folds else "not available"
           )
         )
@@ -918,9 +1045,10 @@ training_module_server <- function(id) {
       strategy <- input$ds_split_strategy %||% "random"
       mode     <- input$spatial_buffer_mode %||% "estimate"
       evaluation_mode <- normalize_eval_mode(input$ds_evaluation_mode)
+      cv_folds <- suppressWarnings(as.integer(input$ds_cv_folds %||% NA_integer_))
 
-      if (strategy != "spatial_block") {
-        showNotification("Choose 'Spatial block' to preview spatial split.", type = "warning")
+      if (!(strategy %in% c("spatial_block", "leave_one_sample_out"))) {
+        showNotification("Choose 'Spatial block' or 'Grouped sample-out' to preview the dataset split.", type = "warning")
         return()
       }
       if (!nzchar(sid %||% ""))    { showNotification("Select a study.", type = "warning"); return() }
@@ -928,7 +1056,8 @@ training_module_server <- function(id) {
       if (!nzchar(pid %||% ""))    { showNotification("Select a pipeline.", type = "warning"); return() }
       if (!nzchar(ann_id %||% "")) { showNotification("Select an annotation set.", type = "warning"); return() }
 
-      if (identical(mode, "estimate") && (is.null(estimate_diag_rv()) || is.null(estimate_params_rv()))) {
+      if (identical(strategy, "spatial_block") && identical(mode, "estimate") &&
+          (is.null(estimate_diag_rv()) || is.null(estimate_params_rv()))) {
         showNotification("Run Moran estimate first in estimate mode.", type = "warning")
         return()
       }
@@ -965,11 +1094,21 @@ training_module_server <- function(id) {
           preview_src_key_rv(src_key)
         }
 
-        prev <- compute_spatial_preview_tables(
-          src = src,
-          params = params,
-          evaluation_mode = evaluation_mode
-        )
+        prev <- if (identical(strategy, "leave_one_sample_out")) {
+          compute_grouped_preview_tables(
+            src = src,
+            params = params,
+            evaluation_mode = evaluation_mode,
+            cv_folds = cv_folds
+          )
+        } else {
+          compute_spatial_preview_tables(
+            src = src,
+            params = params,
+            evaluation_mode = evaluation_mode,
+            cv_folds = cv_folds
+          )
+        }
         preview_result_rv(prev)
       }, error = function(e) {
         showNotification(conditionMessage(e), type = "error", duration = 15)
@@ -1487,6 +1626,9 @@ training_module_server <- function(id) {
         val <- as.character(x[1])
         if (identical(val, "leave_one_sample_out")) "Grouped sample-out" else val
       }
+      is_spatial_strategy <- function(x) {
+        identical(first_chr(x, ""), "spatial_block")
+      }
       first_num <- function(x) {
         if (is.null(x) || length(x) == 0) return(NA_real_)
         suppressWarnings(as.numeric(x[1]))
@@ -1498,6 +1640,7 @@ training_module_server <- function(id) {
       }
 
       evaluation_mode <- normalize_eval_mode(hp[["evaluation_mode"]] %||% m[["evaluation_mode"]])
+      show_spatial_rows <- is_spatial_strategy(hp[["split_strategy"]])
       has_test_set <- {
         flag <- first_chr(m[["has_test_set"]], "")
         if (nzchar(flag)) {
@@ -1649,9 +1792,9 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("CV folds"), tags$td(first_chr(hp[["cv_folds"]]))),
                 tags$tr(tags$td("Seed"), tags$td(first_chr(hp[["seed"]]))),
                 tags$tr(tags$td("Split strategy"), tags$td(split_label(hp[["split_strategy"]]))),
-                tags$tr(tags$td("Block size"), tags$td(first_chr(hp[["split_block_size"]]))),
-                tags$tr(tags$td("Buffer radius"), tags$td(first_chr(hp[["split_buffer_radius"]]))),
-                tags$tr(tags$td("Min pixels per merged block"), tags$td(first_chr(hp[["split_min_pixels_per_block"]])))
+                if (show_spatial_rows) tags$tr(tags$td("Block size"), tags$td(first_chr(hp[["split_block_size"]]))),
+                if (show_spatial_rows) tags$tr(tags$td("Buffer radius"), tags$td(first_chr(hp[["split_buffer_radius"]]))),
+                if (show_spatial_rows) tags$tr(tags$td("Min pixels per merged block"), tags$td(first_chr(hp[["split_min_pixels_per_block"]])))
               )
             ),
             column(4,
