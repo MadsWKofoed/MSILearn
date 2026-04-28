@@ -221,51 +221,89 @@ training_module_server <- function(id) {
       val
     }
 
-    dataset_browser_row_from_doc <- function(ds_doc) {
+    empty_dataset_summary <- function() {
+      data.frame(
+        dataset_id = character(0),
+        dataset_name = character(0),
+        study_id = character(0),
+        study = character(0),
+        pipeline_id = character(0),
+        pipeline_short_id = character(0),
+        annotation_set_id = character(0),
+        annotation_set_short_id = character(0),
+        created_at = character(0),
+        evaluation_mode = character(0),
+        evaluation_mode_label = character(0),
+        split_strategy = character(0),
+        split_strategy_label = character(0),
+        cv_folds = integer(0),
+        n_samples = integer(0),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    dataset_summary_row <- function(ds_row, ds_doc = NULL) {
+      if (is.null(ds_row) || !is.data.frame(ds_row) || nrow(ds_row) == 0) return(NULL)
+
+      row <- ds_row[1, , drop = FALSE]
+      if (is.null(ds_doc)) {
+        ds_doc <- tryCatch(get_dataset(as.character(row$`_id`[1])), error = function(e) NULL)
+      }
       if (is.null(ds_doc) || !is.data.frame(ds_doc) || nrow(ds_doc) == 0) return(NULL)
 
       ds <- ds_doc[1, , drop = FALSE]
       sp <- if (is.data.frame(ds$split)) as.list(ds$split[1, , drop = FALSE]) else ds$split[[1]]
       if (is.null(sp) || !is.list(sp)) sp <- list()
 
-      study_id <- as.character(ds$study_id[1] %||% "")
-      eval_mode <- normalize_eval_mode(sp$evaluation_mode)
-      split_strategy <- as.character(sp$strategy %||% "random")
+      study_id <- as.character(row$study_id[1] %||% ds$study_id[1] %||% "")
       study_map <- study_map_rv()
+      evaluation_mode <- normalize_eval_mode(sp$evaluation_mode)
+      split_strategy <- as.character(sp$strategy %||% "random")
 
       data.frame(
-        dataset_id = as.character(ds$`_id`[1]),
-        dataset_name = as.character(ds$name[1] %||% ""),
+        dataset_id = as.character(row$`_id`[1] %||% ds$`_id`[1] %||% ""),
+        dataset_name = as.character(row$name[1] %||% ds$name[1] %||% ""),
         study_id = study_id,
         study = unname(study_map[[study_id]] %||% study_id),
-        evaluation_mode = eval_mode,
-        evaluation_mode_label = evaluation_mode_label(eval_mode),
+        pipeline_id = as.character(row$pipeline_id[1] %||% ds$pipeline_id[1] %||% ""),
+        pipeline_short_id = substr(as.character(row$pipeline_id[1] %||% ds$pipeline_id[1] %||% ""), 1, 12),
+        annotation_set_id = as.character(row$annotation_set_id[1] %||% ds$annotation_set_id[1] %||% ""),
+        annotation_set_short_id = substr(as.character(row$annotation_set_id[1] %||% ds$annotation_set_id[1] %||% ""), 1, 12),
+        created_at = as.character(row$created_at[1] %||% ds$created_at[1] %||% ""),
+        evaluation_mode = evaluation_mode,
+        evaluation_mode_label = evaluation_mode_label(evaluation_mode),
         split_strategy = split_strategy,
         split_strategy_label = split_strategy_label(split_strategy),
         cv_folds = suppressWarnings(as.integer(sp$cv_folds %||% NA_integer_)),
-        sample_count = length(unlist(ds$sample_ids[[1]])),
-        pipeline_id = as.character(ds$pipeline_id[1] %||% ""),
-        pipeline_short_id = substr(as.character(ds$pipeline_id[1] %||% ""), 1, 12),
-        annotation_set_id = as.character(ds$annotation_set_id[1] %||% ""),
-        annotation_set_short_id = substr(as.character(ds$annotation_set_id[1] %||% ""), 1, 12),
-        created_at = as.character(ds$created_at[1] %||% ""),
+        n_samples = length(unlist(ds$sample_ids[[1]])),
         stringsAsFactors = FALSE
       )
     }
 
+    build_dataset_summary <- function(ds_list) {
+      if (is.null(ds_list) || !is.data.frame(ds_list) || nrow(ds_list) == 0 || !("_id" %in% names(ds_list))) {
+        return(empty_dataset_summary())
+      }
+
+      rows <- lapply(seq_len(nrow(ds_list)), function(i) {
+        tryCatch(dataset_summary_row(ds_list[i, , drop = FALSE]), error = function(e) NULL)
+      })
+      summary_df <- dplyr::bind_rows(Filter(Negate(is.null), rows))
+      if (is.null(summary_df) || !is.data.frame(summary_df) || nrow(summary_df) == 0) {
+        return(empty_dataset_summary())
+      }
+      summary_df
+    }
+
     refresh_dataset_browser <- function(selected_dataset_id = NULL, reveal_dataset_id = NULL) {
       ds_list <- list_datasets()
-      if (is.null(ds_list) || !is.data.frame(ds_list) || nrow(ds_list) == 0 || !("_id" %in% names(ds_list))) {
-        dataset_browser_rv(data.frame())
+      browser_df <- build_dataset_summary(ds_list)
+      dataset_browser_rv(browser_df)
+
+      if (nrow(browser_df) == 0) {
         updateSelectInput(session, "dataset_id", choices = c("No datasets found" = ""), selected = "")
         return(invisible(NULL))
       }
-
-      browser_rows <- lapply(as.character(ds_list$`_id`), function(did) {
-        tryCatch(dataset_browser_row_from_doc(get_dataset(did)), error = function(e) NULL)
-      })
-      browser_df <- dplyr::bind_rows(Filter(Negate(is.null), browser_rows))
-      dataset_browser_rv(browser_df)
 
       if (!is.null(reveal_dataset_id) && nzchar(reveal_dataset_id)) {
         row <- browser_df[browser_df$dataset_id == reveal_dataset_id, , drop = FALSE]
@@ -852,7 +890,7 @@ training_module_server <- function(id) {
       tryCatch({
         refresh_dataset_browser()
       }, error = function(e) {
-        dataset_browser_rv(data.frame())
+        dataset_browser_rv(empty_dataset_summary())
         updateSelectInput(session, "dataset_id", choices = c("Error loading datasets" = ""))
       }
       )
@@ -860,38 +898,6 @@ training_module_server <- function(id) {
 
     observe({
       df <- dataset_browser_rv()
-      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
-        updateSelectInput(session, "dataset_filter_pipeline", choices = c("All pipelines" = ""), selected = "")
-        updateSelectInput(session, "dataset_filter_ann_set", choices = c("All annotation sets" = ""), selected = "")
-      }
-    })
-
-    available_for_pipeline_filter <- reactive({
-      df <- dataset_browser_rv()
-      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(df)
-
-      out <- df
-      if (nzchar(input$dataset_filter_study %||% "")) out <- out[out$study_id == input$dataset_filter_study, , drop = FALSE]
-      if (nzchar(input$dataset_filter_eval_mode %||% "")) out <- out[out$evaluation_mode == input$dataset_filter_eval_mode, , drop = FALSE]
-      if (nzchar(input$dataset_filter_split_strategy %||% "")) out <- out[out$split_strategy == input$dataset_filter_split_strategy, , drop = FALSE]
-      if (nzchar(input$dataset_filter_ann_set %||% "")) out <- out[out$annotation_set_id == input$dataset_filter_ann_set, , drop = FALSE]
-      out
-    })
-
-    available_for_ann_filter <- reactive({
-      df <- dataset_browser_rv()
-      if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(df)
-
-      out <- df
-      if (nzchar(input$dataset_filter_study %||% "")) out <- out[out$study_id == input$dataset_filter_study, , drop = FALSE]
-      if (nzchar(input$dataset_filter_eval_mode %||% "")) out <- out[out$evaluation_mode == input$dataset_filter_eval_mode, , drop = FALSE]
-      if (nzchar(input$dataset_filter_split_strategy %||% "")) out <- out[out$split_strategy == input$dataset_filter_split_strategy, , drop = FALSE]
-      if (nzchar(input$dataset_filter_pipeline %||% "")) out <- out[out$pipeline_id == input$dataset_filter_pipeline, , drop = FALSE]
-      out
-    })
-
-    observe({
-      df <- available_for_pipeline_filter()
       choices <- c("All pipelines" = "")
       if (!is.null(df) && is.data.frame(df) && nrow(df) > 0) {
         vals <- unique(df[, c("pipeline_id", "pipeline_short_id"), drop = FALSE])
@@ -904,7 +910,7 @@ training_module_server <- function(id) {
     })
 
     observe({
-      df <- available_for_ann_filter()
+      df <- dataset_browser_rv()
       choices <- c("All annotation sets" = "")
       if (!is.null(df) && is.data.frame(df) && nrow(df) > 0) {
         vals <- unique(df[, c("annotation_set_id", "annotation_set_short_id"), drop = FALSE])
@@ -937,7 +943,7 @@ training_module_server <- function(id) {
 
       tbl <- df[, c(
         "dataset_id", "dataset_name", "study", "evaluation_mode_label",
-        "split_strategy_label", "cv_folds", "sample_count", "pipeline_short_id",
+        "split_strategy_label", "cv_folds", "n_samples", "pipeline_short_id",
         "annotation_set_short_id", "created_at"
       ), drop = FALSE]
 
