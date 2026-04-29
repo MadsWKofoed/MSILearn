@@ -83,7 +83,7 @@ prediction_module_ui <- function(id) {
       column(
         3,
         h4("Resolved Data Structure"),
-        uiOutput(ns("pipeline_info_ui")),
+        DT::DTOutput(ns("pipeline_info_table")),
         hr(),
         h4("Prediction Log"),
         verbatimTextOutput(ns("prediction_log")),
@@ -493,7 +493,7 @@ prediction_module_server <- function(id) {
       )
     })
 
-    output$pipeline_info_ui <- renderUI({
+    output$pipeline_info_table <- DT::renderDT({
       ctx <- selected_context()
       p   <- ctx$pipeline_params
       hp  <- ctx$hyperparams
@@ -502,18 +502,47 @@ prediction_module_server <- function(id) {
       dataset_label <- if (nrow(run_row) == 1) run_row$dataset_label[1] else ctx$dataset_id
       study_label <- if (nrow(run_row) == 1) run_row$study[1] else "—"
       pipeline_label <- if (nrow(run_row) == 1) run_row$pipeline_name[1] else ctx$pipeline_name
+      tbl <- data.frame(
+        Field = c(
+          "dataset",
+          "study",
+          "processing_pipeline",
+          "snr",
+          "tolerance",
+          "resolution",
+          "reference_name",
+          "normalize_method"
+        ),
+        Value = c(
+          dataset_label,
+          study_label,
+          pipeline_label,
+          first_chr(p$snr),
+          first_chr(p$tolerance),
+          first_chr(p$resolution),
+          first_chr(p$reference_name),
+          first_chr(hp$normalize_method, "none")
+        ),
+        stringsAsFactors = FALSE
+      )
 
-      tags$table(
-        class = "table table-condensed table-bordered",
-        tags$tbody(
-          tags$tr(tags$td("dataset"),           tags$td(dataset_label)),
-          tags$tr(tags$td("study"),             tags$td(study_label)),
-          tags$tr(tags$td("processing_pipeline"), tags$td(pipeline_label)),
-          tags$tr(tags$td("snr"),               tags$td(first_chr(p$snr))),
-          tags$tr(tags$td("tolerance"),         tags$td(first_chr(p$tolerance))),
-          tags$tr(tags$td("resolution"),        tags$td(first_chr(p$resolution))),
-          tags$tr(tags$td("reference_name"),    tags$td(first_chr(p$reference_name))),
-          tags$tr(tags$td("normalize_method"),  tags$td(first_chr(hp$normalize_method, "none")))
+      DT::datatable(
+        tbl,
+        rownames = FALSE,
+        selection = "none",
+        class = "compact stripe nowrap",
+        options = list(
+          dom = "t",
+          paging = FALSE,
+          ordering = FALSE,
+          searching = FALSE,
+          info = FALSE,
+          autoWidth = TRUE,
+          scrollX = TRUE,
+          columnDefs = list(
+            list(width = "130px", targets = 0),
+            list(width = "220px", targets = 1)
+          )
         )
       )
     })
