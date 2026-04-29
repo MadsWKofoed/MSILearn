@@ -230,9 +230,9 @@ training_module_server <- function(id) {
         study_id = character(0),
         study = character(0),
         pipeline_id = character(0),
-        pipeline_short_id = character(0),
+        pipeline_label = character(0),
         annotation_set_id = character(0),
-        annotation_set_short_id = character(0),
+        annotation_set_label = character(0),
         created_at = character(0),
         evaluation_mode = character(0),
         evaluation_mode_label = character(0),
@@ -265,12 +265,12 @@ training_module_server <- function(id) {
       dataset_filter_pipeline = list(
         all_label = "All pipelines",
         value_col = "pipeline_id",
-        label_col = "pipeline_short_id"
+        label_col = "pipeline_label"
       ),
       dataset_filter_ann_set = list(
         all_label = "All annotation sets",
         value_col = "annotation_set_id",
-        label_col = "annotation_set_short_id"
+        label_col = "annotation_set_label"
       )
     )
 
@@ -289,7 +289,9 @@ training_module_server <- function(id) {
       )
     }
 
-    dataset_summary_row <- function(ds_row, ds_doc = NULL) {
+    dataset_summary_row <- function(ds_row, ds_doc = NULL,
+                                   pipeline_name_map = NULL,
+                                   annotation_set_name_map = NULL) {
       if (is.null(ds_row) || !is.data.frame(ds_row) || nrow(ds_row) == 0) return(NULL)
 
       row <- ds_row[1, , drop = FALSE]
@@ -306,16 +308,29 @@ training_module_server <- function(id) {
       study_map <- study_map_rv()
       evaluation_mode <- normalize_eval_mode(sp$evaluation_mode)
       split_strategy <- as.character(sp$strategy %||% "random")
+      pipeline_id <- as.character(row$pipeline_id[1] %||% ds$pipeline_id[1] %||% "")
+      annotation_set_id <- as.character(row$annotation_set_id[1] %||% ds$annotation_set_id[1] %||% "")
+      annotation_key <- paste(study_id, annotation_set_id, sep = "::")
+
+      pipeline_label <- as.character(pipeline_name_map[[pipeline_id]] %||% "")
+      if (!nzchar(pipeline_label)) {
+        pipeline_label <- substr(pipeline_id, 1, 12)
+      }
+
+      annotation_set_label <- as.character(annotation_set_name_map[[annotation_key]] %||% "")
+      if (!nzchar(annotation_set_label)) {
+        annotation_set_label <- substr(annotation_set_id, 1, 12)
+      }
 
       data.frame(
         dataset_id = as.character(row$`_id`[1] %||% ds$`_id`[1] %||% ""),
         dataset_name = as.character(row$name[1] %||% ds$name[1] %||% ""),
         study_id = study_id,
         study = unname(study_map[[study_id]] %||% study_id),
-        pipeline_id = as.character(row$pipeline_id[1] %||% ds$pipeline_id[1] %||% ""),
-        pipeline_short_id = substr(as.character(row$pipeline_id[1] %||% ds$pipeline_id[1] %||% ""), 1, 12),
-        annotation_set_id = as.character(row$annotation_set_id[1] %||% ds$annotation_set_id[1] %||% ""),
-        annotation_set_short_id = substr(as.character(row$annotation_set_id[1] %||% ds$annotation_set_id[1] %||% ""), 1, 12),
+        pipeline_id = pipeline_id,
+        pipeline_label = pipeline_label,
+        annotation_set_id = annotation_set_id,
+        annotation_set_label = annotation_set_label,
         created_at = as.character(row$created_at[1] %||% ds$created_at[1] %||% ""),
         evaluation_mode = evaluation_mode,
         evaluation_mode_label = evaluation_mode_label(evaluation_mode),
@@ -332,8 +347,45 @@ training_module_server <- function(id) {
         return(empty_dataset_summary())
       }
 
+      pipeline_ids <- unique(as.character(ds_list$pipeline_id %||% character(0)))
+      pipeline_ids <- pipeline_ids[nzchar(pipeline_ids)]
+      pipeline_name_map <- stats::setNames(
+        vapply(pipeline_ids, function(pid) {
+          tryCatch(as.character(get_pipeline(pid)$name[1] %||% pid), error = function(e) pid)
+        }, character(1)),
+        pipeline_ids
+      )
+
+      annotation_set_name_map <- setNames(character(0), character(0))
+      if (all(c("study_id", "annotation_set_id") %in% names(ds_list))) {
+        ann_pairs <- unique(data.frame(
+          study_id = as.character(ds_list$study_id %||% character(0)),
+          annotation_set_id = as.character(ds_list$annotation_set_id %||% character(0)),
+          stringsAsFactors = FALSE
+        ))
+        ann_pairs <- ann_pairs[nzchar(ann_pairs$study_id) & nzchar(ann_pairs$annotation_set_id), , drop = FALSE]
+
+        study_ids <- unique(ann_pairs$study_id)
+        for (study_id in study_ids) {
+          ann_df <- tryCatch(list_annotation_sets(study_id), error = function(e) data.frame())
+          if (!is.data.frame(ann_df) || nrow(ann_df) == 0 || !all(c("_id", "name") %in% names(ann_df))) next
+
+          ann_ids <- as.character(ann_df[["_id"]])
+          ann_names <- as.character(ann_df$name %||% ann_ids)
+          keys <- paste(study_id, ann_ids, sep = "::")
+          annotation_set_name_map[keys] <- ann_names
+        }
+      }
+
       rows <- lapply(seq_len(nrow(ds_list)), function(i) {
-        tryCatch(dataset_summary_row(ds_list[i, , drop = FALSE]), error = function(e) NULL)
+        tryCatch(
+          dataset_summary_row(
+            ds_list[i, , drop = FALSE],
+            pipeline_name_map = pipeline_name_map,
+            annotation_set_name_map = annotation_set_name_map
+          ),
+          error = function(e) NULL
+        )
       })
       summary_df <- dplyr::bind_rows(Filter(Negate(is.null), rows))
       if (is.null(summary_df) || !is.data.frame(summary_df) || nrow(summary_df) == 0) {
@@ -1067,14 +1119,14 @@ training_module_server <- function(id) {
 
       tbl <- df[, c(
         "dataset_id", "dataset_name", "study", "evaluation_mode_label",
-        "split_strategy_label", "cv_folds", "n_samples", "pipeline_short_id",
-        "annotation_set_short_id", "created_at"
+        "split_strategy_label", "cv_folds", "n_samples", "pipeline_label",
+        "annotation_set_label", "created_at"
       ), drop = FALSE]
 
       names(tbl) <- c(
         "dataset_id", "Dataset name", "Study", "Evaluation mode",
-        "Split strategy", "CV folds", "Number of samples", "Pipeline short id",
-        "Annotation set short id", "Created at"
+        "Split strategy", "CV folds", "Number of samples", "Processing pipeline",
+        "Annotation set", "Created at"
       )
 
       DT::datatable(
