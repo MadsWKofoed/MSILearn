@@ -97,26 +97,26 @@ training_module_ui <- function(id) {
                      class = "btn-sm btn-default"),
         br(), br(),
         selectInput(ns("dataset_filter_study"), "Study:",
-                    choices = c("All studies" = ""), width = "100%"),
+                    choices = c("All studies" = "__all__"), width = "100%"),
         selectInput(ns("dataset_filter_eval_mode"), "Evaluation mode:",
                     choices = c(
-                      "All" = "",
+                      "All" = "__all__",
                       "CV only" = "cv_only",
                       "CV + held-out test" = "cv_plus_test"
                     ),
                     width = "100%"),
         selectInput(ns("dataset_filter_split_strategy"), "Split strategy:",
                     choices = c(
-                      "All" = "",
+                      "All" = "__all__",
                       "Random" = "random",
                       "Spatial block" = "spatial_block",
                       "Grouped sample-out" = "leave_one_sample_out"
                     ),
                     width = "100%"),
         selectInput(ns("dataset_filter_pipeline"), "Processing pipeline:",
-                    choices = c("All pipelines" = ""), width = "100%"),
+                    choices = c("All pipelines" = "__all__"), width = "100%"),
         selectInput(ns("dataset_filter_ann_set"), "Annotation set:",
-                    choices = c("All annotation sets" = ""), width = "100%"),
+                    choices = c("All annotation sets" = "__all__"), width = "100%"),
         DT::dataTableOutput(ns("dataset_table")),
         tags$div(style = "display:none;",
           selectInput(ns("dataset_id"), "Dataset:",
@@ -244,6 +244,8 @@ training_module_server <- function(id) {
       )
     }
 
+    dataset_filter_all_value <- "__all__"
+
     dataset_filter_config <- list(
       dataset_filter_study = list(
         all_label = "All studies",
@@ -273,12 +275,17 @@ training_module_server <- function(id) {
     )
 
     current_dataset_filter_values <- function() {
+      normalize_filter_value <- function(x) {
+        val <- as.character(x %||% dataset_filter_all_value)
+        if (!nzchar(val) || identical(val, dataset_filter_all_value)) dataset_filter_all_value else val
+      }
+
       list(
-        dataset_filter_study = input$dataset_filter_study %||% "",
-        dataset_filter_eval_mode = input$dataset_filter_eval_mode %||% "",
-        dataset_filter_split_strategy = input$dataset_filter_split_strategy %||% "",
-        dataset_filter_pipeline = input$dataset_filter_pipeline %||% "",
-        dataset_filter_ann_set = input$dataset_filter_ann_set %||% ""
+        dataset_filter_study = normalize_filter_value(input$dataset_filter_study),
+        dataset_filter_eval_mode = normalize_filter_value(input$dataset_filter_eval_mode),
+        dataset_filter_split_strategy = normalize_filter_value(input$dataset_filter_split_strategy),
+        dataset_filter_pipeline = normalize_filter_value(input$dataset_filter_pipeline),
+        dataset_filter_ann_set = normalize_filter_value(input$dataset_filter_ann_set)
       )
     }
 
@@ -348,8 +355,8 @@ training_module_server <- function(id) {
       out <- df
       for (filter_id in names(dataset_filter_config)) {
         if (identical(filter_id, exclude_filter)) next
-        selected <- as.character(filters[[filter_id]] %||% "")
-        if (!nzchar(selected)) next
+        selected <- as.character(filters[[filter_id]] %||% dataset_filter_all_value)
+        if (identical(selected, dataset_filter_all_value) || !nzchar(selected)) next
 
         value_col <- dataset_filter_config[[filter_id]]$value_col
         out <- out[out[[value_col]] == selected, , drop = FALSE]
@@ -360,7 +367,7 @@ training_module_server <- function(id) {
 
     build_dataset_filter_choices <- function(filter_id, filters = NULL) {
       cfg <- dataset_filter_config[[filter_id]]
-      choices <- stats::setNames("", cfg$all_label)
+      choices <- stats::setNames(dataset_filter_all_value, cfg$all_label)
       df <- filtered_dataset_summary(exclude_filter = filter_id, filters = filters)
 
       if (nrow(df) == 0) {
@@ -400,9 +407,9 @@ training_module_server <- function(id) {
 
       for (filter_id in names(dataset_filter_config)) {
         choices <- build_dataset_filter_choices(filter_id, filters = filters)
-        selected <- as.character(filters[[filter_id]] %||% "")
+        selected <- as.character(filters[[filter_id]] %||% dataset_filter_all_value)
         if (!(selected %in% unname(choices))) {
-          selected <- ""
+          selected <- dataset_filter_all_value
         }
         filters[[filter_id]] <- selected
         updateSelectInput(session, filter_id, choices = choices, selected = selected)
