@@ -497,13 +497,18 @@ prediction_module_server <- function(id) {
       ctx <- selected_context()
       p   <- ctx$pipeline_params
       hp  <- ctx$hyperparams
+      run_df <- run_browser_rv()
+      run_row <- run_df[run_df$run_id == input$run_id, , drop = FALSE]
+      dataset_label <- if (nrow(run_row) == 1) run_row$dataset_label[1] else ctx$dataset_id
+      study_label <- if (nrow(run_row) == 1) run_row$study[1] else "—"
+      pipeline_label <- if (nrow(run_row) == 1) run_row$pipeline_name[1] else ctx$pipeline_name
 
       tags$table(
         class = "table table-condensed table-bordered",
         tags$tbody(
-          tags$tr(tags$td("dataset_id"),        tags$td(ctx$dataset_id)),
-          tags$tr(tags$td("pipeline_id"),       tags$td(ctx$pipeline_id)),
-          tags$tr(tags$td("pipeline_name"),     tags$td(ctx$pipeline_name)),
+          tags$tr(tags$td("dataset"),           tags$td(dataset_label)),
+          tags$tr(tags$td("study"),             tags$td(study_label)),
+          tags$tr(tags$td("processing_pipeline"), tags$td(pipeline_label)),
           tags$tr(tags$td("snr"),               tags$td(first_chr(p$snr))),
           tags$tr(tags$td("tolerance"),         tags$td(first_chr(p$tolerance))),
           tags$tr(tags$td("resolution"),        tags$td(first_chr(p$resolution))),
