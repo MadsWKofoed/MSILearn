@@ -1451,6 +1451,7 @@ train_ranger_from_dataset <- function(
     trControl    = ctrl,
     tuneGrid     = tune_grid,
     num.trees    = num_trees,
+    importance   = "permutation",
     weights      = obs_w,
     num.threads  = num_threads
   )
@@ -1468,6 +1469,33 @@ train_ranger_from_dataset <- function(
     n_features     = ncol(train_X),
     split_strategy = as.character(split_info$strategy %||% "random")
   )
+
+  model <- fit$finalModel
+  importance_vals <- model$variable.importance %||% NULL
+  importance_df <- NULL
+
+  if (!is.null(importance_vals)) {
+    importance_vals <- suppressWarnings(as.numeric(importance_vals))
+    importance_names <- names(model$variable.importance %||% NULL)
+
+    if (length(importance_vals) > 0 && length(importance_names) == length(importance_vals)) {
+      importance_df <- data.frame(
+        feature = as.character(importance_names),
+        importance = importance_vals,
+        stringsAsFactors = FALSE
+      )
+      importance_df <- importance_df[order(importance_df$importance, decreasing = TRUE), , drop = FALSE]
+      rownames(importance_df) <- NULL
+    }
+  }
+
+  if (is.null(importance_df) || nrow(importance_df) == 0) {
+    metrics_scalar$permutation_importance_message <- "Permutation importance is unavailable for this run."
+  } else if (all(is.na(importance_df$importance))) {
+    metrics_scalar$permutation_importance_message <- "Permutation importance contains only missing values for this run."
+  } else {
+    metrics_scalar$permutation_importance <- list(importance_df)
+  }
 
   # CV metrics
   if (cv_folds > 1L) {

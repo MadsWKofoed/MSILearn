@@ -2015,6 +2015,19 @@ training_module_server <- function(id) {
       dplyr::left_join(roc_df, auc_labels[, c("class", "label")], by = "class")
     }
 
+    extract_importance_df_from_metrics <- function(metrics, key = "permutation_importance") {
+      imp_obj <- unwrap_nested_metric(metrics[[key]])
+      if (is.null(imp_obj) || !is.data.frame(imp_obj) || nrow(imp_obj) == 0) return(NULL)
+      if (!all(c("feature", "importance") %in% names(imp_obj))) return(NULL)
+
+      imp_df <- imp_obj[, c("feature", "importance"), drop = FALSE]
+      imp_df$feature <- as.character(imp_df$feature)
+      imp_df$importance <- suppressWarnings(as.numeric(imp_df$importance))
+      imp_df <- imp_df[order(imp_df$importance, decreasing = TRUE), , drop = FALSE]
+      rownames(imp_df) <- NULL
+      imp_df
+    }
+
     build_cm_plot <- function(cm_df) {
       cm_df$Text_Color <- ifelse(cm_df$Rel_Freq > 0.5, "white", "black")
 
@@ -2032,6 +2045,27 @@ training_module_server <- function(id) {
           axis.text.x = ggplot2::element_text(face = "bold", size = 11),
           axis.text.y = ggplot2::element_text(face = "bold", size = 11),
           panel.grid = ggplot2::element_blank()
+        )
+    }
+
+    build_importance_plot <- function(imp_df) {
+      top_df <- imp_df[is.finite(imp_df$importance), , drop = FALSE]
+      top_df <- head(top_df, 10)
+      if (nrow(top_df) == 0) return(NULL)
+
+      top_df$feature <- factor(top_df$feature, levels = rev(top_df$feature))
+
+      ggplot2::ggplot(top_df, ggplot2::aes(x = importance, y = feature)) +
+        ggplot2::geom_col(fill = "#2c7fb8") +
+        ggplot2::labs(
+          title = "Top 10 Features by Permutation Importance",
+          x = "Permutation importance",
+          y = "Feature"
+        ) +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          plot.title = ggplot2::element_text(face = "bold"),
+          axis.text.y = ggplot2::element_text(size = 11)
         )
     }
 
@@ -2114,6 +2148,8 @@ training_module_server <- function(id) {
       cv_roc_df <- extract_roc_df_from_metrics(m, "cv_roc_data")
       test_cm_df <- extract_cm_df_from_metrics(m, "cm_table")
       test_roc_df <- extract_roc_df_from_metrics(m, "roc_data")
+      importance_df <- extract_importance_df_from_metrics(m)
+      importance_message <- first_chr(m[["permutation_importance_message"]], "")
       cv_warning <- first_chr(m[["cv_warning"]], "")
 
       bc_keys <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
@@ -2226,6 +2262,23 @@ training_module_server <- function(id) {
         )
       }
 
+      importance_section <- tagList(
+        tags$h5("Permutation feature importance"),
+        if (!is.null(importance_df) && nrow(importance_df) > 0 && any(is.finite(importance_df$importance))) {
+          tagList(
+            plotOutput(ns("permutation_importance_plot"), height = "420px"),
+            tags$h6("All feature importances"),
+            DT::DTOutput(ns("permutation_importance_table"))
+          )
+        } else {
+          tags$div(
+            class = "alert alert-info",
+            style = "padding:8px; margin-top:8px;",
+            if (nzchar(importance_message)) importance_message else "Permutation importance is unavailable for this run."
+          )
+        }
+      )
+
       tagList(
         tags$div(
           style = "background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px; padding:14px; margin-bottom:12px;",
@@ -2268,7 +2321,7 @@ training_module_server <- function(id) {
             )
           )
         ),
-        tags$div(style = "max-width:1100px; margin:auto;", cv_section, tags$hr(), test_section)
+        tags$div(style = "max-width:1100px; margin:auto;", cv_section, tags$hr(), test_section, tags$hr(), importance_section)
       )
     })
 
@@ -2310,6 +2363,44 @@ training_module_server <- function(id) {
       roc_df <- extract_roc_df_from_metrics(payload$metrics, "roc_data")
       req(!is.null(roc_df), nrow(roc_df) > 0)
       build_roc_plot(roc_df)
+    })
+
+    output$permutation_importance_plot <- renderPlot({
+      rid <- selected_run_id()
+      req(rid, nzchar(rid))
+      payload <- get_run_payload(rid)
+      req(!is.null(payload))
+      imp_df <- extract_importance_df_from_metrics(payload$metrics)
+      req(!is.null(imp_df), nrow(imp_df) > 0, any(is.finite(imp_df$importance)))
+      build_importance_plot(imp_df)
+    })
+
+    output$permutation_importance_table <- DT::renderDT({
+      rid <- selected_run_id()
+      req(rid, nzchar(rid))
+      payload <- get_run_payload(rid)
+      req(!is.null(payload))
+      imp_df <- extract_importance_df_from_metrics(payload$metrics)
+
+      if (is.null(imp_df) || nrow(imp_df) == 0) {
+        return(
+          DT::datatable(
+            data.frame(message = "Permutation importance is unavailable for this run."),
+            rownames = FALSE,
+            options = list(dom = "t")
+          )
+        )
+      }
+
+      DT::datatable(
+        imp_df,
+        rownames = FALSE,
+        options = list(
+          pageLength = 10,
+          scrollX = TRUE
+        ),
+        class = "compact stripe hover"
+      )
     })
   })
 }
