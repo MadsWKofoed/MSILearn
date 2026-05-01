@@ -505,9 +505,15 @@ database_management_module_server <- function(id) {
       c(stats::setNames("", all_label), stats::setNames(ids[ord], labels[ord]))
     }
 
-    sync_filter_inputs <- function(collection = input$collection %||% dbm_catalog()$key[1],
-                                   selected_study = isolate(input$study_filter %||% ""),
-                                   selected_sample = isolate(input$sample_filter %||% "")) {
+    sync_filter_inputs <- function(collection = NULL,
+                                   selected_study = NULL,
+                                   selected_sample = NULL) {
+      if (is.null(collection) || !nzchar(collection)) {
+        collection <- dbm_catalog()$key[1]
+      }
+      selected_study <- as.character(selected_study %||% "")
+      selected_sample <- as.character(selected_sample %||% "")
+
       use_study <- dbm_supports_study_filter(collection)
       use_sample <- dbm_supports_sample_filter(collection)
       filter_index <- dbm_filter_index(collection)
