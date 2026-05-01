@@ -131,6 +131,7 @@ custom_css <- tags$style(HTML("
 # Source function files
 source("R/mongo_schema.R")        # schema initialisation (indexes)
 source("R/mongo_functions.R")     # all DB helpers (provenance API + legacy)
+source("R/alignment_reference_db.R")
 source("R/clustering_functions.R")
 source("R/processing_functions.R")
 source("R/training_functions.R")
@@ -142,6 +143,11 @@ source("R/database_management_functions.R")
 tryCatch(
   initialise_schema(),
   error = function(e) warning("Schema initialisation failed: ", conditionMessage(e))
+)
+
+tryCatch(
+  seed_default_alignment_references(),
+  error = function(e) warning("Alignment reference seeding failed: ", conditionMessage(e))
 )
 
 # Source modules

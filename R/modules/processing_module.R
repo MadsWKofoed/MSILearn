@@ -79,7 +79,15 @@ processing_module_ui <- function(id) {
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'Upload your own'", ns("ref_source")),
-            fileInput(ns("ref_csv"), "Upload .csv", multiple = FALSE, accept = ".csv")
+            textInput(ns("ref_upload_name"), "Reference name (optional):",
+                      placeholder = "Defaults to the uploaded filename"),
+            fileInput(ns("ref_csv"), "Upload .csv", multiple = FALSE, accept = ".csv"),
+            actionButton(ns("save_uploaded_reference"), "Save uploaded reference",
+                         class = "btn-sm btn-default"),
+            tags$p(
+              class = "help-block",
+              "Saved uploads become available in the shared reference list for future runs."
+            )
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
@@ -142,11 +150,6 @@ processing_module_server <- function(id) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # ── MongoDB connections ────────────────────────────────────────────────
-    mongo_ref <- mongolite::mongo(collection = "mz_references",
-                                  db  = "msi_project",
-                                  url = "mongodb://localhost:27018")
-
     # ── Reactive state ─────────────────────────────────────────────────────
     processing_log      <- reactiveVal("")
     current_cache_dir   <- reactiveVal(NULL)
@@ -158,6 +161,7 @@ processing_module_server <- function(id) {
 
     # The study_id that is currently "active" (resolved after create / select)
     active_study_id <- reactiveVal(NULL)
+    reference_refresh <- reactiveVal(0L)
 
     add_log <- function(msg) {
       processing_log(paste0(processing_log(),
@@ -176,14 +180,107 @@ processing_module_server <- function(id) {
       }, error = function(e) invisible(NULL))
     }
 
+    uploaded_reference_display_name <- reactive({
+      custom_name <- trimws(input$ref_upload_name %||% "")
+      if (nzchar(custom_name)) {
+        return(custom_name)
+      }
+      if (!is.null(input$ref_csv) && !is.null(input$ref_csv$name) && nzchar(input$ref_csv$name)) {
+        return(default_alignment_reference_display_name(input$ref_csv$name))
+      }
+      ""
+    })
+
+    refresh_reference_choices <- function(selected = NULL, notify = FALSE) {
+      refs <- tryCatch(
+        list_alignment_references(),
+        error = function(e) {
+          if (isTRUE(notify)) {
+            showNotification(
+              paste("Could not load alignment references:", e$message),
+              type = "error",
+              duration = NULL
+            )
+          }
+          data.frame(stringsAsFactors = FALSE)
+        }
+      )
+
+      choices <- alignment_reference_choices(refs)
+      selected_value <- selected %||% isolate(input$ref_csv_mongo)
+      if (!(selected_value %in% unname(choices))) {
+        selected_value <- unname(choices)[1] %||% ""
+      }
+
+      updateSelectInput(
+        session,
+        "ref_csv_mongo",
+        choices = choices,
+        selected = selected_value
+      )
+    }
+
+    save_current_uploaded_reference <- function(show_success = TRUE,
+                                                switch_to_database = TRUE) {
+      saved_ref <- tryCatch(
+        save_uploaded_alignment_reference(
+          input$ref_csv,
+          display_name = uploaded_reference_display_name()
+        ),
+        error = function(e) {
+          showNotification(
+            paste("Reference save failed:", e$message),
+            type = "error",
+            duration = NULL
+          )
+          NULL
+        }
+      )
+
+      if (is.null(saved_ref)) {
+        return(NULL)
+      }
+
+      reference_refresh(reference_refresh() + 1L)
+      refresh_reference_choices(selected = saved_ref$reference_name, notify = FALSE)
+
+      if (isTRUE(switch_to_database)) {
+        updateRadioButtons(session, "ref_source", selected = "From database")
+      }
+
+      if (isTRUE(show_success)) {
+        showNotification(
+          paste0("Reference saved: ", saved_ref$display_name),
+          type = "message",
+          duration = 8
+        )
+      }
+
+      list(
+        mz = saved_ref$mz_values,
+        name = saved_ref$reference_name,
+        display_name = saved_ref$display_name,
+        built_in = saved_ref$built_in
+      )
+    }
+
     # ── Reference dropdown ─────────────────────────────────────────────────
     observe({
-      refs <- tryCatch(
-        unique(mongo_ref$find(fields = '{"_id":0,"reference_name":1}')$reference_name),
-        error = function(e) character(0)
-      )
-      if (length(refs) == 0) refs <- c("No references found" = "")
-      updateSelectInput(session, "ref_csv_mongo", choices = refs)
+      reference_refresh()
+      refresh_reference_choices(notify = TRUE)
+    })
+
+    observeEvent(input$save_uploaded_reference, {
+      validation <- validate_alignment_reference_upload(input$ref_csv)
+      if (!isTRUE(validation$valid)) {
+        showNotification(
+          paste("Reference upload failed:", validation$message),
+          type = "error",
+          duration = NULL
+        )
+        return()
+      }
+      save_current_uploaded_reference(show_success = TRUE, switch_to_database = TRUE)
     })
 
     # ── Studies dropdown ───────────────────────────────────────────────────
@@ -298,18 +395,25 @@ processing_module_server <- function(id) {
       req(input$ref_source)
       if (input$ref_source == "Upload your own") {
         req(input$ref_csv)
-        df <- read.csv(input$ref_csv$datapath, stringsAsFactors = FALSE)
-        list(mz   = as.numeric(df$mz),
-             name = tools::file_path_sans_ext(basename(input$ref_csv$name)))
+        uploaded_ref <- prepare_uploaded_alignment_reference(
+          input$ref_csv,
+          display_name = uploaded_reference_display_name()
+        )
+        list(
+          mz = uploaded_ref$mz_values,
+          name = uploaded_ref$reference_name,
+          display_name = uploaded_ref$display_name,
+          built_in = FALSE
+        )
       } else {
         req(input$ref_csv_mongo, nzchar(input$ref_csv_mongo))
-        doc <- mongo_ref$find(
-          sprintf('{"reference_name": "%s"}', input$ref_csv_mongo),
-          fields = '{"_id":0,"mz_values":1}'
+        doc <- load_alignment_reference(input$ref_csv_mongo)
+        list(
+          mz = doc$mz_values,
+          name = doc$reference_name,
+          display_name = doc$display_name,
+          built_in = doc$built_in
         )
-        if (nrow(doc) == 0) return(NULL)
-        list(mz   = as.numeric(unlist(doc$mz_values[[1]])),
-             name = input$ref_csv_mongo)
       }
     })
 
@@ -327,13 +431,19 @@ processing_module_server <- function(id) {
 
     output$pipeline_id_preview <- renderText({
       params <- tryCatch(current_pipeline_params(), error = function(e) NULL)
+      mz_ref <- tryCatch(selected_mz(), error = function(e) NULL)
       if (is.null(params)) return("(configure parameters above)")
+      ref_label <- if (!is.null(mz_ref) && !is.null(mz_ref$display_name) && nzchar(mz_ref$display_name)) {
+        mz_ref$display_name
+      } else {
+        params$reference_name
+      }
       pid <- compute_pipeline_id("processing", params)
       paste0("pipeline_id:\n", substr(pid, 1, 16), "...\n\n",
              "snr=",        params$snr,        "\n",
              "tol=",        params$tolerance,  "\n",
              "res=",        params$resolution, " ppm\n",
-             "ref=",        params$reference_name)
+             "ref=",        ref_label)
     })
 
     # ── Artifact table for current study + sample ──────────────────────────
@@ -382,13 +492,24 @@ processing_module_server <- function(id) {
         tryCatch({
           p  <- get_pipeline(pid)
           pa <- extract_params(p$params)
+          ref_display <- tryCatch({
+            ref_name <- pa$reference_name %||% NA_character_
+            if (is.na(ref_name) || !nzchar(ref_name)) {
+              return(NA_character_)
+            }
+            ref_doc <- load_alignment_reference(ref_name)
+            suffix <- if (isTRUE(ref_doc$built_in)) " [built-in]" else " [uploaded]"
+            paste0(ref_doc$display_name, suffix)
+          }, error = function(e) {
+            pa$reference_name %||% NA_character_
+          })
           
           data.frame(
             pipeline_id = substr(pid, 1, 12),
             snr         = pa$snr %||% NA,
             tolerance   = pa$tolerance %||% NA,
             resolution  = pa$resolution %||% NA,
-            reference   = pa$reference_name %||% NA,
+            reference   = ref_display,
             created_at  = arts$created_at[arts$pipeline_id == pid][1],
             stringsAsFactors = FALSE
           )
@@ -447,7 +568,21 @@ processing_module_server <- function(id) {
         showNotification("Select or create a Study first.", type = "error"); return()
       }
 
-      mz_ref      <- selected_mz()
+      mz_ref <- if (identical(input$ref_source, "Upload your own")) {
+        save_current_uploaded_reference(show_success = TRUE, switch_to_database = FALSE)
+      } else {
+        tryCatch(
+          selected_mz(),
+          error = function(e) {
+            showNotification(
+              paste("Reference load failed:", e$message),
+              type = "error",
+              duration = NULL
+            )
+            NULL
+          }
+        )
+      }
       sample_name <- tryCatch(current_sample_name_resolved(), error = function(e) NULL)
 
       if (is.null(mz_ref) || is.null(sample_name)) {

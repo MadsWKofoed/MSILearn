@@ -47,6 +47,10 @@ initialise_schema <- function(db = DB_NAME, url = MONGO_URL) {
   # ── model_runs ────────────────────────────────────────────────────────────
   .con("model_runs", db, url)$index('{"dataset_id": 1}')
 
+  # ── alignment_references ─────────────────────────────────────────────────
+  .con("alignment_references", db, url)$index('{"reference_name": 1}')
+  .con("alignment_references", db, url)$index('{"built_in": 1, "display_name": 1}')
+
   message("✓ MSI_database schema initialised (indexes enforced)")
   invisible(TRUE)
 }

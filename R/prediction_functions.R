@@ -12,23 +12,7 @@ list_all_model_runs <- function(db = DB_NAME, url = MONGO_URL) {
 }
 
 get_reference_mz_values <- function(reference_name) {
-
-  con <- mongolite::mongo(
-    collection = "mz_references",
-    db  = "msi_project",
-    url = "mongodb://localhost:27018"
-  )
-
-  ref_doc <- con$find(
-    query  = sprintf('{"reference_name": "%s"}', reference_name),
-    fields = '{"_id":0,"mz_values":1}'
-  )
-
-  if (nrow(ref_doc) == 0) {
-    stop("Reference list not found: ", reference_name)
-  }
-
-  vals <- as.numeric(unlist(ref_doc$mz_values[[1]]))
+  vals <- load_alignment_reference(reference_name)$mz_values
   vals <- vals[is.finite(vals)]
 
   if (length(vals) == 0) {

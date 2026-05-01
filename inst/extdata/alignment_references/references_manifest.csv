@@ -1,0 +1,4 @@
+reference_name,display_name,filename,file_type,date_added,built_in,description
+113_lipids_gangliosides,113 lipids gangliosides,113_lipids_gangliosides.csv,csv,2025-10-16T00:00:00Z,TRUE,Recovered built-in lipid and ganglioside reference list with 113 m/z values.
+572_lipids_gangliosides,572 lipids gangliosides,572_lipids_gangliosides.csv,csv,2026-05-01T00:00:00Z,TRUE,Bundled built-in lipid and ganglioside reference list with 572 m/z values.
+on_tissue_peaklist,On-tissue peaklist,on_tissue_peaklist.csv,csv,2026-05-01T00:00:00Z,TRUE,Bundled built-in on-tissue peak list converted from the supplied centroid peak list.
