@@ -654,14 +654,15 @@ database_management_module_server <- function(id) {
     }, ignoreInit = TRUE)
 
     observeEvent(input$collection, {
+      selected_collection <- input$collection %||% dbm_catalog()$key[1]
       session$onFlushed(function() {
         selected_filters <- sync_filter_inputs(
-          collection = input$collection %||% dbm_catalog()$key[1],
+          collection = selected_collection,
           selected_study = "",
           selected_sample = ""
         )
         refresh_records(
-          collection = input$collection %||% dbm_catalog()$key[1],
+          collection = selected_collection,
           study_id = selected_filters$study_id,
           sample_id = selected_filters$sample_id
         )
