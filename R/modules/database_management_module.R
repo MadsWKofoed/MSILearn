@@ -5,166 +5,433 @@ database_management_module_ui <- function(id) {
 
   tabPanel(
     "Database Management",
-    fluidRow(
-      column(
-        3,
-        tags$style(HTML(" 
-          .dbm-card{
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            margin-bottom: 14px;
-            background: #ffffff;
-            overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
-          }
-          .dbm-card-head{
-            padding: 12px 14px;
-            font-weight: 700;
-            font-size: 15px;
-            background: #f8fafc;
-            border-bottom: 1px solid #eef2f7;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-          }
-          .dbm-card-body{
-            padding: 12px 14px 14px 14px;
-          }
-          .dbm-lead{
-            font-size: 13px;
-            color: #4b5563;
-            margin-bottom: 10px;
-            line-height: 1.45;
-          }
-          .dbm-subtitle{
-            font-size: 12px;
-            font-weight: 700;
-            color: #374151;
-            margin-top: 10px;
-            margin-bottom: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.02em;
-          }
-          .dbm-helper{
-            background: #f8fbff;
-            border: 1px solid #dbeafe;
-            border-radius: 10px;
-            padding: 10px 12px;
-            font-size: 12px;
-            color: #334155;
-            line-height: 1.5;
-            margin-bottom: 10px;
-          }
-          .dbm-helper strong{ color:#1e3a8a; }
-          .dbm-session-box{
-            background: linear-gradient(135deg, #f8fbff 0%, #fdfdff 100%);
-            border: 1px solid #dbeafe;
-            border-radius: 12px;
-            padding: 10px 12px;
-            margin-bottom: 14px;
-            box-shadow: 0 1px 6px rgba(37,99,235,0.05);
-          }
-          .dbm-session-title{
-            font-size: 12px;
-            font-weight: 700;
-            color: #3730a3;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-            margin-bottom: 6px;
-          }
-          .dbm-session-box table{ width:100%; font-size:12px; margin-bottom:0; }
-          .dbm-session-box td{ padding:2px 0; vertical-align:top; }
-          .dbm-session-box td:first-child{ color:#64748b; width:42%; }
-          .dbm-session-box td:last-child{ color:#111827; font-weight:500; word-break:break-word; }
-          .dbm-btn-block{ width:100%; margin-bottom:8px; }
-          .dbm-danger-note{
-            color:#991b1b; font-size:12px; line-height:1.45; margin-top:4px;
-          }
-        ")),
-
-        uiOutput(ns("dbm_session_ui")),
-
-        tags$div(
-          class = "dbm-card",
-          tags$div(class = "dbm-card-head", "Filters & browser"),
+    tags$div(
+      class = "dbm-shell",
+      tags$style(HTML("
+        .dbm-shell{
+          --dbm-ink:#14213d;
+          --dbm-muted:#5b6472;
+          --dbm-border:#d8e0ea;
+          --dbm-soft:#f4f7fb;
+          --dbm-panel:#ffffff;
+          --dbm-accent:#0f766e;
+          --dbm-accent-2:#f59e0b;
+          --dbm-danger:#b91c1c;
+          --dbm-shadow:0 16px 40px rgba(15, 23, 42, 0.08);
+          padding: 12px 6px 28px 6px;
+        }
+        .dbm-hero{
+          background:
+            radial-gradient(circle at top left, rgba(15,118,110,0.18), transparent 38%),
+            radial-gradient(circle at top right, rgba(245,158,11,0.14), transparent 28%),
+            linear-gradient(135deg, #fcfdff 0%, #eef6f6 100%);
+          border: 1px solid #d9ece9;
+          border-radius: 24px;
+          padding: 24px 26px;
+          margin-bottom: 18px;
+          box-shadow: var(--dbm-shadow);
+          display:flex;
+          align-items:flex-start;
+          justify-content:space-between;
+          gap:20px;
+          flex-wrap:wrap;
+        }
+        .dbm-hero h3{
+          margin:0 0 8px 0;
+          font-size:30px;
+          letter-spacing:-0.03em;
+          color:var(--dbm-ink);
+        }
+        .dbm-hero p{
+          margin:0;
+          max-width:760px;
+          color:var(--dbm-muted);
+          line-height:1.6;
+          font-size:14px;
+        }
+        .dbm-hero-actions .btn{
+          border-radius:999px;
+          padding:10px 18px;
+          font-weight:700;
+          box-shadow:0 8px 18px rgba(15,118,110,0.16);
+        }
+        .dbm-grid-gap{ margin-bottom:18px; }
+        .dbm-panel{
+          background:var(--dbm-panel);
+          border:1px solid var(--dbm-border);
+          border-radius:22px;
+          box-shadow:var(--dbm-shadow);
+          overflow:hidden;
+        }
+        .dbm-panel-head{
+          padding:16px 18px 12px 18px;
+          border-bottom:1px solid #e6edf5;
+          display:flex;
+          align-items:flex-start;
+          justify-content:space-between;
+          gap:12px;
+          flex-wrap:wrap;
+          background:linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+        }
+        .dbm-panel-title{
+          font-size:16px;
+          font-weight:800;
+          color:var(--dbm-ink);
+          margin:0;
+        }
+        .dbm-panel-subtitle{
+          font-size:12px;
+          color:var(--dbm-muted);
+          margin-top:4px;
+          line-height:1.5;
+          max-width:720px;
+        }
+        .dbm-panel-body{ padding:16px 18px 18px 18px; }
+        .dbm-metric-grid{
+          display:grid;
+          grid-template-columns:repeat(4, minmax(0, 1fr));
+          gap:14px;
+          margin-bottom:18px;
+        }
+        .dbm-metric{
+          border-radius:20px;
+          padding:16px 18px;
+          border:1px solid #d9e6e6;
+          background:
+            linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(247,250,252,0.96) 100%);
+          min-height:120px;
+          position:relative;
+          overflow:hidden;
+        }
+        .dbm-metric:before{
+          content:'';
+          position:absolute;
+          top:-36px;
+          right:-24px;
+          width:96px;
+          height:96px;
+          border-radius:999px;
+          background:rgba(15,118,110,0.08);
+        }
+        .dbm-metric-kicker{
+          text-transform:uppercase;
+          letter-spacing:0.08em;
+          font-size:11px;
+          font-weight:800;
+          color:#58706c;
+          margin-bottom:10px;
+        }
+        .dbm-metric-value{
+          font-size:34px;
+          line-height:1;
+          font-weight:900;
+          color:var(--dbm-ink);
+          letter-spacing:-0.04em;
+          margin-bottom:8px;
+        }
+        .dbm-metric-note{
+          font-size:12px;
+          color:var(--dbm-muted);
+          line-height:1.5;
+        }
+        .dbm-mini-grid{
+          display:grid;
+          grid-template-columns:repeat(2, minmax(0, 1fr));
+          gap:14px;
+        }
+        .dbm-chip{
+          display:inline-flex;
+          align-items:center;
+          gap:8px;
+          background:#f3f7fb;
+          border:1px solid #dde6ee;
+          border-radius:999px;
+          padding:7px 12px;
+          font-size:12px;
+          color:#435063;
+          margin-right:8px;
+          margin-bottom:8px;
+        }
+        .dbm-chip strong{ color:var(--dbm-ink); }
+        .dbm-helper{
+          background:linear-gradient(180deg, #f7fafc 0%, #f4f9f8 100%);
+          border:1px solid #dfe8ee;
+          border-radius:16px;
+          padding:12px 14px;
+          font-size:12px;
+          color:#435063;
+          line-height:1.6;
+        }
+        .dbm-helper strong{ color:var(--dbm-ink); }
+        .dbm-stack > * + *{ margin-top:12px; }
+        .dbm-label{
+          font-size:11px;
+          font-weight:800;
+          letter-spacing:0.08em;
+          text-transform:uppercase;
+          color:#617080;
+          margin:0 0 7px 0;
+        }
+        .dbm-record-toolbar{
+          display:flex;
+          align-items:center;
+          justify-content:space-between;
+          gap:12px;
+          flex-wrap:wrap;
+          margin-bottom:12px;
+        }
+        .dbm-record-meta{
+          font-size:12px;
+          color:var(--dbm-muted);
+        }
+        .dbm-selected{
+          border-radius:18px;
+          border:1px solid #d7e4ea;
+          background:#fcfdff;
+          padding:14px 16px;
+        }
+        .dbm-selected h4{
+          margin:0 0 8px 0;
+          color:var(--dbm-ink);
+          font-size:16px;
+        }
+        .dbm-selected p{
+          margin:0 0 4px 0;
+          color:var(--dbm-muted);
+          font-size:12px;
+          line-height:1.55;
+        }
+        .dbm-danger-note{
+          color:var(--dbm-danger);
+          font-size:12px;
+          line-height:1.55;
+        }
+        .dbm-safe-note{
+          color:#0f766e;
+          font-size:12px;
+          line-height:1.55;
+        }
+        .dbm-kv{
+          width:100%;
+          border-collapse:separate;
+          border-spacing:0 8px;
+          font-size:12px;
+        }
+        .dbm-kv td{
+          vertical-align:top;
+          padding:0;
+        }
+        .dbm-kv td:first-child{
+          width:38%;
+          color:#6b7280;
+          font-weight:700;
+          padding-right:12px;
+        }
+        .dbm-kv td:last-child{
+          color:var(--dbm-ink);
+          word-break:break-word;
+        }
+        .dbm-plot-wrap{
+          background:#fbfcfe;
+          border:1px solid #e4ebf2;
+          border-radius:16px;
+          padding:10px;
+        }
+        .dbm-quiet{
+          color:var(--dbm-muted);
+          font-size:12px;
+        }
+        .dbm-actions .btn{
+          width:100%;
+          border-radius:14px;
+          font-weight:700;
+          padding:10px 14px;
+        }
+        .dbm-table-wrap .dataTables_wrapper .dataTables_length,
+        .dbm-table-wrap .dataTables_wrapper .dataTables_filter{
+          margin-bottom:10px;
+        }
+        @media (max-width: 1200px){
+          .dbm-metric-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 768px){
+          .dbm-metric-grid,
+          .dbm-mini-grid{ grid-template-columns:1fr; }
+          .dbm-hero h3{ font-size:24px; }
+        }
+      ")),
+      fluidRow(
+        column(
+          12,
           tags$div(
-            class = "dbm-card-body",
+            class = "dbm-hero",
             tags$div(
-              class = "dbm-lead",
-              "Browse database collections, inspect records, and remove selected objects when needed."
-            ),
-            actionButton(ns("refresh_all"), "↺ Refresh everything", class = "btn btn-default btn-sm dbm-btn-block"),
-            div(class = "dbm-subtitle", "Collection"),
-            selectInput(ns("collection"), "Collection", choices = setNames(dbm_catalog()$key, dbm_catalog()$label), width = "100%"),
-            div(class = "dbm-subtitle", "Optional filters"),
-            uiOutput(ns("filter_ui")),
-            checkboxInput(ns("show_raw_json"), "Show raw JSON in details", value = FALSE),
-            tags$div(
-              class = "dbm-helper",
-              tags$strong("How to use this page: "),
-              "First choose a collection. Then use the filters only to narrow the table. ",
-              "To inspect or delete something, click a row in the Records table below."
-            )
-          )
-        ),
-
-        tags$div(
-          class = "dbm-card",
-          tags$div(class = "dbm-card-head", "Selected record"),
-          tags$div(
-            class = "dbm-card-body",
-            uiOutput(ns("selected_summary_ui")),
-            tags$div(
-              id = ns("delete_btn_wrap"),
-              style = "display:none;",
-              actionButton(
-                ns("delete_selected"),
-                "Delete selected record",
-                class = "btn btn-danger btn-sm dbm-btn-block"
+              tags$h3("Database Console"),
+              tags$p(
+                "Browse, inspect, and safely clean up the main database objects used across processing, clustering, annotation, training, prediction, and alignment. ",
+                "Built-in alignment references stay protected, while uploaded and user-created objects can be removed with explicit confirmation."
               )
             ),
             tags$div(
-              class = "dbm-danger-note",
-              "Deletion is permanent. Cascading cleanup is applied for dependent records such as artifacts, annotations, datasets, and model runs."
+              class = "dbm-hero-actions",
+              actionButton(ns("refresh_all"), "Refresh database view", class = "btn btn-primary")
             )
           )
         )
       ),
-
-      column(
-        9,
-        tags$div(
-          class = "dbm-card",
-          tags$div(class = "dbm-card-head", "Overview"),
+      fluidRow(
+        column(12, uiOutput(ns("overview_cards_ui")))
+      ),
+      fluidRow(
+        column(
+          7,
           tags$div(
-            class = "dbm-card-body",
-            tags$p(class = "dbm-lead", "Collection sizes in the current MongoDB database."),
-            DT::DTOutput(ns("counts_table"))
-          )
-        ),
-
-        tags$div(
-          class = "dbm-card",
-          tags$div(class = "dbm-card-head", "Records"),
-          tags$div(
-            class = "dbm-card-body",
+            class = "dbm-panel dbm-grid-gap",
             tags$div(
-              class = "dbm-helper",
-              tags$strong("Important: "),
-              "The filters do not choose what gets deleted. ",
-              "To inspect or delete a record, click directly on a row in the Records table."
+              class = "dbm-panel-head",
+              tags$div(
+                tags$div(class = "dbm-panel-title", "Database Overview"),
+                tags$div(
+                  class = "dbm-panel-subtitle",
+                  "Track collection sizes and quickly spot where most stored objects live."
+                )
+              )
             ),
-            DT::DTOutput(ns("records_table"))
+            tags$div(
+              class = "dbm-panel-body",
+              div(class = "dbm-plot-wrap", plotOutput(ns("overview_counts_plot"), height = "300px")),
+              tags$div(style = "margin-top:14px;", class = "dbm-table-wrap", DT::DTOutput(ns("counts_table")))
+            )
           )
         ),
-
-        tags$div(
-          class = "dbm-card",
-          tags$div(class = "dbm-card-head", "Details"),
+        column(
+          5,
           tags$div(
-            class = "dbm-card-body",
-            uiOutput(ns("details_ui"))
+            class = "dbm-panel dbm-grid-gap",
+            tags$div(
+              class = "dbm-panel-head",
+              tags$div(
+                tags$div(class = "dbm-panel-title", "Reference Footprint"),
+                tags$div(
+                  class = "dbm-panel-subtitle",
+                  "Built-in versus uploaded alignment references in the shared app database."
+                )
+              )
+            ),
+            tags$div(
+              class = "dbm-panel-body dbm-stack",
+              div(class = "dbm-plot-wrap", plotOutput(ns("reference_mix_plot"), height = "220px")),
+              uiOutput(ns("dbm_session_ui"))
+            )
+          )
+        )
+      ),
+      fluidRow(
+        column(
+          4,
+          tags$div(
+            class = "dbm-panel dbm-grid-gap",
+            tags$div(
+              class = "dbm-panel-head",
+              tags$div(
+                tags$div(class = "dbm-panel-title", "Collection Browser"),
+                tags$div(
+                  class = "dbm-panel-subtitle",
+                  "Choose an object type, optionally narrow the results, and then inspect records from the table."
+                )
+              )
+            ),
+            tags$div(
+              class = "dbm-panel-body dbm-stack",
+              tags$div(
+                class = "dbm-helper",
+                tags$strong("Workflow"),
+                tags$br(),
+                "1. Pick a collection.",
+                tags$br(),
+                "2. Use filters only to narrow the record list.",
+                tags$br(),
+                "3. Click a row in the table to inspect it or delete it."
+              ),
+              tags$div(
+                tags$div(class = "dbm-label", "Collection"),
+                selectInput(ns("collection"), NULL, choices = setNames(dbm_catalog()$key, dbm_catalog()$label), width = "100%")
+              ),
+              uiOutput(ns("collection_summary_ui")),
+              tags$div(
+                tags$div(class = "dbm-label", "Filters"),
+                uiOutput(ns("filter_ui"))
+              )
+            )
+          ),
+          tags$div(
+            class = "dbm-panel dbm-grid-gap",
+            tags$div(
+              class = "dbm-panel-head",
+              tags$div(
+                tags$div(class = "dbm-panel-title", "Selected Object"),
+                tags$div(
+                  class = "dbm-panel-subtitle",
+                  "Deletion only applies to the currently selected row. Built-in alignment references are protected."
+                )
+              )
+            ),
+            tags$div(
+              class = "dbm-panel-body dbm-stack",
+              uiOutput(ns("selected_summary_ui")),
+              tags$div(
+                id = ns("delete_btn_wrap"),
+                class = "dbm-actions",
+                style = "display:none;",
+                actionButton(ns("delete_selected"), "Delete selected record", class = "btn btn-danger")
+              ),
+              tags$div(
+                class = "dbm-danger-note",
+                "Deletion is permanent. Cascading cleanup is applied where records have dependent datasets, artifacts, annotations, model runs, or related metadata."
+              )
+            )
+          )
+        ),
+        column(
+          8,
+          tags$div(
+            class = "dbm-panel dbm-grid-gap",
+            tags$div(
+              class = "dbm-panel-head",
+              tags$div(
+                tags$div(class = "dbm-panel-title", "Records"),
+                tags$div(class = "dbm-panel-subtitle", uiOutput(ns("records_meta_ui")))
+              )
+            ),
+            tags$div(
+              class = "dbm-panel-body",
+              tags$div(class = "dbm-record-toolbar",
+                tags$div(class = "dbm-helper", style = "margin-bottom:0; flex:1 1 340px;",
+                  tags$strong("Safety reminder"),
+                  tags$br(),
+                  "Filtering changes which rows are visible, not what is selected for deletion. Always click the exact record you want to inspect or remove."
+                )
+              ),
+              tags$div(class = "dbm-table-wrap", DT::DTOutput(ns("records_table")))
+            )
+          ),
+          tags$div(
+            class = "dbm-panel",
+            tags$div(
+              class = "dbm-panel-head",
+              tags$div(
+                tags$div(class = "dbm-panel-title", "Details"),
+                tags$div(
+                  class = "dbm-panel-subtitle",
+                  "Use the structured view for quick inspection or raw JSON for the original stored payload."
+                )
+              ),
+              checkboxInput(ns("show_raw_json"), "Raw JSON", value = FALSE)
+            ),
+            tags$div(
+              class = "dbm-panel-body",
+              uiOutput(ns("details_ui"))
+            )
           )
         )
       )
@@ -209,6 +476,11 @@ database_management_module_server <- function(id) {
     refresh_counts <- function() {
       counts_rv(dbm_collection_counts())
     }
+
+    current_collection_label <- reactive({
+      idx <- match(input$collection %||% dbm_catalog()$key[1], dbm_catalog()$key)
+      if (is.na(idx)) "—" else dbm_catalog()$label[idx]
+    })
 
     refresh_records <- function(collection = NULL, study_id = NULL, sample_id = NULL) {
       if (is.null(collection)) {
@@ -269,6 +541,8 @@ database_management_module_server <- function(id) {
     }, ignoreInit = TRUE)
 
     observeEvent(input$collection, {
+      load_studies_for_filter(input$study_filter %||% "")
+      load_samples_for_filter(input$study_filter %||% NULL, input$sample_filter %||% "")
       refresh_records()
     }, ignoreInit = TRUE)
 
@@ -312,16 +586,66 @@ database_management_module_server <- function(id) {
 
     output$dbm_session_ui <- renderUI({
       counts <- counts_rv()
+      overview <- dbm_overview_stats()
       total_records <- if (nrow(counts) > 0) sum(counts$records, na.rm = TRUE) else 0
+      largest_collection <- overview$largest_collection
+      if (!length(largest_collection) || is.na(largest_collection) || !nzchar(largest_collection)) {
+        largest_collection <- "—"
+      }
       tags$div(
-        class = "dbm-session-box",
-        tags$div(class = "dbm-session-title", "Database session"),
-        tags$table(
-          tags$tr(tags$td("Database"), tags$td(DB_NAME)),
-          tags$tr(tags$td("Mongo URL"), tags$td(MONGO_URL)),
-          tags$tr(tags$td("Collections tracked"), tags$td(nrow(dbm_catalog()))),
-          tags$tr(tags$td("Total records"), tags$td(total_records)),
-          tags$tr(tags$td("Selected collection"), tags$td(dbm_catalog()$label[match(input$collection, dbm_catalog()$key)] %||% "—"))
+        class = "dbm-helper",
+        tags$div(class = "dbm-label", style = "margin-bottom:10px;", "Session"),
+        tags$div(class = "dbm-chip", tags$strong("Database"), DB_NAME),
+        tags$div(class = "dbm-chip", tags$strong("Collections"), nrow(dbm_catalog())),
+        tags$div(class = "dbm-chip", tags$strong("Total records"), total_records),
+        tags$div(class = "dbm-chip", tags$strong("Largest collection"), largest_collection),
+        tags$div(class = "dbm-chip", tags$strong("Selected"), current_collection_label()),
+        tags$p(class = "dbm-quiet", style = "margin:10px 0 0 0;",
+          "Mongo URL: ", MONGO_URL
+        )
+      )
+    })
+
+    output$overview_cards_ui <- renderUI({
+      stats <- dbm_overview_stats()
+      largest_name <- stats$largest_collection
+      if (!length(largest_name) || is.na(largest_name) || !nzchar(largest_name)) {
+        largest_name <- "—"
+      }
+      tags$div(
+        class = "dbm-metric-grid",
+        tags$div(
+          class = "dbm-metric",
+          tags$div(class = "dbm-metric-kicker", "Total Objects"),
+          tags$div(class = "dbm-metric-value", format(stats$total_records, big.mark = ",")),
+          tags$div(class = "dbm-metric-note", "Across all tracked collections in the shared application database.")
+        ),
+        tags$div(
+          class = "dbm-metric",
+          tags$div(class = "dbm-metric-kicker", "Active Collections"),
+          tags$div(class = "dbm-metric-value", stats$non_empty_collections),
+          tags$div(class = "dbm-metric-note",
+            "Collections currently holding data. Largest: ",
+            tags$strong(largest_name),
+            " (", stats$largest_collection_records, ")."
+          )
+        ),
+        tags$div(
+          class = "dbm-metric",
+          tags$div(class = "dbm-metric-kicker", "Uploaded References"),
+          tags$div(class = "dbm-metric-value", stats$alignment_reference_uploaded),
+          tags$div(class = "dbm-metric-note",
+            "User-added alignment references stored alongside the built-in defaults."
+          )
+        ),
+        tags$div(
+          class = "dbm-metric",
+          tags$div(class = "dbm-metric-kicker", "Reference Storage"),
+          tags$div(class = "dbm-metric-value", dbm_bytes_label(stats$alignment_reference_total_bytes)),
+          tags$div(class = "dbm-metric-note",
+            stats$alignment_reference_built_in, " built-in and ",
+            stats$alignment_reference_uploaded, " uploaded reference files."
+          )
         )
       )
     })
@@ -329,14 +653,14 @@ database_management_module_server <- function(id) {
     output$filter_ui <- renderUI({
       coll <- input$collection %||% "studies"
 
-      if (coll %in% c("studies", "pipelines", "model_runs", "datasets")) {
+      if (coll %in% c("studies", "pipelines", "model_runs", "datasets", "alignment_references")) {
         return(
           tagList(
             if (coll == "datasets") {
               selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%")
             },
-            if (coll %in% c("studies", "pipelines", "model_runs")) {
-              tags$div(class = "mini-note", style = "font-size:12px; color:#6b7280;",
+            if (coll %in% c("studies", "pipelines", "model_runs", "alignment_references")) {
+              tags$div(class = "dbm-quiet",
                       "No extra filters are needed for this collection.")
             }
           )
@@ -357,15 +681,56 @@ database_management_module_server <- function(id) {
       )
     })
 
+    output$collection_summary_ui <- renderUI({
+      coll <- input$collection %||% dbm_catalog()$key[1]
+      cat_row <- dbm_catalog()[match(coll, dbm_catalog()$key), , drop = FALSE]
+      counts <- counts_rv()
+      total_in_collection <- if (nrow(counts) > 0) counts$records[match(coll, counts$key)] else NA_real_
+      if (!length(total_in_collection) || is.na(total_in_collection)) total_in_collection <- 0
+      policy <- dbm_delete_policy(coll)
+
+      chips <- list(
+        tags$div(class = "dbm-chip", tags$strong("Collection"), cat_row$label[1]),
+        tags$div(class = "dbm-chip", tags$strong("Stored"), total_in_collection)
+      )
+
+      if (identical(coll, "alignment_references")) {
+        ref_stats <- dbm_alignment_reference_stats()
+        chips <- c(
+          chips,
+          list(
+            tags$div(class = "dbm-chip", tags$strong("Built-in"), ref_stats$built_in),
+            tags$div(class = "dbm-chip", tags$strong("Uploaded"), ref_stats$uploaded)
+          )
+        )
+      }
+
+      tags$div(
+        class = "dbm-helper",
+        do.call(tagList, chips),
+        tags$p(style = "margin:8px 0 0 0;", cat_row$description[1]),
+        tags$p(
+          class = if (isTRUE(policy$allowed)) "dbm-safe-note" else "dbm-danger-note",
+          style = "margin:8px 0 0 0;",
+          if (isTRUE(policy$allowed)) {
+            "Selected records from this collection can be deleted after confirmation."
+          } else {
+            policy$reason %||% "Deletion is disabled for this collection."
+          }
+        )
+      )
+    })
+
     output$selected_summary_ui <- renderUI({
       rec <- selected_record_rv()
+      policy <- dbm_delete_policy(input$collection %||% "", rec)
 
       if (is.null(rec) || nrow(rec) == 0) {
         return(
           tags$div(
-            class = "dbm-helper",
-            tags$strong("No record selected."), tags$br(),
-            "Click a row in the Records table to inspect it and enable deletion."
+            class = "dbm-selected",
+            tags$h4("No object selected"),
+            tags$p("Click a row in the records table to inspect it and enable any relevant actions.")
           )
         )
       }
@@ -374,42 +739,54 @@ database_management_module_server <- function(id) {
       rid <- selected_id_rv() %||% "—"
       created <- if ("created_at" %in% names(rec)) as.character(rec$created_at[1]) else "—"
 
-      extra_note <- NULL
-      if (identical(input$collection, "studies")) {
-        extra_note <- tags$div(
-          style = "margin-top:8px; color:#991b1b;",
-          tags$strong("Warning: "),
-          "Deleting a study also removes dependent samples, artifacts, annotations, datasets, model runs, and related metadata."
-        )
-      }
-
       tags$div(
-        class = "dbm-helper",
-        tags$strong("Selected for deletion/inspection"), tags$br(),
-        tags$strong(title), tags$br(),
-        tags$strong("ID: "), rid, tags$br(),
-        tags$strong("Created: "), created,
-        extra_note
+        class = "dbm-selected",
+        tags$h4(title),
+        tags$p(tags$strong("ID: "), rid),
+        tags$p(tags$strong("Created: "), created),
+        if ("description" %in% names(rec) && nzchar(as.character(rec$description[1] %||% ""))) {
+          tags$p(tags$strong("Description: "), as.character(rec$description[1]))
+        },
+        if (identical(input$collection, "alignment_references")) {
+          tags$p(
+            tags$strong("Source: "),
+            if (dbm_is_protected_record("alignment_references", rec)) "Built-in default" else "Uploaded by user"
+          )
+        },
+        tags$p(
+          class = if (isTRUE(policy$allowed)) "dbm-safe-note" else "dbm-danger-note",
+          if (identical(input$collection, "studies")) {
+            "Deleting a study cascades to dependent samples, artifacts, annotations, datasets, model runs, and related metadata."
+          } else if (isTRUE(policy$allowed)) {
+            "This selected object can be deleted after confirmation."
+          } else {
+            policy$reason
+          }
+        )
       )
     })
 
     observe({
       rec <- selected_record_rv()
       coll <- input$collection %||% ""
+      policy <- dbm_delete_policy(coll, rec)
 
-      label <- if (identical(coll, "studies")) {
-        "Delete selected study"
-      } else {
-        "Delete selected record"
-      }
+      updateActionButton(session, "delete_selected", label = policy$label %||% "Delete selected record")
 
-      updateActionButton(session, "delete_selected", label = label)
-
-      if (is.null(rec) || nrow(rec) == 0) {
+      if (is.null(rec) || nrow(rec) == 0 || !isTRUE(policy$allowed)) {
         shinyjs::hide("delete_btn_wrap")
       } else {
         shinyjs::show("delete_btn_wrap")
       }
+    })
+
+    output$records_meta_ui <- renderUI({
+      df <- records_display_rv()
+      coll <- current_collection_label()
+      tags$span(
+        class = "dbm-record-meta",
+        format(nrow(df), big.mark = ","), " matching record(s) in ", coll, "."
+      )
     })
 
     output$counts_table <- DT::renderDT({
@@ -419,9 +796,58 @@ database_management_module_server <- function(id) {
         df[, c("collection", "records", "description"), drop = FALSE],
         rownames = FALSE,
         class = "compact stripe hover",
-        options = list(pageLength = 15, dom = "t", ordering = TRUE, scrollX = TRUE)
+        options = list(pageLength = 8, dom = "tip", ordering = TRUE, scrollX = TRUE)
       )
     }, server = FALSE)
+
+    output$overview_counts_plot <- renderPlot({
+      df <- counts_rv()
+      req(nrow(df) > 0)
+      df_plot <- df[df$records > 0, , drop = FALSE]
+      if (nrow(df_plot) == 0) {
+        plot.new()
+        text(0.5, 0.5, "No records in tracked collections.")
+        return(invisible(NULL))
+      }
+      df_plot$collection <- factor(df_plot$collection, levels = df_plot$collection[order(df_plot$records)])
+
+      ggplot(df_plot, aes(x = collection, y = records, fill = records)) +
+        geom_col(width = 0.72, show.legend = FALSE) +
+        coord_flip() +
+        scale_fill_gradient(low = "#9bd5d0", high = "#0f766e") +
+        theme_minimal(base_size = 12) +
+        theme(
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.title = element_blank(),
+          axis.text.y = element_text(color = "#1f2937", face = "bold"),
+          axis.text.x = element_text(color = "#52606d"),
+          plot.margin = margin(8, 12, 8, 8)
+        )
+    })
+
+    output$reference_mix_plot <- renderPlot({
+      stats <- dbm_alignment_reference_stats()
+      df_plot <- data.frame(
+        source = c("Built-in", "Uploaded"),
+        count = c(stats$built_in, stats$uploaded),
+        stringsAsFactors = FALSE
+      )
+
+      ggplot(df_plot, aes(x = source, y = count, fill = source)) +
+        geom_col(width = 0.6, show.legend = FALSE) +
+        geom_text(aes(label = count), vjust = -0.4, size = 4.2, fontface = "bold", color = "#14213d") +
+        scale_fill_manual(values = c("Built-in" = "#0f766e", "Uploaded" = "#f59e0b")) +
+        theme_minimal(base_size = 12) +
+        theme(
+          panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_text(color = "#334155"),
+          plot.margin = margin(8, 8, 8, 8)
+        ) +
+        expand_limits(y = max(df_plot$count, 1) * 1.2)
+    })
 
     output$records_table <- DT::renderDT({
       df <- records_display_rv()
@@ -433,7 +859,7 @@ database_management_module_server <- function(id) {
         rownames = FALSE,
         selection = "single",
         class = "compact stripe hover",
-        options = list(pageLength = 12, scrollX = TRUE, autoWidth = TRUE)
+        options = list(pageLength = 12, scrollX = TRUE, autoWidth = TRUE, dom = "tip")
       )
     }, server = FALSE)
 
@@ -460,7 +886,7 @@ database_management_module_server <- function(id) {
         tags$tr(tags$td(tags$b(nm)), tags$td(val_txt %||% "NA"))
       })
 
-      tags$table(class = "table table-condensed table-bordered", kv)
+      tags$table(class = "dbm-kv", kv)
     })
 
 
@@ -468,6 +894,7 @@ database_management_module_server <- function(id) {
       rec <- selected_record_rv()
       rid <- selected_id_rv()
       collection <- input$collection %||% ""
+      policy <- dbm_delete_policy(collection, rec)
 
       if (is.null(rec) || nrow(rec) == 0 || is.null(rid) || !nzchar(rid)) {
         showNotification(
@@ -475,6 +902,11 @@ database_management_module_server <- function(id) {
           type = "warning",
           duration = 5
         )
+        return()
+      }
+
+      if (!isTRUE(policy$allowed)) {
+        showNotification(policy$reason %||% "This object cannot be deleted.", type = "warning", duration = 8)
         return()
       }
 
@@ -493,6 +925,9 @@ database_management_module_server <- function(id) {
         title = "Confirm deletion",
         tags$p(dbm_record_title(collection, rec)),
         tags$p(tags$b("This operation cannot be undone.")),
+        if (identical(collection, "alignment_references") && !dbm_is_protected_record("alignment_references", rec)) {
+          tags$p("This will remove the uploaded alignment reference from the shared database.")
+        },
         extra_warning,
         easyClose = TRUE,
         footer = tagList(

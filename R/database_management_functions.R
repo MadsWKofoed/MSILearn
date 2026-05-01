@@ -13,11 +13,13 @@ dbm_catalog <- function() {
     key = c(
       "studies", "samples", "pipelines", "artifacts",
       "annotation_sets", "annotations", "datasets", "model_runs",
+      "alignment_references",
       "processing_artifacts_metadata", "clustering_metadata", "ndpi_registrations"
     ),
     label = c(
       "Studies", "Samples", "Pipelines", "Artifacts",
       "Annotation sets", "Annotations", "Datasets", "Model runs",
+      "Alignment references",
       "Legacy processing metadata", "Legacy clustering metadata", "NDPI registrations"
     ),
     description = c(
@@ -29,6 +31,7 @@ dbm_catalog <- function() {
       "Pixel-level annotations backed by GridFS.",
       "Frozen training datasets.",
       "Persisted trained models backed by GridFS.",
+      "Built-in and uploaded alignment reference peak lists.",
       "Legacy raw/stage metadata collection.",
       "Legacy clustering commit metadata.",
       "Saved NDPI→MSI registration metadata."
@@ -163,6 +166,32 @@ dbm_dataset_map <- function(db = DB_NAME, url = MONGO_URL) {
   setNames(nm, as.character(df$`_id`))
 }
 
+dbm_alignment_reference_stats <- function(db = DB_NAME, url = MONGO_URL) {
+  refs <- tryCatch(
+    list_alignment_references(db = db, url = url),
+    error = function(e) data.frame(stringsAsFactors = FALSE)
+  )
+
+  if (nrow(refs) == 0) {
+    return(list(
+      total = 0L,
+      built_in = 0L,
+      uploaded = 0L,
+      total_bytes = 0
+    ))
+  }
+
+  file_sizes <- suppressWarnings(as.numeric(refs$file_size))
+  file_sizes[!is.finite(file_sizes)] <- 0
+
+  list(
+    total = nrow(refs),
+    built_in = sum(refs$built_in %in% TRUE, na.rm = TRUE),
+    uploaded = sum(!(refs$built_in %in% TRUE), na.rm = TRUE),
+    total_bytes = sum(file_sizes, na.rm = TRUE)
+  )
+}
+
 # ---- Data retrieval for the management table -------------------------------
 
 dbm_get_collection_data <- function(collection,
@@ -204,6 +233,7 @@ dbm_get_collection_data <- function(collection,
       if (!is.null(study_id) && nzchar(study_id)) list_datasets(study_id, db = db, url = url) else list_datasets(db = db, url = url)
     },
     model_runs = list_all_model_runs(db = db, url = url),
+    alignment_references = list_alignment_references(db = db, url = url),
     processing_artifacts_metadata = {
       q <- list()
       if (!is.null(sample_name) && nzchar(sample_name)) q$sample_name <- sample_name
@@ -338,6 +368,36 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
         stringsAsFactors = FALSE
       )
     },
+    alignment_references = {
+      built_in_vec <- if ("built_in" %in% names(df)) as.logical(df$built_in) else rep(FALSE, nrow(df))
+      source_vec <- ifelse(
+        built_in_vec,
+        "Built-in",
+        "Uploaded"
+      )
+      file_size_vec <- if ("file_size" %in% names(df)) suppressWarnings(as.numeric(df$file_size)) else rep(NA_real_, nrow(df))
+      file_size_vec[!is.finite(file_size_vec)] <- NA_real_
+      file_size_lbl <- ifelse(
+        is.na(file_size_vec),
+        "—",
+        format(structure(file_size_vec, class = "object_size"), units = "auto")
+      )
+      name_vec <- if ("display_name" %in% names(df)) as.character(df$display_name) else rep("", nrow(df))
+      ref_name_vec <- if ("reference_name" %in% names(df)) as.character(df$reference_name) else rep("", nrow(df))
+      name_vec[is.na(name_vec) | !nzchar(name_vec)] <- ref_name_vec[is.na(name_vec) | !nzchar(name_vec)]
+      created_vec <- if ("date_added" %in% names(df)) as.character(df$date_added) else rep("", nrow(df))
+      uploaded_vec <- if ("uploaded_at" %in% names(df)) as.character(df$uploaded_at) else rep("", nrow(df))
+      created_vec[is.na(created_vec) | !nzchar(created_vec)] <- uploaded_vec[is.na(created_vec) | !nzchar(created_vec)]
+      show <- data.frame(
+        id = col_or_default(df, "_id"),
+        name = name_vec,
+        source = source_vec,
+        file_type = col_or_default(df, "file_type"),
+        file_size = file_size_lbl,
+        created_at = created_vec,
+        stringsAsFactors = FALSE
+      )
+    },
     processing_artifacts_metadata = {
       show <- data.frame(
         id = if ("_id" %in% names(df)) col_or_default(df, "_id") else if ("run_id" %in% names(df)) col_or_default(df, "run_id") else as.character(seq_len(nrow(df))),
@@ -380,7 +440,8 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
 dbm_fetch_record <- function(collection, id, db = DB_NAME, url = MONGO_URL) {
   if (is.null(id) || !nzchar(id)) return(NULL)
   q <- if (collection %in% c("studies", "samples", "pipelines", "artifacts",
-                             "annotation_sets", "annotations", "datasets", "model_runs")) {
+                             "annotation_sets", "annotations", "datasets", "model_runs",
+                             "alignment_references")) {
     sprintf('{"_id": "%s"}', id)
   } else {
     # legacy collections may not always have _id in old records
@@ -407,6 +468,76 @@ dbm_collection_counts <- function(db = DB_NAME, url = MONGO_URL) {
     records = counts,
     description = cat$description,
     stringsAsFactors = FALSE
+  )
+}
+
+dbm_overview_stats <- function(db = DB_NAME, url = MONGO_URL) {
+  counts <- dbm_collection_counts(db = db, url = url)
+  ref_stats <- dbm_alignment_reference_stats(db = db, url = url)
+
+  list(
+    total_records = sum(counts$records, na.rm = TRUE),
+    non_empty_collections = sum(counts$records > 0, na.rm = TRUE),
+    largest_collection = if (nrow(counts) > 0) counts$collection[which.max(counts$records)][1] else NA_character_,
+    largest_collection_records = if (nrow(counts) > 0) max(counts$records, na.rm = TRUE) else 0,
+    alignment_reference_total = ref_stats$total,
+    alignment_reference_uploaded = ref_stats$uploaded,
+    alignment_reference_built_in = ref_stats$built_in,
+    alignment_reference_total_bytes = ref_stats$total_bytes
+  )
+}
+
+dbm_bytes_label <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  if (!length(x) || is.na(x) || !is.finite(x)) return("—")
+  format(structure(x, class = "object_size"), units = "auto")
+}
+
+dbm_is_protected_record <- function(collection, record) {
+  if (!identical(collection, "alignment_references")) {
+    return(FALSE)
+  }
+
+  if (is.null(record) || nrow(record) == 0) {
+    return(FALSE)
+  }
+
+  built_in <- if ("built_in" %in% names(record)) isTRUE(record$built_in[1]) else FALSE
+  source <- if ("source" %in% names(record)) as.character(record$source[1]) else ""
+  built_in || identical(source, "built_in")
+}
+
+dbm_delete_policy <- function(collection, record = NULL) {
+  if (dbm_is_protected_record(collection, record)) {
+    return(list(
+      allowed = FALSE,
+      reason = "Built-in alignment references are protected and cannot be deleted.",
+      label = "Protected built-in reference"
+    ))
+  }
+
+  label <- switch(
+    collection,
+    studies = "Delete selected study",
+    alignment_references = "Delete selected reference",
+    datasets = "Delete selected dataset",
+    model_runs = "Delete selected model",
+    annotations = "Delete selected annotation",
+    annotation_sets = "Delete selected annotation set",
+    artifacts = "Delete selected artifact",
+    samples = "Delete selected sample",
+    pipelines = "Delete selected pipeline",
+    "Delete selected record"
+  )
+
+  list(
+    allowed = collection %in% dbm_deleteable_collections(),
+    reason = if (identical(collection, "alignment_references")) {
+      "Uploaded alignment references can be deleted. Built-in defaults remain protected."
+    } else {
+      ""
+    },
+    label = label
   )
 }
 
@@ -537,6 +668,22 @@ dbm_delete_dataset_by_id <- function(dataset_id, db = DB_NAME, url = MONGO_URL) 
   )
 }
 
+dbm_delete_alignment_reference_by_id <- function(reference_id, db = DB_NAME, url = MONGO_URL) {
+  ref_df <- dbm_safe_find("alignment_references", sprintf('{"_id": "%s"}', reference_id), db = db, url = url)
+  if (dbm_is_protected_record("alignment_references", ref_df)) {
+    stop("Built-in alignment references are protected and cannot be deleted.")
+  }
+
+  list(
+    alignment_references = dbm_delete_docs_with_files(
+      "alignment_references",
+      sprintf('{"_id": "%s"}', reference_id),
+      db,
+      url
+    )
+  )
+}
+
 dbm_delete_record <- function(collection, id, db = DB_NAME, url = MONGO_URL) {
   stopifnot(collection %in% dbm_catalog()$key)
   if (is.null(id) || !nzchar(id)) stop("No record selected.")
@@ -551,6 +698,7 @@ dbm_delete_record <- function(collection, id, db = DB_NAME, url = MONGO_URL) {
     annotations = list(annotations = dbm_delete_docs_with_files("annotations", sprintf('{"_id": "%s"}', id), db, url)),
     datasets = dbm_delete_dataset_by_id(id, db, url),
     model_runs = list(model_runs = dbm_delete_docs_with_files("model_runs", sprintf('{"_id": "%s"}', id), db, url)),
+    alignment_references = dbm_delete_alignment_reference_by_id(id, db, url),
     processing_artifacts_metadata = {
       # old docs may be addressed by _id or run_id
       deleted <- dbm_delete_docs_with_files("processing_artifacts_metadata", sprintf('{"_id": "%s"}', id), db, url)
@@ -586,6 +734,7 @@ dbm_record_title <- function(collection, record) {
     annotations = paste0("Annotation: ", dbm_first_chr(r$`_id`)),
     datasets = paste0("Dataset: ", dbm_first_chr(r$name, dbm_first_chr(r$`_id`))),
     model_runs = paste0("Model run: ", dbm_first_chr(r$`_id`)),
+    alignment_references = paste0("Alignment reference: ", dbm_first_chr(r$display_name, dbm_first_chr(r$reference_name, dbm_first_chr(r$`_id`)))),
     processing_artifacts_metadata = paste0("Legacy processing record: ", dbm_first_chr(r$stage_type, dbm_first_chr(r$run_id, dbm_first_chr(r$`_id`)))),
     clustering_metadata = paste0("Legacy clustering record: ", dbm_first_chr(r$clustering_method, dbm_first_chr(r$`_id`))),
     ndpi_registrations = paste0("NDPI registration: ", dbm_first_chr(r$ndpi_slide_name, dbm_first_chr(r$`_id`)))
