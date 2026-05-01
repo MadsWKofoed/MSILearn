@@ -724,7 +724,7 @@ database_management_module_server <- function(id) {
         tags$div(class = "dbm-chip", tags$strong("Database"), DB_NAME),
         tags$div(class = "dbm-chip", tags$strong("Collections"), nrow(dbm_catalog())),
         tags$div(class = "dbm-chip", tags$strong("Total records"), total_records),
-        tags$div(class = "dbm-chip", tags$strong("DB size"), dbm_bytes_label(overview$total_db_bytes)),
+        tags$div(class = "dbm-chip", tags$strong("Mongo footprint"), dbm_bytes_label(overview$total_db_bytes)),
         tags$div(class = "dbm-chip", tags$strong("Largest collection"), largest_collection),
         tags$div(class = "dbm-chip", tags$strong("Selected"), current_collection_label()),
         tags$p(class = "dbm-quiet", style = "margin:10px 0 0 0;",
@@ -759,22 +759,19 @@ database_management_module_server <- function(id) {
         ),
         tags$div(
           class = "dbm-metric",
-          tags$div(class = "dbm-metric-kicker", "Total DB Size"),
+          tags$div(class = "dbm-metric-kicker", "Mongo Footprint"),
           tags$div(class = "dbm-metric-value", dbm_bytes_label(stats$total_db_bytes)),
           tags$div(class = "dbm-metric-note",
-            "Documents plus indexes when MongoDB reports them. Data payload: ",
-            dbm_bytes_label(stats$data_size_bytes),
-            "."
+            "Estimated physical space used by MongoDB for documents and indexes."
           )
         ),
         tags$div(
           class = "dbm-metric",
-          tags$div(class = "dbm-metric-kicker", "Managed File Storage"),
+          tags$div(class = "dbm-metric-kicker", "Stored File Payload"),
           tags$div(class = "dbm-metric-value", dbm_bytes_label(stats$managed_file_bytes)),
           tags$div(class = "dbm-metric-note",
-            stats$gridfs_file_count, " GridFS file(s) plus inline reference files. Largest collection share: ",
-            sprintf("%.0f%%", 100 * stats$largest_collection_share),
-            "."
+            "Logical size of stored files: ", stats$gridfs_file_count,
+            " GridFS file(s) plus inline references. This can be larger or smaller than Mongo footprint."
           )
         )
       )
@@ -972,26 +969,20 @@ database_management_module_server <- function(id) {
       }
 
       total_records <- sum(df_plot$records, na.rm = TRUE)
-      df_plot$share_label <- ifelse(
-        total_records > 0,
-        paste0(df_plot$domain, "\n", sprintf("%.0f%%", 100 * df_plot$records / total_records)),
-        df_plot$domain
-      )
-      df_plot$domain <- factor(df_plot$domain, levels = rev(df_plot$domain))
+      df_plot$share <- if (total_records > 0) 100 * df_plot$records / total_records else 0
+      df_plot$label <- paste0(df_plot$records, " object", ifelse(df_plot$records == 1, "", "s"),
+                              "  (", sprintf("%.0f%%", df_plot$share), ")")
+      df_plot$domain <- factor(df_plot$domain, levels = df_plot$domain[order(df_plot$records)])
 
-      ggplot(df_plot, aes(x = 2, y = records, fill = domain)) +
-        geom_col(color = "white", width = 0.9, show.legend = FALSE) +
-        coord_polar(theta = "y") +
-        xlim(0.2, 2.6) +
+      ggplot(df_plot, aes(x = domain, y = records, fill = domain)) +
+        geom_col(width = 0.68, show.legend = FALSE) +
         geom_text(
-          aes(label = share_label),
-          position = position_stack(vjust = 0.5),
-          color = "white",
-          size = 4,
+          aes(label = label),
+          hjust = -0.08,
+          color = "#14213d",
+          size = 4.1,
           fontface = "bold",
-          lineheight = 0.95
         ) +
-        annotate("text", x = 0.55, y = 0, label = paste0(total_records, "\nobjects"), fontface = "bold", size = 6, color = "#14213d") +
         scale_fill_manual(values = c(
           "Study setup" = "#0f766e",
           "Processing" = "#1d8f88",
@@ -999,8 +990,22 @@ database_management_module_server <- function(id) {
           "Modeling" = "#80cbc4",
           "References" = "#f59e0b"
         )) +
-        theme_void() +
-        theme(plot.margin = margin(8, 8, 8, 8))
+        coord_flip(clip = "off") +
+        expand_limits(y = max(df_plot$records, 1) * 1.24) +
+        labs(
+          x = NULL,
+          y = "Objects",
+          subtitle = paste0(total_records, " tracked objects across ", nrow(df_plot), " active domains")
+        ) +
+        theme_minimal(base_size = 12) +
+        theme(
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.text.y = element_text(color = "#1f2937", face = "bold"),
+          axis.text.x = element_text(color = "#52606d"),
+          plot.subtitle = element_text(color = "#5b6472", margin = margin(b = 10)),
+          plot.margin = margin(8, 44, 8, 8)
+        )
     })
 
     output$records_table <- DT::renderDT({
