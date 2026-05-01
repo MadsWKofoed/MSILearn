@@ -63,6 +63,10 @@ database_management_module_ui <- function(id) {
           box-shadow:var(--dbm-shadow);
           overflow:hidden;
         }
+        .dbm-panel-browser,
+        .dbm-panel-browser .dbm-panel-body{
+          overflow:visible;
+        }
         .dbm-panel-head{
           padding:16px 18px 12px 18px;
           border-bottom:1px solid #e6edf5;
@@ -206,6 +210,21 @@ database_management_module_ui <- function(id) {
           font-size:12px;
           line-height:1.55;
         }
+        .dbm-filter-hidden{
+          display:none;
+        }
+        .dbm-panel-browser .selectize-control{
+          margin-bottom:0;
+        }
+        .dbm-panel-browser .selectize-dropdown{
+          z-index:5000;
+          border-radius:16px;
+          border:1px solid #d8e0ea;
+          box-shadow:0 18px 42px rgba(15, 23, 42, 0.16);
+        }
+        .dbm-panel-browser .selectize-dropdown-content{
+          max-height:280px;
+        }
         .dbm-safe-note{
           color:#0f766e;
           font-size:12px;
@@ -330,7 +349,7 @@ database_management_module_ui <- function(id) {
         column(
           4,
           tags$div(
-            class = "dbm-panel dbm-grid-gap",
+            class = "dbm-panel dbm-grid-gap dbm-panel-browser",
             tags$div(
               class = "dbm-panel-head",
               tags$div(
@@ -355,7 +374,17 @@ database_management_module_ui <- function(id) {
               ),
               tags$div(
                 tags$div(class = "dbm-label", "Collection"),
-                selectInput(ns("collection"), NULL, choices = setNames(dbm_catalog()$key, dbm_catalog()$label), width = "100%")
+                selectizeInput(
+                  ns("collection"),
+                  NULL,
+                  choices = setNames(dbm_catalog()$key, dbm_catalog()$label),
+                  width = "100%",
+                  options = list(
+                    dropdownParent = "body",
+                    maxOptions = 100,
+                    placeholder = "Choose a collection"
+                  )
+                )
               ),
               uiOutput(ns("collection_summary_ui")),
               tags$div(
@@ -450,27 +479,81 @@ database_management_module_server <- function(id) {
     selected_id_rv <- reactiveVal(NULL)
     selected_record_rv <- reactiveVal(NULL)
 
-    load_studies_for_filter <- function(selected = NULL) {
-      df <- tryCatch(get_studies(), error = function(e) data.frame())
-      if (nrow(df) == 0 || !all(c("_id", "name") %in% names(df))) {
-        updateSelectInput(session, "study_filter", choices = c("All studies" = ""), selected = "")
-      } else {
-        ch <- c("All studies" = "", setNames(as.character(df$`_id`), as.character(df$name)))
-        updateSelectInput(session, "study_filter", choices = ch, selected = selected %||% "")
-      }
+    dbm_selectize_options <- function(placeholder) {
+      list(
+        dropdownParent = "body",
+        maxOptions = 500,
+        placeholder = placeholder,
+        selectOnTab = TRUE,
+        closeAfterSelect = TRUE
+      )
     }
 
-    load_samples_for_filter <- function(study_id = NULL, selected = NULL) {
-      df <- tryCatch({
-        if (!is.null(study_id) && nzchar(study_id)) get_samples(study_id) else dbm_safe_find("samples")
-      }, error = function(e) data.frame())
+    build_single_filter_choices <- function(ids, labels, all_label) {
+      ids <- as.character(ids %||% character(0))
+      labels <- as.character(labels %||% character(0))
+      keep <- nzchar(ids) & !duplicated(ids)
+      ids <- ids[keep]
+      labels <- labels[keep]
 
-      if (nrow(df) == 0 || !all(c("_id", "sample_name") %in% names(df))) {
-        updateSelectInput(session, "sample_filter", choices = c("All samples" = ""), selected = "")
-      } else {
-        ch <- c("All samples" = "", setNames(as.character(df$`_id`), as.character(df$sample_name)))
-        updateSelectInput(session, "sample_filter", choices = ch, selected = selected %||% "")
+      if (length(ids) == 0) {
+        return(stats::setNames("", all_label))
       }
+
+      labels[is.na(labels) | !nzchar(labels)] <- ids[is.na(labels) | !nzchar(labels)]
+      ord <- order(tolower(labels), tolower(ids))
+      c(stats::setNames("", all_label), stats::setNames(ids[ord], labels[ord]))
+    }
+
+    sync_filter_inputs <- function(collection = input$collection %||% dbm_catalog()$key[1],
+                                   selected_study = isolate(input$study_filter %||% ""),
+                                   selected_sample = isolate(input$sample_filter %||% "")) {
+      use_study <- dbm_supports_study_filter(collection)
+      use_sample <- dbm_supports_sample_filter(collection)
+      filter_index <- dbm_filter_index(collection)
+
+      study_choices <- build_single_filter_choices(
+        filter_index$study_id,
+        filter_index$study_label,
+        "All studies"
+      )
+      if (!use_study || !(selected_study %in% unname(study_choices))) {
+        selected_study <- ""
+      }
+      updateSelectizeInput(
+        session,
+        "study_filter",
+        choices = study_choices,
+        selected = selected_study,
+        options = dbm_selectize_options("All studies"),
+        server = TRUE
+      )
+
+      sample_index <- filter_index
+      if (use_sample && nzchar(selected_study)) {
+        sample_index <- sample_index[sample_index$study_id == selected_study, , drop = FALSE]
+      }
+      sample_choices <- build_single_filter_choices(
+        sample_index$sample_id,
+        sample_index$sample_label,
+        "All samples"
+      )
+      if (!use_sample || !(selected_sample %in% unname(sample_choices))) {
+        selected_sample <- ""
+      }
+      updateSelectizeInput(
+        session,
+        "sample_filter",
+        choices = sample_choices,
+        selected = selected_sample,
+        options = dbm_selectize_options("All samples"),
+        server = TRUE
+      )
+
+      list(
+        study_id = if (use_study && nzchar(selected_study)) selected_study else NULL,
+        sample_id = if (use_sample && nzchar(selected_sample)) selected_sample else NULL
+      )
     }
 
     refresh_counts <- function() {
@@ -525,31 +608,67 @@ database_management_module_server <- function(id) {
 
     observeEvent(input$refresh_all, {
       refresh_counts()
-      load_studies_for_filter(input$study_filter %||% "")
-      load_samples_for_filter(input$study_filter %||% NULL, input$sample_filter %||% "")
-      refresh_records()
+      selected_filters <- sync_filter_inputs(
+        collection = input$collection %||% dbm_catalog()$key[1],
+        selected_study = input$study_filter %||% "",
+        selected_sample = input$sample_filter %||% ""
+      )
+      refresh_records(
+        collection = input$collection %||% dbm_catalog()$key[1],
+        study_id = selected_filters$study_id,
+        sample_id = selected_filters$sample_id
+      )
       showNotification("Database view refreshed.", type = "message")
     }, ignoreInit = TRUE)
 
     observeEvent(input$study_filter, {
-      load_samples_for_filter(input$study_filter %||% NULL)
-      refresh_records()
+      selected_filters <- sync_filter_inputs(
+        collection = input$collection %||% dbm_catalog()$key[1],
+        selected_study = input$study_filter %||% "",
+        selected_sample = input$sample_filter %||% ""
+      )
+      refresh_records(
+        collection = input$collection %||% dbm_catalog()$key[1],
+        study_id = selected_filters$study_id,
+        sample_id = selected_filters$sample_id
+      )
     }, ignoreInit = TRUE)
 
     observeEvent(input$sample_filter, {
-      refresh_records()
+      selected_filters <- sync_filter_inputs(
+        collection = input$collection %||% dbm_catalog()$key[1],
+        selected_study = input$study_filter %||% "",
+        selected_sample = input$sample_filter %||% ""
+      )
+      refresh_records(
+        collection = input$collection %||% dbm_catalog()$key[1],
+        study_id = selected_filters$study_id,
+        sample_id = selected_filters$sample_id
+      )
     }, ignoreInit = TRUE)
 
     observeEvent(input$collection, {
-      load_studies_for_filter(input$study_filter %||% "")
-      load_samples_for_filter(input$study_filter %||% NULL, input$sample_filter %||% "")
-      refresh_records()
+      session$onFlushed(function() {
+        selected_filters <- sync_filter_inputs(
+          collection = input$collection %||% dbm_catalog()$key[1],
+          selected_study = "",
+          selected_sample = ""
+        )
+        refresh_records(
+          collection = input$collection %||% dbm_catalog()$key[1],
+          study_id = selected_filters$study_id,
+          sample_id = selected_filters$sample_id
+        )
+      }, once = TRUE)
     }, ignoreInit = TRUE)
 
     session$onFlushed(function() {
       refresh_counts()
-      load_studies_for_filter()
-      load_samples_for_filter()
+      sync_filter_inputs(
+        collection = dbm_catalog()$key[1],
+        selected_study = "",
+        selected_sample = ""
+      )
       refresh_records(
         collection = dbm_catalog()$key[1],
         study_id = NULL,
@@ -652,32 +771,37 @@ database_management_module_server <- function(id) {
 
     output$filter_ui <- renderUI({
       coll <- input$collection %||% "studies"
-
-      if (coll %in% c("studies", "pipelines", "model_runs", "datasets", "alignment_references")) {
-        return(
-          tagList(
-            if (coll == "datasets") {
-              selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%")
-            },
-            if (coll %in% c("studies", "pipelines", "model_runs", "alignment_references")) {
-              tags$div(class = "dbm-quiet",
-                      "No extra filters are needed for this collection.")
-            }
-          )
-        )
-      }
-
-      if (coll %in% c("samples", "annotation_sets")) {
-        return(
-          tagList(
-            selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%")
-          )
-        )
-      }
+      use_study <- dbm_supports_study_filter(coll)
+      use_sample <- dbm_supports_sample_filter(coll)
+      no_filters <- !use_study && !use_sample
 
       tagList(
-        selectInput(ns("study_filter"), "Study", choices = c("All studies" = ""), width = "100%"),
-        selectInput(ns("sample_filter"), "Sample", choices = c("All samples" = ""), width = "100%")
+        if (no_filters) {
+          tags$div(
+            class = "dbm-quiet",
+            "No extra filters are needed for this collection."
+          )
+        },
+        tags$div(
+          class = if (use_study) NULL else "dbm-filter-hidden",
+          selectizeInput(
+            ns("study_filter"),
+            "Study",
+            choices = c("All studies" = ""),
+            width = "100%",
+            options = dbm_selectize_options("All studies")
+          )
+        ),
+        tags$div(
+          class = if (use_sample) NULL else "dbm-filter-hidden",
+          selectizeInput(
+            ns("sample_filter"),
+            "Sample",
+            choices = c("All samples" = ""),
+            width = "100%",
+            options = dbm_selectize_options("All samples")
+          )
+        )
       )
     })
 
@@ -958,16 +1082,16 @@ database_management_module_server <- function(id) {
 
         refresh_counts()
 
-        load_studies_for_filter(selected = cur_study)
-        load_samples_for_filter(
-          study_id = if (nzchar(cur_study)) cur_study else NULL,
-          selected = cur_sample
+        selected_filters <- sync_filter_inputs(
+          collection = collection,
+          selected_study = cur_study,
+          selected_sample = cur_sample
         )
 
         refresh_records_view(
           collection = collection,
-          study_id = if (nzchar(cur_study)) cur_study else NULL,
-          sample_id = if (nzchar(cur_sample)) cur_sample else NULL
+          study_id = selected_filters$study_id,
+          sample_id = selected_filters$sample_id
         )
 
         showNotification(

@@ -2182,24 +2182,7 @@ clustering_module_server <- function(id) {
           annotation_set_id = ann_set_id
         )
 
-        progress$set(value = 90, message = "Writing metadata...")
-
-        tryCatch({
-          .insert(.con("clustering_metadata", DB_NAME, MONGO_URL), list(
-            assignment_id = art_id,
-            study_id = study_id,
-            sample_id = sample_id,
-            pipeline_id = pid,
-            cluster_pipeline_id = cluster_pid,
-            clustering_method = method,
-            k = input$clusters,
-            normalize = input$normalize,
-            annotation_set_id = ann_set_id,
-            annotation_id = ann_id,
-            n_annotated = nrow(annotation_df),
-            created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
-          ))
-        }, error = function(e) NULL)
+        progress$set(value = 90, message = "Finalizing outputs...")
 
         st <- registration_state()
         if (isTRUE(st$valid) && !is.null(st$fit)) {

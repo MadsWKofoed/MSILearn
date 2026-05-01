@@ -649,7 +649,7 @@ processing_module_server <- function(id) {
           if (!any(imzml_idx) || !any(ibd_idx))
             stop("Both imzML and ibd files are required.")
 
-          # Check legacy raw_files in processing_artifacts_metadata
+          # Reuse the existing raw-file storage path for uploaded imzML/ibd pairs.
           existing_raw <- query_legacy_artifacts(sample_name = sample_name,
                                                  stage_type  = "raw_files")
           if (nrow(existing_raw) > 0) {
@@ -842,21 +842,6 @@ processing_module_server <- function(id) {
           extra_meta  = list(
             num_features = length(mz_names),
             num_pixels   = nrow(full_df)
-          )
-        )
-
-        # Also keep legacy record for processing_module compat
-        run_id_legacy <- paste0("run_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-        save_stage_to_mongo(
-          full_df, run_id_legacy, "binned_dataframe",
-          sample_name = sample_name,
-          params = list(
-            snr            = as.numeric(input$snr),
-            tolerance      = as.numeric(input$tolerance),
-            reference_name = mz_ref$name,
-            resolution     = as.numeric(input$resolution),
-            num_features   = length(mz_names),
-            num_pixels     = nrow(full_df)
           )
         )
 

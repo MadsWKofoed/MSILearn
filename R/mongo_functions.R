@@ -5,17 +5,15 @@
 #   A. Low-level utilities (sanitisation, GridFS read/write)
 #   B. New provenance-aware API  (studies / samples / pipelines /
 #      artifacts / annotation_sets / annotations / datasets / model_runs)
-#   C. Legacy processing helpers kept for backwards compatibility
-#      with processing_module.R and clustering_module.R.
-#      These continue to write into "processing_artifacts_metadata" /
-#      "clustering_metadata" but callers must now supply explicit IDs;
-#      the "most recent" fallback has been removed.
+#   C. Raw-file compatibility helpers used by the processing workflow.
+#      These keep the existing raw GridFS storage path intact while the main
+#      app objects use the provenance-aware collections above.
 
 library(digest)
 library(jsonlite)
 library(mongolite)
 
-DB_NAME   <- "MSI_database_test"
+DB_NAME   <- "MSI_DB"
 MONGO_URL <- "mongodb://localhost:27018"
 
 # Null-coalescing operator used throughout
@@ -1157,9 +1155,8 @@ list_model_runs <- function(dataset_id, db = DB_NAME, url = MONGO_URL) {
 
 # ============================================================================
 # C.  LEGACY PROCESSING HELPERS
-# (backwards-compatible with processing_module.R and clustering_module.R)
-# These still write to "processing_artifacts_metadata" / "clustering_metadata".
-# The "most recent" fallback has been REMOVED from all loaders.
+# (kept only for the raw-file processing workflow compatibility path)
+# The "most recent" fallback has been removed from all loaders.
 # ============================================================================
 
 save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
@@ -1283,7 +1280,7 @@ query_legacy_artifacts <- function(sample_name    = NULL,
 
 
 get_model_run <- function(run_id,
-                          db = "MSI_database_test",
+                          db = "MSI_DB",
                           url = "mongodb://localhost:27018") {
   con <- mongolite::mongo(collection = "model_runs", db = db, url = url)
   doc <- con$find(query = sprintf('{"_id": "%s"}', run_id))

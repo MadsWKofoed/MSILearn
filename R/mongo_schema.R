@@ -2,7 +2,7 @@
 # MongoDB schema initialisation and index enforcement.
 # Call `initialise_schema()` once at application startup (idempotent).
 
-DB_NAME  <- "MSI_database_test"
+DB_NAME  <- "MSI_DB"
 MONGO_URL <- "mongodb://localhost:27018"
 
 # ---------------------------------------------------------------------------
@@ -51,6 +51,6 @@ initialise_schema <- function(db = DB_NAME, url = MONGO_URL) {
   .con("alignment_references", db, url)$index('{"reference_name": 1}')
   .con("alignment_references", db, url)$index('{"built_in": 1, "display_name": 1}')
 
-  message("✓ MSI_database schema initialised (indexes enforced)")
+  message(sprintf("✓ %s schema initialised (indexes enforced)", db))
   invisible(TRUE)
 }

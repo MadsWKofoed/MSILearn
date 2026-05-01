@@ -13,14 +13,12 @@ dbm_catalog <- function() {
     key = c(
       "studies", "samples", "pipelines", "artifacts",
       "annotation_sets", "annotations", "datasets", "model_runs",
-      "alignment_references",
-      "processing_artifacts_metadata", "clustering_metadata", "ndpi_registrations"
+      "alignment_references", "ndpi_registrations"
     ),
     label = c(
       "Studies", "Samples", "Pipelines", "Artifacts",
       "Annotation sets", "Annotations", "Datasets", "Model runs",
-      "Alignment references",
-      "Legacy processing metadata", "Legacy clustering metadata", "NDPI registrations"
+      "Alignment references", "NDPI registrations"
     ),
     description = c(
       "Top-level projects/cohorts.",
@@ -32,8 +30,6 @@ dbm_catalog <- function() {
       "Frozen training datasets.",
       "Persisted trained models backed by GridFS.",
       "Built-in and uploaded alignment reference peak lists.",
-      "Legacy raw/stage metadata collection.",
-      "Legacy clustering commit metadata.",
       "Saved NDPI→MSI registration metadata."
     ),
     stringsAsFactors = FALSE
@@ -44,6 +40,14 @@ dbm_deleteable_collections <- function() dbm_catalog()$key
 
 dbm_requires_study_filter <- function(collection) {
   collection %in% c("samples", "annotation_sets")
+}
+
+dbm_supports_study_filter <- function(collection) {
+  collection %in% c("samples", "annotation_sets", "artifacts", "annotations", "datasets", "ndpi_registrations")
+}
+
+dbm_supports_sample_filter <- function(collection) {
+  collection %in% c("artifacts", "annotations", "ndpi_registrations")
 }
 
 # ---- Small generic helpers -------------------------------------------------
@@ -166,6 +170,129 @@ dbm_dataset_map <- function(db = DB_NAME, url = MONGO_URL) {
   setNames(nm, as.character(df$`_id`))
 }
 
+dbm_filter_index <- function(collection, db = DB_NAME, url = MONGO_URL) {
+  empty <- data.frame(
+    study_id = character(0),
+    study_label = character(0),
+    sample_id = character(0),
+    sample_label = character(0),
+    stringsAsFactors = FALSE
+  )
+
+  studies_df <- tryCatch(get_studies(db = db, url = url), error = function(e) data.frame(stringsAsFactors = FALSE))
+  study_map <- setNames(character(0), character(0))
+  if (nrow(studies_df) > 0 && all(c("_id", "name") %in% names(studies_df))) {
+    study_map <- setNames(as.character(studies_df$name), as.character(studies_df$`_id`))
+  }
+
+  sample_df <- dbm_safe_find("samples", db = db, url = url)
+  sample_meta <- empty
+  if (nrow(sample_df) > 0 && all(c("_id", "sample_name", "study_id") %in% names(sample_df))) {
+    sample_meta <- data.frame(
+      study_id = as.character(sample_df$study_id),
+      study_label = unname(study_map[as.character(sample_df$study_id)]),
+      sample_id = as.character(sample_df$`_id`),
+      sample_label = as.character(sample_df$sample_name),
+      stringsAsFactors = FALSE
+    )
+    sample_meta$study_label[is.na(sample_meta$study_label) | !nzchar(sample_meta$study_label)] <- sample_meta$study_id[is.na(sample_meta$study_label) | !nzchar(sample_meta$study_label)]
+    sample_meta$sample_label[is.na(sample_meta$sample_label) | !nzchar(sample_meta$sample_label)] <- sample_meta$sample_id[is.na(sample_meta$sample_label) | !nzchar(sample_meta$sample_label)]
+    sample_meta <- unique(sample_meta)
+  }
+
+  sample_rows_from_ids <- function(sample_ids, fallback_study_ids = NULL) {
+    sample_ids <- as.character(sample_ids %||% character(0))
+    sample_ids <- sample_ids[nzchar(sample_ids)]
+    if (length(sample_ids) == 0) {
+      return(empty)
+    }
+
+    out <- data.frame(
+      study_id = rep("", length(sample_ids)),
+      study_label = rep("", length(sample_ids)),
+      sample_id = sample_ids,
+      sample_label = sample_ids,
+      stringsAsFactors = FALSE
+    )
+
+    if (nrow(sample_meta) > 0) {
+      idx <- match(sample_ids, sample_meta$sample_id)
+      matched <- !is.na(idx)
+      out$study_id[matched] <- sample_meta$study_id[idx[matched]]
+      out$study_label[matched] <- sample_meta$study_label[idx[matched]]
+      out$sample_label[matched] <- sample_meta$sample_label[idx[matched]]
+    }
+
+    if (!is.null(fallback_study_ids) && length(fallback_study_ids) == length(sample_ids)) {
+      missing_study <- !nzchar(out$study_id)
+      out$study_id[missing_study] <- as.character(fallback_study_ids[missing_study])
+    }
+
+    missing_study_label <- !nzchar(out$study_label) & nzchar(out$study_id)
+    out$study_label[missing_study_label] <- unname(study_map[out$study_id[missing_study_label]])
+    out$study_label[!nzchar(out$study_label)] <- out$study_id[!nzchar(out$study_label)]
+
+    unique(out)
+  }
+
+  study_rows_from_ids <- function(study_ids) {
+    study_ids <- unique(as.character(study_ids %||% character(0)))
+    study_ids <- study_ids[nzchar(study_ids)]
+    if (length(study_ids) == 0) {
+      return(empty)
+    }
+
+    out <- data.frame(
+      study_id = study_ids,
+      study_label = unname(study_map[study_ids]),
+      sample_id = rep("", length(study_ids)),
+      sample_label = rep("", length(study_ids)),
+      stringsAsFactors = FALSE
+    )
+    out$study_label[is.na(out$study_label) | !nzchar(out$study_label)] <- out$study_id[is.na(out$study_label) | !nzchar(out$study_label)]
+    unique(out)
+  }
+
+  out <- switch(
+    collection,
+    studies = study_rows_from_ids(names(study_map)),
+    samples = sample_meta,
+    annotation_sets = {
+      ann_df <- dbm_safe_find("annotation_sets", db = db, url = url)
+      study_rows_from_ids(ann_df$study_id)
+    },
+    artifacts = {
+      art_df <- dbm_safe_find("artifacts", db = db, url = url)
+      sample_rows_from_ids(art_df$sample_id, fallback_study_ids = art_df$study_id)
+    },
+    annotations = {
+      ann_df <- dbm_safe_find("annotations", db = db, url = url)
+      sample_rows_from_ids(ann_df$sample_id)
+    },
+    datasets = {
+      ds_df <- tryCatch(list_datasets(db = db, url = url), error = function(e) data.frame(stringsAsFactors = FALSE))
+      study_rows_from_ids(ds_df$study_id)
+    },
+    ndpi_registrations = {
+      ndpi_df <- dbm_safe_find("ndpi_registrations", db = db, url = url)
+      sample_rows_from_ids(ndpi_df$sample_id)
+    },
+    empty
+  )
+
+  if (is.null(out) || nrow(out) == 0) {
+    return(empty)
+  }
+
+  out[] <- lapply(out, function(col) {
+    val <- as.character(col)
+    val[is.na(val)] <- ""
+    val
+  })
+
+  unique(out)
+}
+
 dbm_alignment_reference_stats <- function(db = DB_NAME, url = MONGO_URL) {
   refs <- tryCatch(
     list_alignment_references(db = db, url = url),
@@ -234,17 +361,6 @@ dbm_get_collection_data <- function(collection,
     },
     model_runs = list_all_model_runs(db = db, url = url),
     alignment_references = list_alignment_references(db = db, url = url),
-    processing_artifacts_metadata = {
-      q <- list()
-      if (!is.null(sample_name) && nzchar(sample_name)) q$sample_name <- sample_name
-      dbm_safe_find("processing_artifacts_metadata", dbm_query_from_list(q), db = db, url = url)
-    },
-    clustering_metadata = {
-      q <- list()
-      if (!is.null(study_id) && nzchar(study_id)) q$study_id <- study_id
-      if (!is.null(sample_id) && nzchar(sample_id)) q$sample_id <- sample_id
-      dbm_safe_find("clustering_metadata", dbm_query_from_list(q), db = db, url = url)
-    },
     ndpi_registrations = {
       q <- list()
       if (!is.null(sample_id) && nzchar(sample_id)) q$sample_id <- sample_id
@@ -394,27 +510,6 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
         stringsAsFactors = FALSE
       )
     },
-    processing_artifacts_metadata = {
-      show <- data.frame(
-        id = if ("_id" %in% names(df)) col_or_default(df, "_id") else if ("run_id" %in% names(df)) col_or_default(df, "run_id") else as.character(seq_len(nrow(df))),
-        sample = col_or_default(df, "sample_name"),
-        stage = col_or_default(df, "stage_type"),
-        filename = if ("filename" %in% names(df)) col_or_default(df, "filename") else if ("imzml_gridfs_name" %in% names(df)) col_or_default(df, "imzml_gridfs_name") else rep("", nrow(df)),
-        created_at = col_or_default(df, "created_at"),
-        stringsAsFactors = FALSE
-      )
-    },
-    clustering_metadata = {
-      show <- data.frame(
-        id = if ("_id" %in% names(df)) col_or_default(df, "_id") else as.character(seq_len(nrow(df))),
-        study = lookup(col_or_default(df, "study_id"), study_map),
-        sample = lookup(col_or_default(df, "sample_id"), sample_map),
-        method = col_or_default(df, "clustering_method"),
-        k = col_or_default(df, "k"),
-        created_at = col_or_default(df, "created_at"),
-        stringsAsFactors = FALSE
-      )
-    },
     ndpi_registrations = {
       show <- data.frame(
         id = if ("_id" %in% names(df)) col_or_default(df, "_id") else as.character(seq_len(nrow(df))),
@@ -435,21 +530,9 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
 
 dbm_fetch_record <- function(collection, id, db = DB_NAME, url = MONGO_URL) {
   if (is.null(id) || !nzchar(id)) return(NULL)
-  q <- if (collection %in% c("studies", "samples", "pipelines", "artifacts",
-                             "annotation_sets", "annotations", "datasets", "model_runs",
-                             "alignment_references")) {
-    sprintf('{"_id": "%s"}', id)
-  } else {
-    # legacy collections may not always have _id in old records
-    sprintf('{"_id": "%s"}', id)
-  }
+  q <- sprintf('{"_id": "%s"}', id)
   df <- dbm_safe_find(collection, q, db = db, url = url)
   if (nrow(df) > 0) return(df[1, , drop = FALSE])
-
-  if (collection == "processing_artifacts_metadata") {
-    df <- dbm_safe_find(collection, sprintf('{"run_id": "%s"}', id), db = db, url = url)
-    if (nrow(df) > 0) return(df[1, , drop = FALSE])
-  }
   NULL
 }
 
@@ -695,15 +778,6 @@ dbm_delete_record <- function(collection, id, db = DB_NAME, url = MONGO_URL) {
     datasets = dbm_delete_dataset_by_id(id, db, url),
     model_runs = list(model_runs = dbm_delete_docs_with_files("model_runs", sprintf('{"_id": "%s"}', id), db, url)),
     alignment_references = dbm_delete_alignment_reference_by_id(id, db, url),
-    processing_artifacts_metadata = {
-      # old docs may be addressed by _id or run_id
-      deleted <- dbm_delete_docs_with_files("processing_artifacts_metadata", sprintf('{"_id": "%s"}', id), db, url)
-      if (deleted == 0) {
-        deleted <- dbm_delete_docs_with_files("processing_artifacts_metadata", sprintf('{"run_id": "%s"}', id), db, url)
-      }
-      list(processing_artifacts_metadata = deleted)
-    },
-    clustering_metadata = list(clustering_metadata = dbm_delete_docs_with_files("clustering_metadata", sprintf('{"_id": "%s"}', id), db, url)),
     ndpi_registrations = list(ndpi_registrations = dbm_delete_docs_with_files("ndpi_registrations", sprintf('{"_id": "%s"}', id), db, url))
   )
 }
@@ -731,8 +805,6 @@ dbm_record_title <- function(collection, record) {
     datasets = paste0("Dataset: ", dbm_first_chr(r$name, dbm_first_chr(r$`_id`))),
     model_runs = paste0("Model run: ", dbm_first_chr(r$`_id`)),
     alignment_references = paste0("Alignment reference: ", dbm_first_chr(r$display_name, dbm_first_chr(r$reference_name, dbm_first_chr(r$`_id`)))),
-    processing_artifacts_metadata = paste0("Legacy processing record: ", dbm_first_chr(r$stage_type, dbm_first_chr(r$run_id, dbm_first_chr(r$`_id`)))),
-    clustering_metadata = paste0("Legacy clustering record: ", dbm_first_chr(r$clustering_method, dbm_first_chr(r$`_id`))),
     ndpi_registrations = paste0("NDPI registration: ", dbm_first_chr(r$ndpi_slide_name, dbm_first_chr(r$`_id`)))
   )
 }
