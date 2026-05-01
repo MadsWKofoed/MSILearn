@@ -377,11 +377,7 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
       )
       file_size_vec <- if ("file_size" %in% names(df)) suppressWarnings(as.numeric(df$file_size)) else rep(NA_real_, nrow(df))
       file_size_vec[!is.finite(file_size_vec)] <- NA_real_
-      file_size_lbl <- ifelse(
-        is.na(file_size_vec),
-        "—",
-        format(structure(file_size_vec, class = "object_size"), units = "auto")
-      )
+      file_size_lbl <- vapply(file_size_vec, dbm_bytes_label, character(1))
       name_vec <- if ("display_name" %in% names(df)) as.character(df$display_name) else rep("", nrow(df))
       ref_name_vec <- if ("reference_name" %in% names(df)) as.character(df$reference_name) else rep("", nrow(df))
       name_vec[is.na(name_vec) | !nzchar(name_vec)] <- ref_name_vec[is.na(name_vec) | !nzchar(name_vec)]
