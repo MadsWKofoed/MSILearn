@@ -330,16 +330,16 @@ database_management_module_ui <- function(id) {
             tags$div(
               class = "dbm-panel-head",
               tags$div(
-                tags$div(class = "dbm-panel-title", "Reference Footprint"),
+                tags$div(class = "dbm-panel-title", "Database Composition"),
                 tags$div(
                   class = "dbm-panel-subtitle",
-                  "Built-in versus uploaded alignment references in the shared app database."
+                  "A high-level view of where tracked objects are concentrated across the app database."
                 )
               )
             ),
             tags$div(
               class = "dbm-panel-body dbm-stack",
-              div(class = "dbm-plot-wrap", plotOutput(ns("reference_mix_plot"), height = "220px")),
+              div(class = "dbm-plot-wrap", plotOutput(ns("composition_plot"), height = "260px")),
               uiOutput(ns("dbm_session_ui"))
             )
           )
@@ -724,6 +724,7 @@ database_management_module_server <- function(id) {
         tags$div(class = "dbm-chip", tags$strong("Database"), DB_NAME),
         tags$div(class = "dbm-chip", tags$strong("Collections"), nrow(dbm_catalog())),
         tags$div(class = "dbm-chip", tags$strong("Total records"), total_records),
+        tags$div(class = "dbm-chip", tags$strong("DB size"), dbm_bytes_label(overview$total_db_bytes)),
         tags$div(class = "dbm-chip", tags$strong("Largest collection"), largest_collection),
         tags$div(class = "dbm-chip", tags$strong("Selected"), current_collection_label()),
         tags$p(class = "dbm-quiet", style = "margin:10px 0 0 0;",
@@ -748,29 +749,32 @@ database_management_module_server <- function(id) {
         ),
         tags$div(
           class = "dbm-metric",
-          tags$div(class = "dbm-metric-kicker", "Active Collections"),
+          tags$div(class = "dbm-metric-kicker", "Collections In Use"),
           tags$div(class = "dbm-metric-value", stats$non_empty_collections),
           tags$div(class = "dbm-metric-note",
-            "Collections currently holding data. Largest: ",
+            "Tracked collections with at least 1 record. Largest: ",
             tags$strong(largest_name),
             " (", stats$largest_collection_records, ")."
           )
         ),
         tags$div(
           class = "dbm-metric",
-          tags$div(class = "dbm-metric-kicker", "Uploaded References"),
-          tags$div(class = "dbm-metric-value", stats$alignment_reference_uploaded),
+          tags$div(class = "dbm-metric-kicker", "Total DB Size"),
+          tags$div(class = "dbm-metric-value", dbm_bytes_label(stats$total_db_bytes)),
           tags$div(class = "dbm-metric-note",
-            "User-added alignment references stored alongside the built-in defaults."
+            "Documents plus indexes when MongoDB reports them. Data payload: ",
+            dbm_bytes_label(stats$data_size_bytes),
+            "."
           )
         ),
         tags$div(
           class = "dbm-metric",
-          tags$div(class = "dbm-metric-kicker", "Reference Storage"),
-          tags$div(class = "dbm-metric-value", dbm_bytes_label(stats$alignment_reference_total_bytes)),
+          tags$div(class = "dbm-metric-kicker", "Managed File Storage"),
+          tags$div(class = "dbm-metric-value", dbm_bytes_label(stats$managed_file_bytes)),
           tags$div(class = "dbm-metric-note",
-            stats$alignment_reference_built_in, " built-in and ",
-            stats$alignment_reference_uploaded, " uploaded reference files."
+            stats$gridfs_file_count, " GridFS file(s) plus inline reference files. Largest collection share: ",
+            sprintf("%.0f%%", 100 * stats$largest_collection_share),
+            "."
           )
         )
       )
@@ -957,27 +961,46 @@ database_management_module_server <- function(id) {
         )
     })
 
-    output$reference_mix_plot <- renderPlot({
-      stats <- dbm_alignment_reference_stats()
-      df_plot <- data.frame(
-        source = c("Built-in", "Uploaded"),
-        count = c(stats$built_in, stats$uploaded),
-        stringsAsFactors = FALSE
-      )
+    output$composition_plot <- renderPlot({
+      df_plot <- dbm_domain_mix(counts_rv())
+      df_plot <- df_plot[df_plot$records > 0, , drop = FALSE]
 
-      ggplot(df_plot, aes(x = source, y = count, fill = source)) +
-        geom_col(width = 0.6, show.legend = FALSE) +
-        geom_text(aes(label = count), vjust = -0.4, size = 4.2, fontface = "bold", color = "#14213d") +
-        scale_fill_manual(values = c("Built-in" = "#0f766e", "Uploaded" = "#f59e0b")) +
-        theme_minimal(base_size = 12) +
-        theme(
-          panel.grid.minor = element_blank(),
-          panel.grid.major.x = element_blank(),
-          axis.title = element_blank(),
-          axis.text = element_text(color = "#334155"),
-          plot.margin = margin(8, 8, 8, 8)
+      if (nrow(df_plot) == 0) {
+        plot.new()
+        text(0.5, 0.5, "No tracked objects stored yet.")
+        return(invisible(NULL))
+      }
+
+      total_records <- sum(df_plot$records, na.rm = TRUE)
+      df_plot$share_label <- ifelse(
+        total_records > 0,
+        paste0(df_plot$domain, "\n", sprintf("%.0f%%", 100 * df_plot$records / total_records)),
+        df_plot$domain
+      )
+      df_plot$domain <- factor(df_plot$domain, levels = rev(df_plot$domain))
+
+      ggplot(df_plot, aes(x = 2, y = records, fill = domain)) +
+        geom_col(color = "white", width = 0.9, show.legend = FALSE) +
+        coord_polar(theta = "y") +
+        xlim(0.2, 2.6) +
+        geom_text(
+          aes(label = share_label),
+          position = position_stack(vjust = 0.5),
+          color = "white",
+          size = 4,
+          fontface = "bold",
+          lineheight = 0.95
         ) +
-        expand_limits(y = max(df_plot$count, 1) * 1.2)
+        annotate("text", x = 0.55, y = 0, label = paste0(total_records, "\nobjects"), fontface = "bold", size = 6, color = "#14213d") +
+        scale_fill_manual(values = c(
+          "Study setup" = "#0f766e",
+          "Processing" = "#1d8f88",
+          "Annotation" = "#4fb3ad",
+          "Modeling" = "#80cbc4",
+          "References" = "#f59e0b"
+        )) +
+        theme_void() +
+        theme(plot.margin = margin(8, 8, 8, 8))
     })
 
     output$records_table <- DT::renderDT({

@@ -550,15 +550,131 @@ dbm_collection_counts <- function(db = DB_NAME, url = MONGO_URL) {
   )
 }
 
+dbm_extract_scalar <- function(x, name) {
+  if (is.null(x)) return(NA_real_)
+
+  if (is.data.frame(x) && name %in% names(x) && nrow(x) > 0) {
+    return(suppressWarnings(as.numeric(x[[name]][1])))
+  }
+
+  if (is.list(x) && !is.null(x[[name]])) {
+    return(suppressWarnings(as.numeric(unlist(x[[name]])[1])))
+  }
+
+  if (!is.null(names(x)) && name %in% names(x)) {
+    return(suppressWarnings(as.numeric(x[[name]][1])))
+  }
+
+  NA_real_
+}
+
+dbm_database_stats <- function(db = DB_NAME, url = MONGO_URL) {
+  stats <- tryCatch(
+    .con("studies", db, url)$run('{"dbStats": 1, "scale": 1}'),
+    error = function(e) NULL
+  )
+
+  list(
+    data_size_bytes = dbm_extract_scalar(stats, "dataSize"),
+    storage_size_bytes = dbm_extract_scalar(stats, "storageSize"),
+    index_size_bytes = dbm_extract_scalar(stats, "indexSize")
+  )
+}
+
+dbm_gridfs_stats <- function(db = DB_NAME, url = MONGO_URL) {
+  files_df <- tryCatch(
+    .con("fs.files", db, url)$find("{}", fields = '{"length": 1, "filename": 1}'),
+    error = function(e) data.frame(stringsAsFactors = FALSE)
+  )
+
+  if (is.null(files_df) || nrow(files_df) == 0 || !("length" %in% names(files_df))) {
+    return(list(
+      file_count = 0L,
+      total_bytes = 0,
+      average_bytes = 0
+    ))
+  }
+
+  file_lengths <- suppressWarnings(as.numeric(files_df$length))
+  file_lengths[!is.finite(file_lengths)] <- 0
+
+  list(
+    file_count = nrow(files_df),
+    total_bytes = sum(file_lengths, na.rm = TRUE),
+    average_bytes = if (nrow(files_df) > 0) mean(file_lengths, na.rm = TRUE) else 0
+  )
+}
+
+dbm_domain_mix <- function(counts_df) {
+  if (is.null(counts_df) || !is.data.frame(counts_df) || nrow(counts_df) == 0) {
+    return(data.frame(domain = character(0), records = numeric(0), stringsAsFactors = FALSE))
+  }
+
+  domain_map <- c(
+    studies = "Study setup",
+    samples = "Study setup",
+    pipelines = "Processing",
+    artifacts = "Processing",
+    ndpi_registrations = "Processing",
+    annotation_sets = "Annotation",
+    annotations = "Annotation",
+    datasets = "Modeling",
+    model_runs = "Modeling",
+    alignment_references = "References"
+  )
+
+  df <- counts_df
+  df$domain <- unname(domain_map[df$key])
+  df <- df[!is.na(df$domain) & nzchar(df$domain), c("domain", "records"), drop = FALSE]
+
+  if (nrow(df) == 0) {
+    return(data.frame(domain = character(0), records = numeric(0), stringsAsFactors = FALSE))
+  }
+
+  out <- stats::aggregate(records ~ domain, data = df, sum, na.rm = TRUE)
+  domain_order <- c("Study setup", "Processing", "Annotation", "Modeling", "References")
+  out$domain <- factor(out$domain, levels = domain_order)
+  out <- out[order(out$domain), , drop = FALSE]
+  out$domain <- as.character(out$domain)
+  out
+}
+
 dbm_overview_stats <- function(db = DB_NAME, url = MONGO_URL) {
   counts <- dbm_collection_counts(db = db, url = url)
   ref_stats <- dbm_alignment_reference_stats(db = db, url = url)
+  db_stats <- dbm_database_stats(db = db, url = url)
+  gridfs_stats <- dbm_gridfs_stats(db = db, url = url)
+
+  active_collections <- sum(counts$records > 0, na.rm = TRUE)
+  total_records <- sum(counts$records, na.rm = TRUE)
+  largest_records <- if (nrow(counts) > 0) max(counts$records, na.rm = TRUE) else 0
+  data_size <- db_stats$data_size_bytes
+  index_size <- db_stats$index_size_bytes
+  storage_size <- db_stats$storage_size_bytes
+  managed_file_bytes <- gridfs_stats$total_bytes + ref_stats$total_bytes
+
+  total_db_bytes <- if (is.finite(storage_size) && !is.na(storage_size)) {
+    storage_size + if (is.finite(index_size) && !is.na(index_size)) index_size else 0
+  } else if (is.finite(data_size) && !is.na(data_size)) {
+    data_size + if (is.finite(index_size) && !is.na(index_size)) index_size else 0
+  } else {
+    managed_file_bytes
+  }
 
   list(
-    total_records = sum(counts$records, na.rm = TRUE),
-    non_empty_collections = sum(counts$records > 0, na.rm = TRUE),
+    total_records = total_records,
+    non_empty_collections = active_collections,
     largest_collection = if (nrow(counts) > 0) counts$collection[which.max(counts$records)][1] else NA_character_,
-    largest_collection_records = if (nrow(counts) > 0) max(counts$records, na.rm = TRUE) else 0,
+    largest_collection_records = largest_records,
+    largest_collection_share = if (total_records > 0) largest_records / total_records else 0,
+    average_records_per_active_collection = if (active_collections > 0) total_records / active_collections else 0,
+    total_db_bytes = total_db_bytes,
+    data_size_bytes = data_size,
+    storage_size_bytes = storage_size,
+    index_size_bytes = index_size,
+    managed_file_bytes = managed_file_bytes,
+    gridfs_file_count = gridfs_stats$file_count,
+    gridfs_total_bytes = gridfs_stats$total_bytes,
     alignment_reference_total = ref_stats$total,
     alignment_reference_uploaded = ref_stats$uploaded,
     alignment_reference_built_in = ref_stats$built_in,
