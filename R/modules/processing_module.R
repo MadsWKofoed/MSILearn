@@ -55,8 +55,7 @@ processing_module_ui <- function(id) {
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'Upload new files'", ns("data_source")),
-            fileInput(ns("msi_files"), "Upload imzML + ibd files",
-                      multiple = TRUE, accept = c(".imzML", ".ibd"))
+            uiOutput(ns("msi_upload_ui"))
           ),
           conditionalPanel(
             condition = sprintf("input['%s'] == 'Use existing dataset'", ns("data_source")),
@@ -158,6 +157,8 @@ processing_module_server <- function(id) {
     plot_top3_norm      <- reactiveVal(NULL)
     plot_distance_binned  <- reactiveVal(NULL)
     plot_distance_scatter <- reactiveVal(NULL)
+    raw_upload_validation <- reactiveVal(empty_uploaded_raw_pair_validation())
+    msi_upload_reset_counter <- reactiveVal(0L)
 
     # The study_id that is currently "active" (resolved after create / select)
     active_study_id <- reactiveVal(NULL)
@@ -179,6 +180,16 @@ processing_module_server <- function(id) {
         gc()
       }, error = function(e) invisible(NULL))
     }
+
+    output$msi_upload_ui <- renderUI({
+      msi_upload_reset_counter()
+      fileInput(
+        ns("msi_files"),
+        "Upload imzML + ibd files",
+        multiple = TRUE,
+        accept = c(".imzML", ".ibd")
+      )
+    })
 
     uploaded_reference_display_name <- reactive({
       custom_name <- trimws(input$ref_upload_name %||% "")
@@ -263,6 +274,51 @@ processing_module_server <- function(id) {
         built_in = saved_ref$built_in
       )
     }
+
+    observe({
+      if (!identical(input$data_source, "Upload new files")) {
+        shinyjs::enable("run_processing")
+        return()
+      }
+
+      files <- input$msi_files
+      if (is.null(files) || NROW(files) == 0) {
+        raw_upload_validation(empty_uploaded_raw_pair_validation())
+        shinyjs::disable("run_processing")
+        return()
+      }
+
+      validation <- raw_upload_validation()
+
+      if (isTRUE(validation$valid)) {
+        shinyjs::enable("run_processing")
+      } else {
+        shinyjs::disable("run_processing")
+      }
+    })
+
+    observeEvent(input$msi_files, {
+      if (!identical(input$data_source, "Upload new files")) {
+        return()
+      }
+
+      files <- input$msi_files
+      if (is.null(files) || NROW(files) == 0) {
+        return()
+      }
+
+      validation <- validate_uploaded_raw_pair(files)
+      raw_upload_validation(validation)
+
+      if (!isTRUE(validation$valid)) {
+        showNotification(
+          paste("Raw file upload failed:", validation$message),
+          type = "error",
+          duration = NULL
+        )
+        msi_upload_reset_counter(msi_upload_reset_counter() + 1L)
+      }
+    }, ignoreInit = TRUE)
 
     # ── Reference dropdown ─────────────────────────────────────────────────
     observe({
@@ -370,11 +426,13 @@ processing_module_server <- function(id) {
     # ── Resolve current sample name ────────────────────────────────────────
     current_sample_name_resolved <- reactive({
       if (input$data_source == "Upload new files") {
-        req(input$msi_files)
-        file_name <- input$msi_files$name[
-          grepl("\\.imzML$", input$msi_files$name, ignore.case = TRUE)][1]
         nm <- trimws(input$sample_name_input)
-        if (nzchar(nm)) nm else tools::file_path_sans_ext(basename(file_name))
+        if (nzchar(nm)) {
+          return(nm)
+        }
+        validation <- raw_upload_validation()
+        req(isTRUE(validation$valid))
+        validation$sample_name_default
       } else {
         req(input$existing_sample)
         # existing_sample value is sample_id – fetch sample_name
@@ -562,6 +620,19 @@ processing_module_server <- function(id) {
 
     # ── MAIN PROCESSING PIPELINE ───────────────────────────────────────────
     observeEvent(input$run_processing, {
+      upload_validation <- NULL
+      if (identical(input$data_source, "Upload new files")) {
+        upload_validation <- validate_uploaded_raw_pair(input$msi_files)
+        raw_upload_validation(upload_validation)
+        if (!isTRUE(upload_validation$valid)) {
+          showNotification(
+            paste("Raw file upload failed:", upload_validation$message),
+            type = "error",
+            duration = NULL
+          )
+          return()
+        }
+      }
 
       study_id <- active_study_id()
       if (is.null(study_id) || !nzchar(study_id)) {
@@ -644,10 +715,8 @@ processing_module_server <- function(id) {
         if (input$data_source == "Upload new files") {
           req(input$msi_files)
           files     <- input$msi_files
-          imzml_idx <- grepl("\\.imzML$", files$name, ignore.case = TRUE)
-          ibd_idx   <- grepl("\\.ibd$",   files$name, ignore.case = TRUE)
-          if (!any(imzml_idx) || !any(ibd_idx))
-            stop("Both imzML and ibd files are required.")
+          imzml_idx <- upload_validation$imzml_idx
+          ibd_idx   <- upload_validation$ibd_idx
 
           # Reuse the existing raw-file storage path for uploaded imzML/ibd pairs.
           existing_raw <- query_legacy_artifacts(sample_name = sample_name,
@@ -658,8 +727,8 @@ processing_module_server <- function(id) {
             add_log("Uploading raw files to MongoDB...")
             raw_refs <- save_raw_pair_to_mongo(
               sample_name = sample_name,
-              imzml_path  = files$datapath[imzml_idx][1],
-              ibd_path    = files$datapath[ibd_idx][1]
+              imzml_path  = files$datapath[imzml_idx[1]],
+              ibd_path    = files$datapath[ibd_idx[1]]
             )
             # Back-fill raw_ref into the sample document
             mongolite::mongo(collection = "samples", db = DB_NAME,

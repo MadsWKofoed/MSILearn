@@ -551,19 +551,16 @@ prediction_module_server <- function(id) {
       req(input$run_id, nzchar(input$run_id))
 
       files <- input$pred_files
-      if (is.null(files) || nrow(files) == 0) {
-        showNotification("Upload exactly one .imzML and one .ibd file.", type = "warning")
+      validation <- validate_uploaded_raw_pair(files)
+      if (!isTRUE(validation$valid)) {
+        showNotification(
+          paste("Prediction upload failed:", validation$message),
+          type = "error"
+        )
         return()
       }
-
-      ext <- tolower(tools::file_ext(files$name))
-      imz_idx <- which(ext == "imzml")
-      ibd_idx <- which(ext == "ibd")
-
-      if (length(imz_idx) != 1 || length(ibd_idx) != 1) {
-        showNotification("Please upload exactly one .imzML and one .ibd file.", type = "error")
-        return()
-      }
+      imz_idx <- validation$imzml_idx[1]
+      ibd_idx <- validation$ibd_idx[1]
 
       pred_log("")
       pred_res(NULL)
