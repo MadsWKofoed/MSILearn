@@ -72,6 +72,31 @@ dbm_first_chr <- function(x, default = "—") {
   if (!nzchar(out)) default else out
 }
 
+dbm_record_id <- function(collection, record) {
+  if (is.null(record) || !is.data.frame(record) || nrow(record) == 0) {
+    return(NA_character_)
+  }
+
+  r <- record[1, , drop = FALSE]
+  candidates <- c(
+    if ("_id" %in% names(r)) as.character(r$`_id`[1]) else NA_character_,
+    if ("id" %in% names(r)) as.character(r$id[1]) else NA_character_,
+    switch(
+      collection,
+      studies = if ("study_id" %in% names(r)) as.character(r$study_id[1]) else NA_character_,
+      samples = if ("sample_id" %in% names(r)) as.character(r$sample_id[1]) else NA_character_,
+      datasets = if ("dataset_id" %in% names(r)) as.character(r$dataset_id[1]) else NA_character_,
+      model_runs = if ("run_id" %in% names(r)) as.character(r$run_id[1]) else NA_character_,
+      annotations = if ("annotation_id" %in% names(r)) as.character(r$annotation_id[1]) else NA_character_,
+      ndpi_registrations = if ("registration_id" %in% names(r)) as.character(r$registration_id[1]) else NA_character_,
+      NA_character_
+    )
+  )
+
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  if (length(candidates) == 0) NA_character_ else candidates[1]
+}
+
 dbm_safe_find <- function(collection, query = "{}", fields = NULL,
                           db = DB_NAME, url = MONGO_URL) {
   con <- .con(collection, db, url)

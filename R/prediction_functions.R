@@ -7,7 +7,7 @@
 list_all_model_runs <- function(db = DB_NAME, url = MONGO_URL) {
   .con("model_runs", db, url)$find(
     "{}",
-    fields = '{"dataset_id":1,"model_type":1,"metrics":1,"hyperparams":1,"created_at":1}'
+    fields = '{"_id":1,"dataset_id":1,"model_type":1,"metrics":1,"hyperparams":1,"created_at":1}'
   )
 }
 

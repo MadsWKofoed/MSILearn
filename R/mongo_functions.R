@@ -199,7 +199,7 @@ list_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
   df <- tryCatch(
     .con("samples", db, url)$find(
       sprintf('{"study_id": "%s"}', study_id),
-      fields = '{"sample_name":1,"study_id":1,"created_at":1}'
+      fields = '{"_id":1,"sample_name":1,"study_id":1,"created_at":1}'
     ),
     error = function(e) {
       message("[list_samples] ERROR for study_id=", study_id, ": ", e$message)
@@ -665,7 +665,7 @@ list_datasets <- function(study_id = NULL, db = DB_NAME, url = MONGO_URL) {
   q <- if (is.null(study_id)) "{}" else sprintf('{"study_id": "%s"}', study_id)
   .con("datasets", db, url)$find(
     q,
-    fields = '{"name":1,"study_id":1,"pipeline_id":1,
+    fields = '{"_id":1,"name":1,"study_id":1,"pipeline_id":1,
                "annotation_set_id":1,"stage_type":1,"created_at":1}'
   )
 }

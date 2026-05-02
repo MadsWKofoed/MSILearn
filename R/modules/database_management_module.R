@@ -695,18 +695,21 @@ database_management_module_server <- function(id) {
       }
 
       i <- idx[1]
+      raw_row <- if (!is.null(df_raw) && nrow(df_raw) >= i) df_raw[i, , drop = FALSE] else NULL
 
-      rid <- as.character(df_disp$id[i])
-      if ((!nzchar(rid) || is.na(rid)) && !is.null(df_raw) && nrow(df_raw) >= i && "_id" %in% names(df_raw)) {
-        rid <- as.character(df_raw$`_id`[i])
+      rid <- if ("id" %in% names(df_disp) && nrow(df_disp) >= i) as.character(df_disp$id[i]) else NA_character_
+      if (is.na(rid) || !nzchar(rid)) {
+        rid <- dbm_record_id(input$collection %||% "", raw_row)
       }
 
-      selected_id_rv(rid)
+      selected_id_rv(if (!is.na(rid) && nzchar(rid)) rid else NULL)
 
-      if (!is.null(df_raw) && nrow(df_raw) >= i) {
-        selected_record_rv(df_raw[i, , drop = FALSE])
-      } else {
+      if (!is.null(raw_row) && nrow(raw_row) > 0) {
+        selected_record_rv(raw_row)
+      } else if (!is.na(rid) && nzchar(rid)) {
         selected_record_rv(dbm_fetch_record(input$collection, rid))
+      } else {
+        selected_record_rv(NULL)
       }
     }, ignoreInit = TRUE)
 
@@ -1055,6 +1058,11 @@ database_management_module_server <- function(id) {
       collection <- input$collection %||% ""
       policy <- dbm_delete_policy(collection, rec)
 
+      if ((is.null(rid) || !nzchar(rid)) && !is.null(rec) && nrow(rec) > 0) {
+        rid <- dbm_record_id(collection, rec)
+        selected_id_rv(if (!is.na(rid) && nzchar(rid)) rid else NULL)
+      }
+
       if (is.null(rec) || nrow(rec) == 0 || is.null(rid) || !nzchar(rid)) {
         showNotification(
           "Select a row in the Records table before deleting.",
@@ -1099,6 +1107,12 @@ database_management_module_server <- function(id) {
     observeEvent(input$confirm_delete_btn, {
       rid <- selected_id_rv()
       collection <- input$collection %||% ""
+      rec <- selected_record_rv()
+
+      if ((is.null(rid) || !nzchar(rid)) && !is.null(rec) && nrow(rec) > 0) {
+        rid <- dbm_record_id(collection, rec)
+        selected_id_rv(if (!is.na(rid) && nzchar(rid)) rid else NULL)
+      }
 
       if (is.null(rid) || !nzchar(rid)) {
         removeModal()
