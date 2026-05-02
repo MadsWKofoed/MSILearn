@@ -763,171 +763,667 @@ dbm_delete_policy <- function(collection, record = NULL) {
 
 # ---- Deletion helpers ------------------------------------------------------
 
-dbm_delete_artifacts_by_sample_ids <- function(sample_ids, db = DB_NAME, url = MONGO_URL) {
-  q <- dbm_in_query("sample_id", sample_ids)
-  dbm_delete_docs_with_files("artifacts", q, db = db, url = url)
+dbm_internal_collections <- function() {
+  c("processing_artifacts_metadata", "clustering_metadata")
 }
 
-dbm_delete_annotations_by_sample_ids <- function(sample_ids, db = DB_NAME, url = MONGO_URL) {
-  q <- dbm_in_query("sample_id", sample_ids)
-  dbm_delete_docs_with_files("annotations", q, db = db, url = url)
-}
-
-dbm_delete_model_runs_by_dataset_ids <- function(dataset_ids, db = DB_NAME, url = MONGO_URL) {
-  q <- dbm_in_query("dataset_id", dataset_ids)
-  dbm_delete_docs_with_files("model_runs", q, db = db, url = url)
-}
-
-dbm_delete_datasets_by_ids <- function(dataset_ids, db = DB_NAME, url = MONGO_URL) {
-  q <- dbm_in_query("_id", dataset_ids)
-  con <- .con("datasets", db, url)
-  docs <- tryCatch(con$find(q), error = function(e) data.frame())
-  n <- if (nrow(docs) > 0) nrow(docs) else 0L
-  if (n > 0) tryCatch(con$remove(q), error = function(e) NULL)
-  n
-}
-
-dbm_delete_annotation_sets_by_ids <- function(ids, db = DB_NAME, url = MONGO_URL) {
-  q <- dbm_in_query("_id", ids)
-  con <- .con("annotation_sets", db, url)
-  docs <- tryCatch(con$find(q), error = function(e) data.frame())
-  n <- if (nrow(docs) > 0) nrow(docs) else 0L
-  if (n > 0) tryCatch(con$remove(q), error = function(e) NULL)
-  n
-}
-
-dbm_delete_samples_by_ids <- function(ids, db = DB_NAME, url = MONGO_URL) {
-  q <- dbm_in_query("_id", ids)
-  con <- .con("samples", db, url)
-  docs <- tryCatch(con$find(q), error = function(e) data.frame())
-  n <- if (nrow(docs) > 0) nrow(docs) else 0L
-  if (n > 0) tryCatch(con$remove(q), error = function(e) NULL)
-  n
-}
-
-dbm_delete_study_by_id <- function(study_id, db = DB_NAME, url = MONGO_URL) {
-  samples_df <- dbm_safe_find("samples", sprintf('{"study_id": "%s"}', study_id), db = db, url = url)
-  sample_ids <- if (nrow(samples_df) > 0 && "_id" %in% names(samples_df)) as.character(samples_df$`_id`) else character(0)
-  sample_names <- if (nrow(samples_df) > 0 && "sample_name" %in% names(samples_df)) as.character(samples_df$sample_name) else character(0)
-
-  annset_df <- dbm_safe_find("annotation_sets", sprintf('{"study_id": "%s"}', study_id), db = db, url = url)
-  annset_ids <- if (nrow(annset_df) > 0 && "_id" %in% names(annset_df)) as.character(annset_df$`_id`) else character(0)
-
-  dataset_df <- dbm_safe_find("datasets", sprintf('{"study_id": "%s"}', study_id), db = db, url = url)
-  dataset_ids <- if (nrow(dataset_df) > 0 && "_id" %in% names(dataset_df)) as.character(dataset_df$`_id`) else character(0)
-
-  list(
-    model_runs = dbm_delete_model_runs_by_dataset_ids(dataset_ids, db, url),
-    datasets = dbm_delete_datasets_by_ids(dataset_ids, db, url),
-    artifacts = dbm_delete_artifacts_by_sample_ids(sample_ids, db, url),
-    annotations = dbm_delete_annotations_by_sample_ids(sample_ids, db, url),
-    processing_artifacts_metadata = if (length(sample_names) > 0) dbm_delete_docs_with_files("processing_artifacts_metadata", dbm_in_query("sample_name", sample_names), db, url) else 0L,
-    clustering_metadata = if (length(sample_ids) > 0) dbm_delete_docs_with_files("clustering_metadata", dbm_in_query("sample_id", sample_ids), db, url) else 0L,
-    ndpi_registrations = if (length(sample_ids) > 0) dbm_delete_docs_with_files("ndpi_registrations", dbm_in_query("sample_id", sample_ids), db, url) else 0L,
-    annotation_sets = if (length(annset_ids) > 0) dbm_delete_annotation_sets_by_ids(annset_ids, db, url) else 0L,
-    samples = if (length(sample_ids) > 0) dbm_delete_samples_by_ids(sample_ids, db, url) else 0L,
-    studies = dbm_delete_docs_with_files("studies", sprintf('{"_id": "%s"}', study_id), db, url)
+dbm_collection_label <- function(collection) {
+  labels <- c(
+    stats::setNames(dbm_catalog()$label, dbm_catalog()$key),
+    processing_artifacts_metadata = "Legacy processing metadata",
+    clustering_metadata = "Clustering metadata"
   )
+  unname(labels[[collection]] %||% collection)
 }
 
-dbm_delete_sample_by_id <- function(sample_id, db = DB_NAME, url = MONGO_URL) {
-  sample_df <- dbm_safe_find("samples", sprintf('{"_id": "%s"}', sample_id), db = db, url = url)
-  sample_name <- if (nrow(sample_df) > 0 && "sample_name" %in% names(sample_df)) as.character(sample_df$sample_name[1]) else NULL
+dbm_all_delete_collections <- function() {
+  c(dbm_catalog()$key, dbm_internal_collections())
+}
 
-  dataset_df <- dbm_safe_find("datasets", db = db, url = url)
-  dataset_ids <- character(0)
-  if (nrow(dataset_df) > 0 && "sample_ids" %in% names(dataset_df)) {
-    hit <- vapply(dataset_df$sample_ids, function(x) sample_id %in% unlist(x), logical(1))
-    if (any(hit)) dataset_ids <- as.character(dataset_df$`_id`[hit])
+dbm_nonempty_chr <- function(x) {
+  x <- as.character(unlist(x, recursive = TRUE, use.names = FALSE))
+  x[!is.na(x) & nzchar(x)]
+}
+
+dbm_extract_field_values <- function(df, field) {
+  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0 || !(field %in% names(df))) {
+    return(character(0))
   }
 
-  list(
-    model_runs = dbm_delete_model_runs_by_dataset_ids(dataset_ids, db, url),
-    datasets = dbm_delete_datasets_by_ids(dataset_ids, db, url),
-    artifacts = dbm_delete_artifacts_by_sample_ids(sample_id, db, url),
-    annotations = dbm_delete_annotations_by_sample_ids(sample_id, db, url),
-    processing_artifacts_metadata = if (!is.null(sample_name) && nzchar(sample_name)) dbm_delete_docs_with_files("processing_artifacts_metadata", sprintf('{"sample_name": "%s"}', sample_name), db, url) else 0L,
-    clustering_metadata = dbm_delete_docs_with_files("clustering_metadata", sprintf('{"sample_id": "%s"}', sample_id), db, url),
-    ndpi_registrations = dbm_delete_docs_with_files("ndpi_registrations", sprintf('{"sample_id": "%s"}', sample_id), db, url),
-    samples = dbm_delete_samples_by_ids(sample_id, db, url)
-  )
+  vals <- df[[field]]
+  if (is.list(vals)) {
+    unique(dbm_nonempty_chr(vals))
+  } else {
+    unique(dbm_nonempty_chr(vals))
+  }
 }
 
-dbm_delete_pipeline_by_id <- function(pipeline_id, db = DB_NAME, url = MONGO_URL) {
-  artifacts_df <- dbm_safe_find("artifacts", sprintf('{"pipeline_id": "%s"}', pipeline_id), db = db, url = url)
-  datasets_df <- dbm_safe_find("datasets", sprintf('{"pipeline_id": "%s"}', pipeline_id), db = db, url = url)
-  dataset_ids <- if (nrow(datasets_df) > 0) as.character(datasets_df$`_id`) else character(0)
+dbm_compact_selector <- function(selector) {
+  if (length(selector) == 0) return(NULL)
 
-  list(
-    model_runs = dbm_delete_model_runs_by_dataset_ids(dataset_ids, db, url),
-    datasets = dbm_delete_datasets_by_ids(dataset_ids, db, url),
-    artifacts = if (nrow(artifacts_df) > 0) dbm_delete_docs_with_files("artifacts", sprintf('{"pipeline_id": "%s"}', pipeline_id), db, url) else 0L,
-    clustering_metadata = dbm_delete_docs_with_files("clustering_metadata", sprintf('{"pipeline_id": "%s"}', pipeline_id), db, url),
-    ndpi_registrations = dbm_delete_docs_with_files("ndpi_registrations", sprintf('{"pipeline_id": "%s"}', pipeline_id), db, url),
-    pipelines = dbm_delete_docs_with_files("pipelines", sprintf('{"_id": "%s"}', pipeline_id), db, url)
-  )
-}
+  keep <- vapply(selector, function(val) {
+    if (is.null(val) || length(val) == 0) return(FALSE)
+    if (is.list(val) && !is.data.frame(val)) return(TRUE)
+    any(!is.na(as.character(val)) & nzchar(as.character(val)))
+  }, logical(1))
 
-dbm_delete_annotation_set_by_id <- function(annset_id, db = DB_NAME, url = MONGO_URL) {
-  ann_df <- dbm_safe_find("annotations", sprintf('{"annotation_set_id": "%s"}', annset_id), db = db, url = url)
-  datasets_df <- dbm_safe_find("datasets", sprintf('{"annotation_set_id": "%s"}', annset_id), db = db, url = url)
-  dataset_ids <- if (nrow(datasets_df) > 0) as.character(datasets_df$`_id`) else character(0)
+  selector <- selector[keep]
+  if (length(selector) == 0) return(NULL)
 
-  list(
-    model_runs = dbm_delete_model_runs_by_dataset_ids(dataset_ids, db, url),
-    datasets = dbm_delete_datasets_by_ids(dataset_ids, db, url),
-    annotations = if (nrow(ann_df) > 0) dbm_delete_docs_with_files("annotations", sprintf('{"annotation_set_id": "%s"}', annset_id), db, url) else 0L,
-    annotation_sets = dbm_delete_docs_with_files("annotation_sets", sprintf('{"_id": "%s"}', annset_id), db, url)
-  )
-}
-
-dbm_delete_dataset_by_id <- function(dataset_id, db = DB_NAME, url = MONGO_URL) {
-  list(
-    model_runs = dbm_delete_model_runs_by_dataset_ids(dataset_id, db, url),
-    datasets = dbm_delete_datasets_by_ids(dataset_id, db, url)
-  )
-}
-
-dbm_delete_alignment_reference_by_id <- function(reference_id, db = DB_NAME, url = MONGO_URL) {
-  ref_df <- dbm_safe_find("alignment_references", sprintf('{"_id": "%s"}', reference_id), db = db, url = url)
-  if (dbm_is_protected_record("alignment_references", ref_df)) {
-    stop("Built-in alignment references are protected and cannot be deleted.")
+  for (nm in names(selector)) {
+    val <- selector[[nm]]
+    if (!is.list(val) || is.data.frame(val)) {
+      selector[[nm]] <- as.character(val[[1]])
+    }
   }
 
+  selector
+}
+
+dbm_safe_find_list <- function(collection, query = list(), fields = NULL,
+                               db = DB_NAME, url = MONGO_URL) {
+  dbm_safe_find(
+    collection = collection,
+    query = dbm_query_from_list(query),
+    fields = fields,
+    db = db,
+    url = url
+  )
+}
+
+dbm_record_selector <- function(collection, record) {
+  if (is.null(record) || !is.data.frame(record) || nrow(record) == 0) {
+    return(NULL)
+  }
+
+  r <- record[1, , drop = FALSE]
+  if ("_id" %in% names(r)) {
+    rid <- as.character(r$`_id`[1])
+    if (!is.na(rid) && nzchar(rid)) {
+      return(list(`_id` = rid))
+    }
+  }
+
+  selector <- switch(
+    collection,
+    studies = list(name = as.character(r$name[1] %||% "")),
+    samples = list(
+      study_id = as.character(r$study_id[1] %||% ""),
+      sample_name = as.character(r$sample_name[1] %||% "")
+    ),
+    pipelines = list(
+      type = as.character(r$type[1] %||% ""),
+      params_hash = as.character(r$params_hash[1] %||% "")
+    ),
+    artifacts = list(
+      sample_id = as.character(r$sample_id[1] %||% ""),
+      stage_type = as.character(r$stage_type[1] %||% ""),
+      pipeline_id = as.character(r$pipeline_id[1] %||% "")
+    ),
+    annotation_sets = list(
+      study_id = as.character(r$study_id[1] %||% ""),
+      name = as.character(r$name[1] %||% "")
+    ),
+    annotations = list(
+      sample_id = as.character(r$sample_id[1] %||% ""),
+      annotation_set_id = as.character(r$annotation_set_id[1] %||% "")
+    ),
+    datasets = list(
+      study_id = as.character(r$study_id[1] %||% ""),
+      pipeline_id = as.character(r$pipeline_id[1] %||% ""),
+      annotation_set_id = as.character(r$annotation_set_id[1] %||% ""),
+      created_at = as.character(r$created_at[1] %||% "")
+    ),
+    model_runs = list(
+      dataset_id = as.character(r$dataset_id[1] %||% ""),
+      created_at = as.character(r$created_at[1] %||% "")
+    ),
+    alignment_references = list(
+      reference_name = as.character(r$reference_name[1] %||% ""),
+      display_name = as.character(r$display_name[1] %||% "")
+    ),
+    ndpi_registrations = list(
+      sample_id = as.character(r$sample_id[1] %||% ""),
+      pipeline_id = as.character(r$pipeline_id[1] %||% ""),
+      ndpi_slide_name = as.character(r$ndpi_slide_name[1] %||% ""),
+      created_at = as.character(r$created_at[1] %||% "")
+    ),
+    processing_artifacts_metadata = list(
+      sample_name = as.character(r$sample_name[1] %||% ""),
+      stage_type = as.character(r$stage_type[1] %||% ""),
+      run_id = as.character(r$run_id[1] %||% ""),
+      filename = as.character(r$filename[1] %||% ""),
+      imzml_gridfs_name = as.character(r$imzml_gridfs_name[1] %||% ""),
+      ibd_gridfs_name = as.character(r$ibd_gridfs_name[1] %||% ""),
+      created_at = as.character(r$created_at[1] %||% "")
+    ),
+    clustering_metadata = list(
+      sample_id = as.character(r$sample_id[1] %||% ""),
+      pipeline_id = as.character(r$pipeline_id[1] %||% ""),
+      created_at = as.character(r$created_at[1] %||% "")
+    ),
+    NULL
+  )
+
+  dbm_compact_selector(selector)
+}
+
+dbm_record_key <- function(collection, record) {
+  selector <- dbm_record_selector(collection, record)
+  if (is.null(selector)) {
+    return(NA_character_)
+  }
+  jsonlite::toJSON(
+    list(collection = collection, selector = selector),
+    auto_unbox = TRUE,
+    null = "null"
+  )
+}
+
+dbm_dedupe_records <- function(df, collection) {
+  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
+    return(data.frame(stringsAsFactors = FALSE))
+  }
+
+  keys <- vapply(seq_len(nrow(df)), function(i) {
+    dbm_record_key(collection, df[i, , drop = FALSE])
+  }, character(1))
+
+  keep <- !is.na(keys) & nzchar(keys) & !duplicated(keys)
+  out <- df[keep, , drop = FALSE]
+  out$.dbm_key <- keys[keep]
+  out
+}
+
+dbm_plan_empty_collections <- function() {
+  stats::setNames(rep(list(data.frame(stringsAsFactors = FALSE)), length(dbm_all_delete_collections())),
+                  dbm_all_delete_collections())
+}
+
+dbm_plan_add_records <- function(plan, collection, records) {
+  empty <- data.frame(stringsAsFactors = FALSE)
+  deduped <- dbm_dedupe_records(records, collection)
+  if (nrow(deduped) == 0) {
+    return(list(plan = plan, added = empty))
+  }
+
+  existing <- plan$collections[[collection]]
+  if (is.null(existing) || !is.data.frame(existing) || nrow(existing) == 0) {
+    plan$collections[[collection]] <- deduped
+    return(list(plan = plan, added = deduped))
+  }
+
+  if (!(".dbm_key" %in% names(existing))) {
+    existing <- dbm_dedupe_records(existing, collection)
+  }
+
+  new_rows <- deduped[!(deduped$.dbm_key %in% existing$.dbm_key), , drop = FALSE]
+  plan$collections[[collection]] <- if (nrow(new_rows) > 0) {
+    dplyr::bind_rows(existing, new_rows)
+  } else {
+    existing
+  }
+
+  list(plan = plan, added = new_rows)
+}
+
+dbm_dataset_has_sample <- function(dataset_sample_ids, sample_ids) {
+  vals <- dbm_nonempty_chr(dataset_sample_ids)
+  length(intersect(vals, sample_ids)) > 0
+}
+
+dbm_find_datasets <- function(sample_ids = character(0),
+                              pipeline_ids = character(0),
+                              annotation_set_ids = character(0),
+                              stage_types = character(0),
+                              study_ids = character(0),
+                              db = DB_NAME,
+                              url = MONGO_URL) {
+  ds <- tryCatch(list_datasets(db = db, url = url), error = function(e) data.frame(stringsAsFactors = FALSE))
+  if (nrow(ds) == 0) {
+    return(ds)
+  }
+
+  keep <- rep(TRUE, nrow(ds))
+
+  if (length(sample_ids) > 0 && "sample_ids" %in% names(ds)) {
+    keep <- keep & vapply(ds$sample_ids, dbm_dataset_has_sample, logical(1), sample_ids = sample_ids)
+  }
+
+  if (length(pipeline_ids) > 0 && "pipeline_id" %in% names(ds)) {
+    keep <- keep & (as.character(ds$pipeline_id) %in% pipeline_ids)
+  }
+
+  if (length(annotation_set_ids) > 0 && "annotation_set_id" %in% names(ds)) {
+    keep <- keep & (as.character(ds$annotation_set_id) %in% annotation_set_ids)
+  }
+
+  if (length(stage_types) > 0 && "stage_type" %in% names(ds)) {
+    keep <- keep & (as.character(ds$stage_type) %in% stage_types)
+  }
+
+  if (length(study_ids) > 0 && "study_id" %in% names(ds)) {
+    keep <- keep & (as.character(ds$study_id) %in% study_ids)
+  }
+
+  ds[keep, , drop = FALSE]
+}
+
+dbm_collect_datasets_from_artifacts <- function(artifacts_df, db = DB_NAME, url = MONGO_URL) {
+  sample_ids <- dbm_extract_field_values(artifacts_df, "sample_id")
+  pipeline_ids <- dbm_extract_field_values(artifacts_df, "pipeline_id")
+  stage_types <- dbm_extract_field_values(artifacts_df, "stage_type")
+  dbm_find_datasets(
+    sample_ids = sample_ids,
+    pipeline_ids = pipeline_ids,
+    stage_types = stage_types,
+    db = db,
+    url = url
+  )
+}
+
+dbm_collect_datasets_from_annotations <- function(annotations_df, db = DB_NAME, url = MONGO_URL) {
+  sample_ids <- dbm_extract_field_values(annotations_df, "sample_id")
+  annset_ids <- dbm_extract_field_values(annotations_df, "annotation_set_id")
+  dbm_find_datasets(
+    sample_ids = sample_ids,
+    annotation_set_ids = annset_ids,
+    db = db,
+    url = url
+  )
+}
+
+dbm_dependency_rules <- function() {
   list(
-    alignment_references = dbm_delete_docs_with_files(
-      "alignment_references",
-      sprintf('{"_id": "%s"}', reference_id),
-      db,
-      url
+    studies = list(
+      list(child = "samples", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "annotation_sets", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "datasets", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "artifacts", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id")))))
+    ),
+    samples = list(
+      list(child = "artifacts", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "annotations", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "ndpi_registrations", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "processing_artifacts_metadata", query = function(df) {
+        sample_names <- dbm_extract_field_values(df, "sample_name")
+        if (length(sample_names) == 0) return(NULL)
+        list(sample_name = list(`$in` = as.list(sample_names)))
+      }),
+      list(child = "clustering_metadata", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "datasets", collect = function(df, db, url) {
+        dbm_find_datasets(sample_ids = dbm_extract_field_values(df, "_id"), db = db, url = url)
+      })
+    ),
+    pipelines = list(
+      list(child = "artifacts", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "datasets", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "ndpi_registrations", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "clustering_metadata", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id")))))
+    ),
+    artifacts = list(
+      list(child = "datasets", collect = function(df, db, url) {
+        dbm_collect_datasets_from_artifacts(df, db = db, url = url)
+      })
+    ),
+    annotation_sets = list(
+      list(child = "annotations", query = function(df) list(annotation_set_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "datasets", query = function(df) list(annotation_set_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id")))))
+    ),
+    annotations = list(
+      list(child = "datasets", collect = function(df, db, url) {
+        dbm_collect_datasets_from_annotations(df, db = db, url = url)
+      })
+    ),
+    datasets = list(
+      list(child = "model_runs", query = function(df) list(dataset_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id")))))
     )
   )
 }
 
-dbm_delete_record <- function(collection, id, db = DB_NAME, url = MONGO_URL) {
-  stopifnot(collection %in% dbm_catalog()$key)
-  if (is.null(id) || !nzchar(id)) stop("No record selected.")
+dbm_collect_child_records <- function(rule, parent_records, db = DB_NAME, url = MONGO_URL) {
+  if (!is.null(rule$collect)) {
+    return(rule$collect(parent_records, db = db, url = url))
+  }
 
-  switch(
-    collection,
-    studies = dbm_delete_study_by_id(id, db, url),
-    samples = dbm_delete_sample_by_id(id, db, url),
-    pipelines = dbm_delete_pipeline_by_id(id, db, url),
-    artifacts = list(artifacts = dbm_delete_docs_with_files("artifacts", sprintf('{"_id": "%s"}', id), db, url)),
-    annotation_sets = dbm_delete_annotation_set_by_id(id, db, url),
-    annotations = list(annotations = dbm_delete_docs_with_files("annotations", sprintf('{"_id": "%s"}', id), db, url)),
-    datasets = dbm_delete_dataset_by_id(id, db, url),
-    model_runs = list(model_runs = dbm_delete_docs_with_files("model_runs", sprintf('{"_id": "%s"}', id), db, url)),
-    alignment_references = dbm_delete_alignment_reference_by_id(id, db, url),
-    ndpi_registrations = list(ndpi_registrations = dbm_delete_docs_with_files("ndpi_registrations", sprintf('{"_id": "%s"}', id), db, url))
+  query <- rule$query(parent_records)
+  if (is.null(query) || length(query) == 0) {
+    return(data.frame(stringsAsFactors = FALSE))
+  }
+
+  dbm_safe_find_list(rule$child, query = query, db = db, url = url)
+}
+
+dbm_plan_counts <- function(plan) {
+  cols <- names(plan$collections %||% list())
+  if (length(cols) == 0) {
+    return(setNames(numeric(0), character(0)))
+  }
+
+  counts <- vapply(cols, function(collection) {
+    df <- plan$collections[[collection]]
+    if (is.null(df) || !is.data.frame(df)) 0L else nrow(df)
+  }, numeric(1))
+  counts[counts > 0]
+}
+
+dbm_plan_summary_table <- function(plan) {
+  counts <- dbm_plan_counts(plan)
+  if (length(counts) == 0) {
+    return(data.frame(collection = character(0), label = character(0), count = integer(0), stringsAsFactors = FALSE))
+  }
+
+  data.frame(
+    collection = names(counts),
+    label = vapply(names(counts), dbm_collection_label, character(1)),
+    count = as.integer(counts),
+    stringsAsFactors = FALSE
   )
 }
 
+dbm_plan_delete_order <- function() {
+  c(
+    "model_runs",
+    "datasets",
+    "annotations",
+    "artifacts",
+    "ndpi_registrations",
+    "processing_artifacts_metadata",
+    "clustering_metadata",
+    "annotation_sets",
+    "samples",
+    "pipelines",
+    "studies",
+    "alignment_references"
+  )
+}
+
+dbm_plan_deletion <- function(collection, id = NULL, record = NULL,
+                              db = DB_NAME, url = MONGO_URL) {
+  stopifnot(collection %in% dbm_catalog()$key)
+
+  if (is.null(record) || !is.data.frame(record) || nrow(record) == 0) {
+    if (!is.null(id) && nzchar(id)) {
+      record <- dbm_fetch_record(collection, id, db = db, url = url)
+    }
+  }
+
+  requested_id <- if (!is.null(id) && nzchar(id)) id else dbm_record_id(collection, record)
+  requested_title <- dbm_record_title(collection, record)
+
+  plan <- list(
+    requested = list(
+      collection = collection,
+      collection_label = dbm_collection_label(collection),
+      id = requested_id %||% "",
+      title = requested_title %||% collection,
+      found = !is.null(record) && is.data.frame(record) && nrow(record) > 0
+    ),
+    collections = dbm_plan_empty_collections(),
+    skipped = data.frame(
+      collection = character(0),
+      label = character(0),
+      reason = character(0),
+      stringsAsFactors = FALSE
+    ),
+    errors = character(0),
+    allowed = TRUE,
+    reason = NULL
+  )
+
+  if (!isTRUE(plan$requested$found)) {
+    plan$allowed <- FALSE
+    plan$reason <- "The selected object no longer exists in the database."
+    return(plan)
+  }
+
+  if (dbm_is_protected_record(collection, record)) {
+    plan$allowed <- FALSE
+    plan$reason <- "Built-in alignment references are protected and cannot be deleted."
+    plan$skipped <- data.frame(
+      collection = collection,
+      label = requested_title,
+      reason = plan$reason,
+      stringsAsFactors = FALSE
+    )
+    return(plan)
+  }
+
+  added <- dbm_plan_add_records(plan, collection, record)
+  plan <- added$plan
+  queue <- list(list(collection = collection, records = added$added))
+  rules <- dbm_dependency_rules()
+
+  while (length(queue) > 0) {
+    current <- queue[[1]]
+    queue <- queue[-1]
+
+    current_rules <- rules[[current$collection]]
+    if (is.null(current_rules) || nrow(current$records) == 0) {
+      next
+    }
+
+    for (rule in current_rules) {
+      inspect_error <- NULL
+      child_df <- tryCatch(
+        dbm_collect_child_records(rule, current$records, db = db, url = url),
+        error = function(e) {
+          inspect_error <<- paste0("Failed to inspect ", dbm_collection_label(rule$child), ": ", conditionMessage(e))
+          data.frame(stringsAsFactors = FALSE)
+        }
+      )
+      if (!is.null(inspect_error)) {
+        plan$errors <- c(plan$errors, inspect_error)
+      }
+
+      result <- dbm_plan_add_records(plan, rule$child, child_df)
+      plan <- result$plan
+      if (nrow(result$added) > 0) {
+        queue[[length(queue) + 1L]] <- list(collection = rule$child, records = result$added)
+      }
+    }
+  }
+
+  plan
+}
+
+dbm_delete_single_record <- function(collection, record, db = DB_NAME, url = MONGO_URL) {
+  selector <- dbm_record_selector(collection, record)
+  label <- dbm_record_title(collection, record)
+
+  if (is.null(selector)) {
+    return(list(
+      status = "error",
+      count = 0L,
+      label = label,
+      reason = "No reliable selector could be built for this record."
+    ))
+  }
+
+  if (dbm_is_protected_record(collection, record)) {
+    return(list(
+      status = "skipped",
+      count = 0L,
+      label = label,
+      reason = "Built-in alignment references are protected and cannot be deleted."
+    ))
+  }
+
+  docs <- dbm_safe_find_list(collection, selector, db = db, url = url)
+  if (nrow(docs) == 0) {
+    return(list(
+      status = "missing",
+      count = 0L,
+      label = label,
+      reason = "The object was already missing when deletion ran."
+    ))
+  }
+
+  file_fields <- dbm_candidate_file_fields(docs)
+  if (length(file_fields) > 0) {
+    for (ff in file_fields) {
+      vals <- docs[[ff]]
+      for (i in seq_along(vals)) {
+        dbm_remove_gridfs_file(vals[[i]], db = db, url = url)
+      }
+    }
+  }
+
+  tryCatch(
+    .con(collection, db, url)$remove(dbm_query_from_list(selector)),
+    error = function(e) stop(e)
+  )
+
+  list(
+    status = "deleted",
+    count = nrow(docs),
+    label = label,
+    reason = NULL
+  )
+}
+
+dbm_execute_deletion_plan <- function(plan, db = DB_NAME, url = MONGO_URL) {
+  report <- list(
+    requested = plan$requested,
+    planned = dbm_plan_summary_table(plan),
+    deleted = stats::setNames(numeric(0), character(0)),
+    skipped = plan$skipped,
+    errors = plan$errors %||% character(0),
+    total_deleted = 0L,
+    reason = plan$reason %||% NULL
+  )
+
+  if (!isTRUE(plan$requested$found)) {
+    report$reason <- plan$reason %||% "The requested object could not be found."
+    return(report)
+  }
+
+  if (!isTRUE(plan$allowed)) {
+    report$reason <- plan$reason %||% "Deletion is blocked for this object."
+    return(report)
+  }
+
+  order <- dbm_plan_delete_order()
+  present <- names(plan$collections)[vapply(plan$collections, nrow, numeric(1)) > 0]
+  order <- c(order[order %in% present], setdiff(present, order))
+
+  for (collection in order) {
+    docs <- plan$collections[[collection]]
+    if (is.null(docs) || !is.data.frame(docs) || nrow(docs) == 0) {
+      next
+    }
+
+    deleted_here <- 0L
+
+    for (i in seq_len(nrow(docs))) {
+      result <- tryCatch(
+        dbm_delete_single_record(collection, docs[i, , drop = FALSE], db = db, url = url),
+        error = function(e) list(
+          status = "error",
+          count = 0L,
+          label = dbm_record_title(collection, docs[i, , drop = FALSE]),
+          reason = conditionMessage(e)
+        )
+      )
+
+      if (identical(result$status, "deleted")) {
+        deleted_here <- deleted_here + as.integer(result$count %||% 0L)
+      } else if (identical(result$status, "skipped")) {
+        report$skipped <- dplyr::bind_rows(
+          report$skipped,
+          data.frame(
+            collection = collection,
+            label = result$label %||% dbm_collection_label(collection),
+            reason = result$reason %||% "Skipped.",
+            stringsAsFactors = FALSE
+          )
+        )
+      } else if (!is.null(result$reason) && nzchar(result$reason)) {
+        report$errors <- c(
+          report$errors,
+          paste0(dbm_collection_label(collection), " (", result$label %||% "record", "): ", result$reason)
+        )
+      }
+    }
+
+    if (deleted_here > 0) {
+      report$deleted[[collection]] <- deleted_here
+    }
+  }
+
+  report$total_deleted <- sum(as.numeric(report$deleted), na.rm = TRUE)
+
+  if (report$total_deleted == 0 && !length(report$errors) && nrow(report$skipped) == 0) {
+    report$reason <- "No matching documents were found to delete."
+  }
+
+  report
+}
+
+dbm_delete_record <- function(collection, id = NULL, record = NULL,
+                              db = DB_NAME, url = MONGO_URL) {
+  plan <- dbm_plan_deletion(
+    collection = collection,
+    id = id,
+    record = record,
+    db = db,
+    url = url
+  )
+  dbm_execute_deletion_plan(plan, db = db, url = url)
+}
+
+dbm_delete_report_lines <- function(report) {
+  if (is.null(report) || length(report) == 0) {
+    return("No deletion report is available.")
+  }
+
+  requested <- report$requested %||% list()
+  requested_collection <- requested$collection_label %||% dbm_collection_label(requested$collection %||% "record")
+  requested_title <- requested$title %||% "Unknown object"
+  requested_id <- as.character(requested$id %||% "")
+
+  lines <- c(
+    paste0("Requested type: ", requested_collection),
+    paste0("Requested object: ", requested_title),
+    paste0("Requested ID: ", if (nzchar(requested_id)) requested_id else "—")
+  )
+
+  deleted <- report$deleted %||% numeric(0)
+  if (length(deleted) > 0) {
+    delete_lines <- paste0(
+      "Deleted from ",
+      vapply(names(deleted), dbm_collection_label, character(1)),
+      ": ",
+      as.integer(deleted)
+    )
+    lines <- c(lines, delete_lines)
+  } else {
+    lines <- c(lines, paste0("Deleted objects: 0", if (!is.null(report$reason) && nzchar(report$reason)) paste0(" (", report$reason, ")") else ""))
+  }
+
+  skipped <- report$skipped
+  if (is.data.frame(skipped) && nrow(skipped) > 0) {
+    skip_lines <- paste0(
+      "Skipped ",
+      vapply(skipped$collection, dbm_collection_label, character(1)),
+      ": ",
+      skipped$label,
+      " (",
+      skipped$reason,
+      ")"
+    )
+    lines <- c(lines, skip_lines)
+  }
+
+  if (length(report$errors %||% character(0)) > 0) {
+    lines <- c(lines, paste0("Error: ", report$errors))
+  }
+
+  lines
+}
+
 dbm_delete_report_text <- function(report) {
-  if (is.null(report) || length(report) == 0) return("Nothing was deleted.")
-  kept <- report[as.numeric(report) > 0]
-  if (length(kept) == 0) return("Nothing was deleted.")
-  paste(paste(names(kept), kept, sep = ": "), collapse = " | ")
+  paste(dbm_delete_report_lines(report), collapse = " | ")
 }
 
 # ---- Summary text for confirmation modal ----------------------------------

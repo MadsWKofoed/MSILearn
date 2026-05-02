@@ -417,7 +417,8 @@ database_management_module_ui <- function(id) {
               tags$div(
                 class = "dbm-danger-note",
                 "Deletion is permanent. Cascading cleanup is applied where records have dependent datasets, artifacts, annotations, model runs, or related metadata."
-              )
+              ),
+              uiOutput(ns("delete_report_ui"))
             )
           )
         ),
@@ -478,6 +479,8 @@ database_management_module_server <- function(id) {
     records_display_rv <- reactiveVal(data.frame())
     selected_id_rv <- reactiveVal(NULL)
     selected_record_rv <- reactiveVal(NULL)
+    delete_plan_rv <- reactiveVal(NULL)
+    last_delete_report_rv <- reactiveVal(NULL)
 
     dbm_selectize_options <- function(placeholder) {
       list(
@@ -901,6 +904,22 @@ database_management_module_server <- function(id) {
       )
     })
 
+    output$delete_report_ui <- renderUI({
+      report <- last_delete_report_rv()
+      if (is.null(report) || length(report) == 0) {
+        return(NULL)
+      }
+
+      tags$div(
+        class = "dbm-helper",
+        tags$div(class = "dbm-label", style = "margin-bottom:10px;", "Last Delete Report"),
+        tags$pre(
+          style = "margin:0; white-space:pre-wrap; word-break:break-word; background:#f8fafc; border:1px solid #e5e7eb; padding:12px; border-radius:10px;",
+          paste(dbm_delete_report_lines(report), collapse = "\n")
+        )
+      )
+    })
+
     observe({
       rec <- selected_record_rv()
       coll <- input$collection %||% ""
@@ -1054,16 +1073,10 @@ database_management_module_server <- function(id) {
 
     observeEvent(input$delete_selected, {
       rec <- selected_record_rv()
-      rid <- selected_id_rv()
       collection <- input$collection %||% ""
       policy <- dbm_delete_policy(collection, rec)
 
-      if ((is.null(rid) || !nzchar(rid)) && !is.null(rec) && nrow(rec) > 0) {
-        rid <- dbm_record_id(collection, rec)
-        selected_id_rv(if (!is.na(rid) && nzchar(rid)) rid else NULL)
-      }
-
-      if (is.null(rec) || nrow(rec) == 0 || is.null(rid) || !nzchar(rid)) {
+      if (is.null(rec) || nrow(rec) == 0) {
         showNotification(
           "Select a row in the Records table before deleting.",
           type = "warning",
@@ -1077,25 +1090,55 @@ database_management_module_server <- function(id) {
         return()
       }
 
-      extra_warning <- NULL
-      if (identical(collection, "studies")) {
-        extra_warning <- tags$div(
-          class = "alert alert-danger",
-          style = "margin-top:10px; margin-bottom:10px;",
-          tags$b("Study deletion is cascading."),
-          tags$br(),
-          "This will also remove dependent samples, artifacts, annotations, datasets, model runs, and related metadata."
-        )
+      plan <- dbm_plan_deletion(collection = collection, record = rec)
+      delete_plan_rv(plan)
+
+      if (!isTRUE(plan$requested$found)) {
+        showNotification(plan$reason %||% "The selected object no longer exists.", type = "warning", duration = 8)
+        return()
       }
+
+      preview_tbl <- dbm_plan_summary_table(plan)
+      preview_total <- sum(preview_tbl$count, na.rm = TRUE)
+
+      preview_ui <- if (nrow(preview_tbl) > 0) {
+        tags$ul(
+          style = "margin-bottom:0;",
+          lapply(seq_len(nrow(preview_tbl)), function(i) {
+            tags$li(paste0(preview_tbl$label[i], ": ", preview_tbl$count[i]))
+          })
+        )
+      } else {
+        tags$p("No dependent objects were found.")
+      }
+
+      warning_ui <- tags$div(
+        class = "alert alert-danger",
+        style = "margin-top:10px; margin-bottom:10px;",
+        tags$b("Cascade preview"),
+        tags$br(),
+        paste0(
+          "This action will remove ",
+          format(preview_total, big.mark = ","),
+          " object(s) across ",
+          format(nrow(preview_tbl), big.mark = ","),
+          " collection(s)."
+        )
+      )
 
       showModal(modalDialog(
         title = "Confirm deletion",
-        tags$p(dbm_record_title(collection, rec)),
+        tags$p(plan$requested$title %||% dbm_record_title(collection, rec)),
         tags$p(tags$b("This operation cannot be undone.")),
-        if (identical(collection, "alignment_references") && !dbm_is_protected_record("alignment_references", rec)) {
-          tags$p("This will remove the uploaded alignment reference from the shared database.")
+        warning_ui,
+        preview_ui,
+        if (length(plan$errors %||% character(0)) > 0) {
+          tags$div(
+            class = "alert alert-warning",
+            style = "margin-top:10px; margin-bottom:0;",
+            paste(plan$errors, collapse = "\n")
+          )
         },
-        extra_warning,
         easyClose = TRUE,
         footer = tagList(
           modalButton("Cancel"),
@@ -1105,29 +1148,27 @@ database_management_module_server <- function(id) {
     }, ignoreInit = TRUE)
 
     observeEvent(input$confirm_delete_btn, {
-      rid <- selected_id_rv()
       collection <- input$collection %||% ""
       rec <- selected_record_rv()
-
-      if ((is.null(rid) || !nzchar(rid)) && !is.null(rec) && nrow(rec) > 0) {
-        rid <- dbm_record_id(collection, rec)
-        selected_id_rv(if (!is.na(rid) && nzchar(rid)) rid else NULL)
-      }
-
-      if (is.null(rid) || !nzchar(rid)) {
+      if (is.null(rec) || nrow(rec) == 0) {
         removeModal()
-        showNotification("The selected row has no valid database ID. Refresh the table and try again.", type = "warning", duration = 6)
+        showNotification("The selected row is no longer available. Refresh the table and try again.", type = "warning", duration = 6)
         return()
       }
 
       removeModal()
 
       tryCatch({
-        report <- dbm_delete_record(collection, rid)
-        msg <- dbm_delete_report_text(report)
+        plan <- delete_plan_rv() %||% dbm_plan_deletion(collection = collection, record = rec)
+        report <- dbm_execute_deletion_plan(plan)
+        last_delete_report_rv(report)
 
         cur_study <- isolate(input$study_filter %||% "")
         cur_sample <- isolate(input$sample_filter %||% "")
+
+        selected_id_rv(NULL)
+        selected_record_rv(NULL)
+        delete_plan_rv(NULL)
 
         refresh_counts()
 
@@ -1144,9 +1185,17 @@ database_management_module_server <- function(id) {
         )
 
         showNotification(
-          paste("Deleted.", msg),
-          type = "message",
-          duration = 10
+          if (report$total_deleted > 0) {
+            paste0(
+              "Delete finished. ",
+              format(report$total_deleted, big.mark = ","),
+              " object(s) were removed."
+            )
+          } else {
+            report$reason %||% "Delete finished, but no objects were removed."
+          },
+          type = if (report$total_deleted > 0) "message" else "warning",
+          duration = 12
         )
       }, error = function(e) {
         showNotification(
