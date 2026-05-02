@@ -475,6 +475,7 @@ database_management_module_server <- function(id) {
     ns <- session$ns
 
     counts_rv <- reactiveVal(data.frame())
+    overview_rv <- reactiveVal(NULL)
     records_raw_rv <- reactiveVal(data.frame())
     records_display_rv <- reactiveVal(data.frame())
     selected_id_rv <- reactiveVal(NULL)
@@ -569,6 +570,44 @@ database_management_module_server <- function(id) {
       counts_rv(dbm_collection_counts())
     }
 
+    refresh_overview <- function() {
+      overview_rv(dbm_overview_stats())
+    }
+
+    refresh_dashboard <- function() {
+      refresh_counts()
+      refresh_overview()
+    }
+
+    db_change_snapshot <- reactivePoll(
+      intervalMillis = 4000,
+      session = session,
+      checkFunc = function() {
+        counts <- dbm_collection_counts()
+        overview <- dbm_overview_stats()
+        paste(
+          paste(counts$key, counts$records, sep = "=", collapse = "|"),
+          overview$total_db_bytes %||% "NA",
+          overview$managed_file_bytes %||% "NA",
+          overview$gridfs_file_count %||% "NA",
+          overview$alignment_reference_total %||% "NA",
+          sep = "||"
+        )
+      },
+      valueFunc = function() {
+        list(
+          counts = dbm_collection_counts(),
+          overview = dbm_overview_stats()
+        )
+      }
+    )
+
+    observeEvent(db_change_snapshot(), {
+      snapshot <- db_change_snapshot()
+      counts_rv(snapshot$counts)
+      overview_rv(snapshot$overview)
+    }, ignoreInit = FALSE)
+
     current_collection_label <- reactive({
       idx <- match(input$collection %||% dbm_catalog()$key[1], dbm_catalog()$key)
       if (is.na(idx)) "—" else dbm_catalog()$label[idx]
@@ -616,7 +655,7 @@ database_management_module_server <- function(id) {
     }
 
     observeEvent(input$refresh_all, {
-      refresh_counts()
+      refresh_dashboard()
       selected_filters <- sync_filter_inputs(
         collection = input$collection %||% dbm_catalog()$key[1],
         selected_study = input$study_filter %||% "",
@@ -673,7 +712,7 @@ database_management_module_server <- function(id) {
     }, ignoreInit = TRUE)
 
     session$onFlushed(function() {
-      refresh_counts()
+      refresh_dashboard()
       sync_filter_inputs(
         collection = dbm_catalog()$key[1],
         selected_study = "",
@@ -718,7 +757,8 @@ database_management_module_server <- function(id) {
 
     output$dbm_session_ui <- renderUI({
       counts <- counts_rv()
-      overview <- dbm_overview_stats()
+      overview <- overview_rv()
+      req(!is.null(overview))
       total_records <- if (nrow(counts) > 0) sum(counts$records, na.rm = TRUE) else 0
       largest_collection <- overview$largest_collection
       if (!length(largest_collection) || is.na(largest_collection) || !nzchar(largest_collection)) {
@@ -740,7 +780,9 @@ database_management_module_server <- function(id) {
     })
 
     output$overview_cards_ui <- renderUI({
-      stats <- dbm_overview_stats()
+      counts_rv()
+      stats <- overview_rv()
+      req(!is.null(stats))
       largest_name <- stats$largest_collection
       if (!length(largest_name) || is.na(largest_name) || !nzchar(largest_name)) {
         largest_name <- "—"
@@ -1170,7 +1212,7 @@ database_management_module_server <- function(id) {
         selected_record_rv(NULL)
         delete_plan_rv(NULL)
 
-        refresh_counts()
+        refresh_dashboard()
 
         selected_filters <- sync_filter_inputs(
           collection = collection,
