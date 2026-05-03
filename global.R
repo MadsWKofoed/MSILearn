@@ -355,15 +355,15 @@ body{
 }
 
 .app-shell .btn-primary{
-  background: #f4c15d;
-  border-color: #e7b24a;
+  background: #f6ddb0;
+  border-color: #e8cea0;
   color: #14213d;
   font-weight: 700;
 }
 
 .app-shell .btn-success{
-  background: #f7cd79;
-  border-color: #e7b24a;
+  background: #f8e4bc;
+  border-color: #e8cea0;
   color: #14213d;
   font-weight: 700;
 }
