@@ -40,24 +40,30 @@ body{
 .navbar-default .navbar-nav > li > a{
   color: #52606d !important;
   font-weight: 700;
-  border-radius: 999px 999px 0 0;
-  margin-top: 10px;
-  padding-top: 12px;
-  padding-bottom: 12px;
+  font-size: 15px;
+  border-radius: 0;
+  margin-top: 8px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+  padding-left: 16px;
+  padding-right: 16px;
+  border-bottom: 3px solid transparent;
 }
 
 .navbar-default .navbar-nav > li > a:hover,
 .navbar-default .navbar-nav > li > a:focus{
   color: #14213d !important;
-  background: rgba(255,255,255,0.7) !important;
+  background: transparent !important;
+  border-bottom-color: rgba(20, 33, 61, 0.18);
 }
 
 .navbar-default .navbar-nav > .active > a,
 .navbar-default .navbar-nav > .active > a:hover,
 .navbar-default .navbar-nav > .active > a:focus{
   color: #14213d !important;
-  background: #ffffff !important;
-  box-shadow: 0 -2px 0 #0f766e inset;
+  background: transparent !important;
+  border-bottom-color: #1d4ed8 !important;
+  box-shadow: none;
 }
 
 .app-shell{
@@ -349,14 +355,16 @@ body{
 }
 
 .app-shell .btn-primary{
-  background: #0f766e;
-  border-color: #0f766e;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
   font-weight: 700;
 }
 
 .app-shell .btn-success{
-  background: #0f766e;
-  border-color: #0f766e;
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
   font-weight: 700;
 }
 
