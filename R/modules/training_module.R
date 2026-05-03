@@ -2015,6 +2015,20 @@ training_module_server <- function(id) {
       dplyr::left_join(roc_df, auc_labels[, c("class", "label")], by = "class")
     }
 
+    extract_byclass_df_from_metrics <- function(metrics, key = "byclass_table") {
+      byclass_obj <- unwrap_nested_metric(metrics[[key]])
+      if (is.null(byclass_obj) || !is.data.frame(byclass_obj) || nrow(byclass_obj) == 0) return(NULL)
+      if (!"Class" %in% names(byclass_obj)) return(NULL)
+
+      out <- byclass_obj
+      out$Class <- as.character(out$Class)
+      numeric_cols <- setdiff(names(out), "Class")
+      for (col in numeric_cols) {
+        out[[col]] <- suppressWarnings(as.numeric(out[[col]]))
+      }
+      out
+    }
+
     extract_importance_df_from_metrics <- function(metrics, key = "permutation_importance") {
       imp_obj <- unwrap_nested_metric(metrics[[key]])
       if (is.null(imp_obj) || !is.data.frame(imp_obj) || nrow(imp_obj) == 0) return(NULL)
@@ -2148,6 +2162,7 @@ training_module_server <- function(id) {
       cv_roc_df <- extract_roc_df_from_metrics(m, "cv_roc_data")
       test_cm_df <- extract_cm_df_from_metrics(m, "cm_table")
       test_roc_df <- extract_roc_df_from_metrics(m, "roc_data")
+      byclass_df <- extract_byclass_df_from_metrics(m)
       importance_df <- extract_importance_df_from_metrics(m)
       importance_message <- first_chr(m[["permutation_importance_message"]], "")
       cv_warning <- first_chr(m[["cv_warning"]], "")
@@ -2155,7 +2170,37 @@ training_module_server <- function(id) {
       bc_keys <- grep("^byclass_Sensitivity__", names(m), value = TRUE)
       class_names <- gsub("^byclass_Sensitivity__", "", bc_keys)
 
-      perclass_tbl <- if (has_test_set && length(class_names) > 0) {
+      perclass_tbl <- if (has_test_set && !is.null(byclass_df) && nrow(byclass_df) > 0) {
+        metric_value <- function(row, candidates) {
+          hit <- candidates[candidates %in% names(row)][1]
+          if (is.na(hit) || !nzchar(hit)) return("—")
+          val <- suppressWarnings(as.numeric(row[[hit]][1]))
+          if (!is.finite(val)) "—" else sprintf("%.4f", val)
+        }
+
+        tags$table(
+          class = "table table-condensed table-bordered",
+          style = "font-size:13px; margin-top:8px;",
+          tags$thead(tags$tr(
+            tags$th("Class"),
+            tags$th("Sensitivity"), tags$th("Specificity"),
+            tags$th("Precision"), tags$th("Recall"),
+            tags$th("F1"), tags$th("Bal. Accuracy")
+          )),
+          tags$tbody(lapply(seq_len(nrow(byclass_df)), function(i) {
+            row_i <- byclass_df[i, , drop = FALSE]
+            tags$tr(
+              tags$td(tags$b(as.character(row_i$Class[1]))),
+              tags$td(metric_value(row_i, c("Sensitivity"))),
+              tags$td(metric_value(row_i, c("Specificity"))),
+              tags$td(metric_value(row_i, c("Precision", "Pos Pred Value"))),
+              tags$td(metric_value(row_i, c("Recall", "Sensitivity"))),
+              tags$td(metric_value(row_i, c("F1"))),
+              tags$td(metric_value(row_i, c("Balanced Accuracy")))
+            )
+          }))
+        )
+      } else if (has_test_set && length(class_names) > 0) {
         safe_key <- function(metric, cls) {
           key <- paste0("byclass_", metric, "__", cls)
           num <- first_num(m[[key]])

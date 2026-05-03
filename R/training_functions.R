@@ -27,6 +27,159 @@ observation_weights_from_labels <- function(labels, class_weights) {
   class_weights[as.character(labels)]
 }
 
+new_class_label_encoder <- function(original_levels, safe_levels = NULL) {
+  original_levels <- as.character(original_levels %||% character(0))
+  original_levels <- original_levels[!is.na(original_levels)]
+
+  if (is.null(safe_levels)) {
+    safe_levels <- make.names(original_levels, unique = TRUE)
+  }
+
+  safe_levels <- as.character(safe_levels %||% character(0))
+
+  if (length(original_levels) != length(safe_levels)) {
+    stop("Class label encoder requires matching original/safe level lengths.")
+  }
+
+  map_df <- data.frame(
+    original_label = original_levels,
+    safe_label = safe_levels,
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    original_levels = original_levels,
+    safe_levels = safe_levels,
+    original_to_safe = stats::setNames(safe_levels, original_levels),
+    safe_to_original = stats::setNames(original_levels, safe_levels),
+    map_df = map_df
+  )
+}
+
+make_class_label_encoder <- function(labels) {
+  original_levels <- if (is.factor(labels)) {
+    levels(labels)
+  } else {
+    unique(as.character(labels))
+  }
+
+  new_class_label_encoder(original_levels)
+}
+
+identity_class_label_encoder <- function(levels) {
+  new_class_label_encoder(levels, safe_levels = levels)
+}
+
+normalize_class_label_encoder <- function(raw_map = NULL, fallback_levels = NULL) {
+  obj <- raw_map
+
+  repeat {
+    if (is.null(obj) || is.data.frame(obj) || !is.list(obj) || length(obj) != 1L) break
+    obj <- obj[[1]]
+  }
+
+  if (is.list(obj) && !is.data.frame(obj)) {
+    if (!is.null(obj$map_df)) {
+      obj <- obj$map_df
+    } else if (!is.null(obj$original_label) && !is.null(obj$safe_label)) {
+      obj <- data.frame(
+        original_label = as.character(obj$original_label),
+        safe_label = as.character(obj$safe_label),
+        stringsAsFactors = FALSE
+      )
+    } else if (!is.null(obj$original_levels) && !is.null(obj$safe_levels)) {
+      obj <- data.frame(
+        original_label = as.character(obj$original_levels),
+        safe_label = as.character(obj$safe_levels),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (is.data.frame(obj) && all(c("original_label", "safe_label") %in% names(obj))) {
+    return(new_class_label_encoder(
+      original_levels = as.character(obj$original_label),
+      safe_levels = as.character(obj$safe_label)
+    ))
+  }
+
+  if (!is.null(fallback_levels)) {
+    return(identity_class_label_encoder(as.character(fallback_levels)))
+  }
+
+  NULL
+}
+
+sanitize_class_labels <- function(labels, label_encoder) {
+  if (is.null(label_encoder)) return(as.factor(labels))
+
+  label_values <- as.character(labels)
+  safe_values <- unname(label_encoder$original_to_safe[label_values])
+
+  missing_mask <- !is.na(label_values) & is.na(safe_values)
+  if (any(missing_mask)) {
+    stop(
+      "Missing sanitized class mapping for labels: ",
+      paste(unique(label_values[missing_mask]), collapse = ", ")
+    )
+  }
+
+  factor(safe_values, levels = label_encoder$safe_levels)
+}
+
+restore_original_class_labels <- function(labels, label_encoder, as_factor = TRUE) {
+  if (is.null(label_encoder)) {
+    if (isTRUE(as_factor)) return(as.factor(labels))
+    return(as.character(labels))
+  }
+
+  label_values <- as.character(labels)
+  original_values <- unname(label_encoder$safe_to_original[label_values])
+  passthrough_mask <- !is.na(label_values) & (is.na(original_values) | !nzchar(original_values))
+  original_values[passthrough_mask] <- label_values[passthrough_mask]
+
+  if (!isTRUE(as_factor)) {
+    return(original_values)
+  }
+
+  factor(original_values, levels = label_encoder$original_levels)
+}
+
+restore_probability_column_names <- function(prob_df, label_encoder) {
+  if (is.null(label_encoder) || is.null(prob_df) || !is.data.frame(prob_df)) {
+    return(prob_df)
+  }
+
+  mapped_cols <- unname(label_encoder$safe_to_original[colnames(prob_df)])
+  keep_original <- is.na(mapped_cols) | !nzchar(mapped_cols)
+  mapped_cols[keep_original] <- colnames(prob_df)[keep_original]
+  colnames(prob_df) <- mapped_cols
+  prob_df
+}
+
+build_byclass_metrics_table <- function(byclass_obj, label_encoder = NULL) {
+  if (is.null(byclass_obj)) return(NULL)
+
+  if (is.null(dim(byclass_obj))) {
+    byclass_df <- as.data.frame(t(as.matrix(byclass_obj)), stringsAsFactors = FALSE)
+    byclass_df$Class <- "Overall"
+  } else {
+    byclass_df <- as.data.frame(byclass_obj, stringsAsFactors = FALSE)
+    byclass_df$Class <- rownames(byclass_df)
+  }
+
+  byclass_df$Class <- sub("^Class: ", "", as.character(byclass_df$Class))
+  byclass_df$Class <- restore_original_class_labels(
+    byclass_df$Class,
+    label_encoder = label_encoder,
+    as_factor = FALSE
+  )
+
+  byclass_df <- byclass_df[, c("Class", setdiff(names(byclass_df), "Class")), drop = FALSE]
+  rownames(byclass_df) <- NULL
+  byclass_df
+}
+
 
 # ---------------------------------------------------------------------------
 # Pixel-wise normalisation of feature matrices used for training/prediction.
@@ -773,7 +926,7 @@ compute_multiclass_roc_payload <- function(truth, prob_df, class_levels) {
   roc_data
 }
 
-extract_best_cv_predictions <- function(fit, class_levels) {
+extract_best_cv_predictions <- function(fit, class_levels, label_encoder = NULL) {
   cv_pred_df <- fit$pred
   if (is.null(cv_pred_df) || !is.data.frame(cv_pred_df) || nrow(cv_pred_df) == 0) {
     return(NULL)
@@ -793,9 +946,20 @@ extract_best_cv_predictions <- function(fit, class_levels) {
 
   if (nrow(cv_pred_df) == 0) return(NULL)
 
-  truth_cv <- factor(cv_pred_df$obs, levels = class_levels)
-  preds_cv <- factor(cv_pred_df$pred, levels = class_levels)
-  probs_cv <- cv_pred_df[, intersect(class_levels, names(cv_pred_df)), drop = FALSE]
+  encoded_levels <- if (is.null(label_encoder)) class_levels else label_encoder$safe_levels
+
+  truth_cv <- factor(cv_pred_df$obs, levels = encoded_levels)
+  preds_cv <- factor(cv_pred_df$pred, levels = encoded_levels)
+  probs_cv <- cv_pred_df[, intersect(encoded_levels, names(cv_pred_df)), drop = FALSE]
+
+  if (!is.null(label_encoder)) {
+    truth_cv <- restore_original_class_labels(truth_cv, label_encoder = label_encoder)
+    preds_cv <- restore_original_class_labels(preds_cv, label_encoder = label_encoder)
+    probs_cv <- restore_probability_column_names(probs_cv, label_encoder = label_encoder)
+  } else {
+    truth_cv <- factor(truth_cv, levels = class_levels)
+    preds_cv <- factor(preds_cv, levels = class_levels)
+  }
 
   list(
     pred_df = cv_pred_df,
@@ -1257,6 +1421,14 @@ train_ranger_from_dataset <- function(
     test_X <- normalize_feature_matrix(test_X, normalize_method)
   }
 
+  label_encoder <- make_class_label_encoder(train_y)
+  train_y_safe <- sanitize_class_labels(train_y, label_encoder = label_encoder)
+  test_y_safe <- if (has_test_data) {
+    sanitize_class_labels(test_y, label_encoder = label_encoder)
+  } else {
+    NULL
+  }
+
   message("[train] Train pixels: ", nrow(train_X),
           " | Test pixels: ", if (has_test_data) nrow(test_X) else 0L,
           " | Features: ", ncol(train_X),
@@ -1274,11 +1446,15 @@ train_ranger_from_dataset <- function(
   set.seed(seed)
 
   # ── 2. Compute class weights ──────────────────────────────────────
-  cw    <- compute_class_weights(train_y)
-  obs_w <- observation_weights_from_labels(train_y, cw)
+  cw    <- compute_class_weights(train_y_safe)
+  obs_w <- observation_weights_from_labels(train_y_safe, cw)
+  cw_display <- stats::setNames(
+    as.numeric(cw),
+    unname(label_encoder$safe_to_original[names(cw)])
+  )
 
   message("[train] Class weights: ",
-          paste(names(cw), round(cw, 4), sep="=", collapse=", "))
+          paste(names(cw_display), round(cw_display, 4), sep="=", collapse=", "))
 
 
   # ── 2b. Setup parallel backend for CV ─────────────────────────────
@@ -1345,7 +1521,8 @@ train_ranger_from_dataset <- function(
     split_block_size = as.integer(split_info$block_size %||% NA_integer_),
     split_buffer_radius = as.numeric(split_info$buffer_radius %||% NA_real_),
     split_cv_folds = as.integer(split_info$cv_folds %||% NA_integer_),
-    split_min_pixels_per_block = as.integer(split_info$min_pixels_per_block %||% NA_integer_)
+    split_min_pixels_per_block = as.integer(split_info$min_pixels_per_block %||% NA_integer_),
+    class_label_map = list(label_encoder$map_df)
   )
 
   tune_grid <- expand.grid(
@@ -1376,7 +1553,7 @@ train_ranger_from_dataset <- function(
             fold = i,
             n_train = length(tr_idx),
             n_test = length(te_idx),
-            n_train_classes = length(unique(tr_y_i)),
+            n_train_classes = length(unique(as.character(tr_y_i))),
             n_test_classes = length(unique(te_y_i)),
             train_class_counts = paste(names(table(tr_y_i)), as.integer(table(tr_y_i)), collapse = "; "),
             test_class_counts  = paste(names(table(te_y_i)), as.integer(table(te_y_i)), collapse = "; "),
@@ -1446,7 +1623,7 @@ train_ranger_from_dataset <- function(
 
   fit <- caret::train(
     x            = train_X,
-    y            = train_y,
+    y            = train_y_safe,
     method       = "ranger",
     trControl    = ctrl,
     tuneGrid     = tune_grid,
@@ -1455,6 +1632,7 @@ train_ranger_from_dataset <- function(
     weights      = obs_w,
     num.threads  = num_threads
   )
+  fit$msi_class_label_encoder <- list(label_encoder$map_df)
   message("[train] Model fitting finished.")
   metrics_scalar <- list(
     evaluation_mode = evaluation_mode,
@@ -1519,7 +1697,11 @@ train_ranger_from_dataset <- function(
     metrics_scalar$cv_mean_f1       <- as.numeric(best_row$Mean_F1)
     metrics_scalar$cv_acc_sd        <- as.numeric(best_row$AccuracySD)
 
-    cv_pred_payload <- extract_best_cv_predictions(fit, levels(train_y))
+    cv_pred_payload <- extract_best_cv_predictions(
+      fit,
+      class_levels = label_encoder$original_levels,
+      label_encoder = label_encoder
+    )
 
     if (is.null(cv_pred_payload)) {
       metrics_scalar$cv_warning <- "Cross-validation plots require savePredictions = 'final' and available fit$pred data."
@@ -1534,13 +1716,13 @@ train_ranger_from_dataset <- function(
       metrics_scalar$cv_macro_f1_from_predictions <- compute_macro_f1_from_predictions(
         truth = truth_cv,
         pred = preds_cv,
-        levels_ref = levels(train_y)
+        levels_ref = label_encoder$original_levels
       )
 
       roc_data_cv <- compute_multiclass_roc_payload(
         truth = truth_cv,
         prob_df = probs_cv,
-        class_levels = levels(train_y)
+        class_levels = label_encoder$original_levels
       )
       if (!is.null(roc_data_cv)) {
         metrics_scalar$cv_roc_data <- list(roc_data_cv)
@@ -1551,14 +1733,21 @@ train_ranger_from_dataset <- function(
   if (has_test_data) {
     message("[train] Starting prediction on held-out test set...")
 
-    preds <- factor(predict(fit, newdata = test_X), levels = levels(train_y))
-    truth_test <- factor(test_y, levels = levels(train_y))
+    preds <- restore_original_class_labels(
+      factor(predict(fit, newdata = test_X), levels = label_encoder$safe_levels),
+      label_encoder = label_encoder
+    )
+    truth_test <- restore_original_class_labels(
+      factor(test_y_safe, levels = label_encoder$safe_levels),
+      label_encoder = label_encoder
+    )
     cm <- caret::confusionMatrix(preds, truth_test)
 
     metrics_scalar$test_accuracy <- as.numeric(cm$overall["Accuracy"])
     metrics_scalar$test_kappa <- as.numeric(cm$overall["Kappa"])
     metrics_scalar$test_acc_lower <- as.numeric(cm$overall["AccuracyLower"])
     metrics_scalar$test_acc_upper <- as.numeric(cm$overall["AccuracyUpper"])
+    metrics_scalar$byclass_table <- list(build_byclass_metrics_table(cm$byClass, label_encoder = label_encoder))
 
     bc <- as.data.frame(cm$byClass)
     for (col in colnames(bc)) {
@@ -1574,11 +1763,14 @@ train_ranger_from_dataset <- function(
 
     metrics_scalar$cm_table <- list(compute_relative_cm_table(cm))
 
-    probs_test <- predict(fit, newdata = test_X, type = "prob")
+    probs_test <- restore_probability_column_names(
+      predict(fit, newdata = test_X, type = "prob"),
+      label_encoder = label_encoder
+    )
     roc_data_test <- compute_multiclass_roc_payload(
       truth = truth_test,
       prob_df = probs_test,
-      class_levels = levels(train_y)
+      class_levels = label_encoder$original_levels
     )
     if (!is.null(roc_data_test)) {
       metrics_scalar$roc_data <- list(roc_data_test)

@@ -245,7 +245,27 @@ run_prediction_from_upload <- function(run_id,
 
 predict_from_model_run <- function(run_id, new_X, db = DB_NAME, url = MONGO_URL) {
   message("[predict] Loading model run: ", run_id)
+  run_row <- get_model_run(run_id, db, url)
+  if (is.null(run_row) || nrow(run_row) == 0) {
+    stop("Model run not found: ", run_id)
+  }
+
   fit <- load_model_run(run_id, db, url)
+  run_hyperparams <- extract_params(run_row$hyperparams)
+  fallback_levels <- tryCatch({
+    if (!is.null(fit$levels)) {
+      fit$levels
+    } else if (!is.null(fit$trainingData) && ".outcome" %in% names(fit$trainingData)) {
+      levels(fit$trainingData$.outcome)
+    } else {
+      NULL
+    }
+  }, error = function(e) NULL)
+
+  label_encoder <- normalize_class_label_encoder(
+    raw_map = fit$msi_class_label_encoder %||% run_hyperparams$class_label_map %||% NULL,
+    fallback_levels = fallback_levels
+  )
 
   if (!is.null(fit$coefnames)) {
     train_cols <- fit$coefnames
@@ -272,6 +292,7 @@ predict_from_model_run <- function(run_id, new_X, db = DB_NAME, url = MONGO_URL)
   new_X <- new_X[, train_cols, drop = FALSE]
 
   preds <- predict(fit, newdata = new_X)
+  preds <- restore_original_class_labels(preds, label_encoder = label_encoder)
   message("[predict] Predicted ", length(preds), " pixels.")
   preds
 }
