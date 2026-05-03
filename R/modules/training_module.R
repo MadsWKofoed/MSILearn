@@ -15,7 +15,7 @@ training_module_ui <- function(id) {
             app_sidebar_step(
               ns("step_create_dataset"),
               "1",
-              "Create New Dataset (Optional)",
+              "Create New Dataset",
               status = app_step_status("Optional"),
               open = FALSE,
               tags$div(
