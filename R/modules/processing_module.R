@@ -123,13 +123,8 @@ processing_module_ui <- function(id) {
               conditionalPanel(
                 condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
                 selectInput(ns("ref_csv_mongo"), "Select reference:", choices = "Loading...")
-              )
-            ),
-            app_sidebar_step(
-              ns("step_pipeline"),
-              "4",
-              "Pipeline",
-              status = app_step_status("Run"),
+              ),
+              tags$div(class = "app-divider"),
               tags$div(
                 class = "app-helper",
                 tags$strong("Preview"),
