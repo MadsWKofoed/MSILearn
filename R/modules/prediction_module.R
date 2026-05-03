@@ -5,145 +5,98 @@ prediction_module_ui <- function(id) {
 
   tabPanel(
     "Prediction",
-    div(
-      class = "app-page",
-      app_page_header(
-        title = "Prediction Workspace",
-        subtitle = "Select a stored model run, upload a fresh raw MSI pair, and review prediction outputs in the same workflow-oriented layout used across the app.",
-        badge = "Step 4 of 4",
-        icon_name = "chart-line"
-      ),
-      app_sidebar_layout(
-        ns = ns,
-        module_key = "prediction_sidebar",
-        sidebar_title = "Prediction Controls",
-        sidebar_subtitle = "Select the trained model context first, then upload raw data for inference in a clear two-step workflow.",
-        sidebar_icon = "upload",
-        sidebar_hint = "Predict",
-        sidebar = tagList(
-          app_workflow_step(
-            ns = ns,
-            step_id = "step_run_select",
-            number = "1",
-            title = "Select trained model",
-            status = uiOutput(ns("step_run_select_status")),
-            open = TRUE,
-            tags$div(
-              class = "workflow-lead",
-              "Filter the available model runs and choose the training context you want to apply to the new raw sample."
-            ),
-            actionButton(ns("refresh_runs"), "Refresh model runs", class = "btn-sm btn-default"),
-            br(), br(),
-            selectInput(
-              ns("run_filter_study"),
-              "Study:",
-              choices = c("All studies" = "__all__"),
-              width = "100%"
-            ),
-            selectInput(
-              ns("run_filter_dataset"),
-              "Dataset:",
-              choices = c("All datasets" = "__all__"),
-              width = "100%"
-            ),
-            selectInput(
-              ns("run_filter_eval_mode"),
-              "Evaluation mode:",
-              choices = c(
-                "All" = "__all__",
-                "CV only" = "cv_only",
-                "CV + held-out test" = "cv_plus_test"
-              ),
-              width = "100%"
-            ),
-            selectInput(
-              ns("run_filter_pipeline"),
-              "Processing pipeline:",
-              choices = c("All pipelines" = "__all__"),
-              width = "100%"
-            ),
-            selectInput(
-              ns("run_filter_normalize"),
-              "Normalisation:",
-              choices = c("All" = "__all__"),
-              width = "100%"
-            ),
-            selectInput(
-              ns("run_filter_model_type"),
-              "Model type:",
-              choices = c("All" = "__all__"),
-              width = "100%"
-            ),
-            DT::dataTableOutput(ns("run_table")),
-            tags$div(
-              style = "display:none;",
-              selectInput(
-                ns("run_id"),
-                "Trained model:",
-                choices = c("(loading...)" = ""),
-                width = "100%"
-              )
-            ),
-            uiOutput(ns("run_info_ui"))
+    fluidRow(
+      column(
+        4,
+        wellPanel(
+          h4("1. Select Model Run"),
+          actionButton(ns("refresh_runs"), "Refresh model runs", class = "btn-sm btn-default"),
+          br(), br(),
+          selectInput(
+            ns("run_filter_study"),
+            "Study:",
+            choices = c("All studies" = "__all__"),
+            width = "100%"
           ),
-          app_workflow_step(
-            ns = ns,
-            step_id = "step_prediction_upload",
-            number = "2",
-            title = "Upload and predict",
-            status = uiOutput(ns("step_prediction_upload_status")),
-            tags$div(
-              class = "workflow-lead",
-              "Upload one imzML and one ibd file. Prediction reuses the saved model run and the linked preprocessing settings exactly as before."
+          selectInput(
+            ns("run_filter_dataset"),
+            "Dataset:",
+            choices = c("All datasets" = "__all__"),
+            width = "100%"
+          ),
+          selectInput(
+            ns("run_filter_eval_mode"),
+            "Evaluation mode:",
+            choices = c(
+              "All" = "__all__",
+              "CV only" = "cv_only",
+              "CV + held-out test" = "cv_plus_test"
             ),
-            tags$p(
-              class = "help-block",
-              "Inference will reuse the stored model run, linked dataset, and resolved processing parameters exactly as before."
-            ),
-            fileInput(
-              ns("pred_files"),
-              "Upload one .imzML and one .ibd",
-              multiple = TRUE,
-              accept = c(".imzML", ".ibd")
-            ),
-            actionButton(
-              ns("run_prediction"),
-              "Run Prediction",
-              class = "btn-primary btn-lg",
-              style = "width:100%;"
-            )
-          )
+            width = "100%"
+          ),
+          selectInput(
+            ns("run_filter_pipeline"),
+            "Processing pipeline:",
+            choices = c("All pipelines" = "__all__"),
+            width = "100%"
+          ),
+          selectInput(
+            ns("run_filter_normalize"),
+            "Normalisation:",
+            choices = c("All" = "__all__"),
+            width = "100%"
+          ),
+          selectInput(
+            ns("run_filter_model_type"),
+            "Model type:",
+            choices = c("All" = "__all__"),
+            width = "100%"
+          ),
+          DT::dataTableOutput(ns("run_table")),
+          tags$div(style = "display:none;",
+          selectInput(
+            ns("run_id"),
+            "Trained model:",
+            choices = c("(loading...)" = ""),
+            width = "100%"
+          )),
+          uiOutput(ns("run_info_ui"))
         ),
-        main = fluidRow(
-          column(
-            4,
-            app_panel(
-              title = "Resolved Data Structure",
-              subtitle = "The selected run resolves back to the frozen dataset, preprocessing pipeline, and normalisation choices shown here.",
-              DT::DTOutput(ns("pipeline_info_table"))
-            ),
-            app_panel(
-              title = "Prediction Log",
-              subtitle = "Status messages and uploaded-file validation for the current prediction request.",
-              verbatimTextOutput(ns("prediction_log"))
-            ),
-            app_panel(
-              title = "Class Counts",
-              subtitle = "Predicted pixel totals by class for the current output map.",
-              DT::DTOutput(ns("class_count_table"))
-            )
+
+        wellPanel(
+          h4("2. Upload New Raw Data"),
+          fileInput(
+            ns("pred_files"),
+            "Upload one .imzML and one .ibd",
+            multiple = TRUE,
+            accept = c(".imzML", ".ibd")
           ),
-          column(
-            8,
-            wellPanel(
-              h4("Prediction Map"),
-              tags$p(
-                class = "help-block",
-                "View the predicted tissue classes spatially across the uploaded sample."
-              ),
-              plotOutput(ns("prediction_plot"), height = "700px")
-            )
+          actionButton(
+            ns("run_prediction"),
+            "Run Prediction",
+            class = "btn-primary btn-lg",
+            style = "width:100%;"
           )
+        )
+      ),
+
+      column(
+        3,
+        h4("Resolved Data Structure"),
+        DT::DTOutput(ns("pipeline_info_table")),
+        hr(),
+        h4("Prediction Log"),
+        verbatimTextOutput(ns("prediction_log")),
+        hr(),
+        h4("Class Counts"),
+        DT::DTOutput(ns("class_count_table"))
+      ),
+
+      column(
+        5,
+        wellPanel(
+          h4("Prediction Map"),
+          plotOutput(ns("prediction_plot"), height = "700px")
         )
       )
     )
@@ -169,29 +122,6 @@ prediction_module_server <- function(id) {
       )
     }
 
-    step_badge_ui <- function(text) {
-      tags$span(class = "workflow-step-status", text)
-    }
-
-    open_sidebar_step <- function(step = c("run_select", "prediction_upload")) {
-      step <- match.arg(step)
-
-      ids <- c(
-        run_select = ns("step_run_select"),
-        prediction_upload = ns("step_prediction_upload")
-      )
-
-      target <- ids[[step]]
-      js <- sprintf(
-        "$('#%s').collapse('hide');
-        $('#%s').collapse('hide');
-        $('#%s').collapse('show');",
-        ids[["run_select"]], ids[["prediction_upload"]], target
-      )
-
-      shinyjs::runjs(js)
-    }
-
     first_chr <- function(x, default = "—") {
       if (is.null(x) || length(x) == 0) return(default)
       as.character(x[[1]])
@@ -207,15 +137,6 @@ prediction_module_server <- function(id) {
       mode <- normalize_eval_mode(x)
       if (identical(mode, "cv_only")) "CV only" else "CV + held-out test"
     }
-
-    output$step_run_select_status <- renderUI({
-      if (nzchar(input$run_id %||% "")) step_badge_ui("Selected") else step_badge_ui("Choose run")
-    })
-
-    output$step_prediction_upload_status <- renderUI({
-      files <- input$pred_files
-      if (!is.null(files) && NROW(files) >= 2) step_badge_ui("Files ready") else step_badge_ui("Upload files")
-    })
 
     run_filter_all_value <- "__all__"
 
@@ -315,7 +236,7 @@ prediction_module_server <- function(id) {
       pipeline_ids <- pipeline_ids[nzchar(pipeline_ids)]
       pipeline_name_map <- stats::setNames(
         vapply(pipeline_ids, function(pid) {
-          format_processing_pipeline_label(pid)
+          tryCatch(as.character(get_pipeline(pid)$name[1] %||% pid), error = function(e) pid)
         }, character(1)),
         pipeline_ids
       )
@@ -331,10 +252,10 @@ prediction_module_server <- function(id) {
         metrics <- extract_params(row$metrics)
 
         study_id <- as.character(ds$study_id[1] %||% "")
-        study_name <- as.character(study_map[[study_id]] %||% lookup_study_label(study_id))
-        dataset_name <- as.character(ds$name[1] %||% lookup_dataset_label(dataset_id))
+        study_name <- as.character(study_map[[study_id]] %||% study_id)
+        dataset_name <- as.character(ds$name[1] %||% dataset_id)
         pipeline_id <- as.character(ds$pipeline_id[1] %||% "")
-        pipeline_name <- as.character(pipeline_name_map[[pipeline_id]] %||% format_processing_pipeline_label(pipeline_id))
+        pipeline_name <- as.character(pipeline_name_map[[pipeline_id]] %||% pipeline_id)
         eval_mode <- normalize_eval_mode(hp$evaluation_mode)
         test_acc <- suppressWarnings(as.numeric(hp$test_accuracy %||% metrics$test_accuracy %||% NA_real_))
         cv_acc <- suppressWarnings(as.numeric(hp$cv_mean_accuracy %||% metrics$cv_mean_accuracy %||% NA_real_))
@@ -530,17 +451,12 @@ prediction_module_server <- function(id) {
       }
     })
 
-    observeEvent(input$run_id, {
-      if (nzchar(input$run_id %||% "")) open_sidebar_step("prediction_upload")
-    }, ignoreInit = TRUE)
-
     observeEvent(input$run_table_rows_selected, {
       idx <- input$run_table_rows_selected
       df <- filtered_runs()
       if (is.null(idx) || length(idx) == 0 || is.null(df) || nrow(df) == 0) return()
       rid <- df$run_id[idx[1]]
       sync_run_id_input(selected_run_id = rid)
-      open_sidebar_step("prediction_upload")
     })
 
     selected_context <- reactive({
@@ -553,7 +469,7 @@ prediction_module_server <- function(id) {
       hp  <- ctx$hyperparams
       run_df <- run_browser_rv()
       run_row <- run_df[run_df$run_id == input$run_id, , drop = FALSE]
-      dataset_label <- if (nrow(run_row) == 1) run_row$dataset_name[1] else lookup_dataset_label(ctx$dataset_id)
+      dataset_label <- if (nrow(run_row) == 1) run_row$dataset_name[1] else ctx$dataset_id
       study_label <- if (nrow(run_row) == 1) run_row$study[1] else "—"
       eval_label <- if (nrow(run_row) == 1) run_row$evaluation_mode_label[1] else "—"
 
@@ -561,7 +477,8 @@ prediction_module_server <- function(id) {
         style = "margin-top:8px;",
         tags$div(
           style = "margin-bottom:6px;",
-          tags$b("Selected model context")
+          tags$b("Selected model run: "),
+          input$run_id
         ),
         tags$small(
           tags$b("Dataset: "), dataset_label, tags$br(),
@@ -582,7 +499,7 @@ prediction_module_server <- function(id) {
       hp  <- ctx$hyperparams
       run_df <- run_browser_rv()
       run_row <- run_df[run_df$run_id == input$run_id, , drop = FALSE]
-      dataset_label <- if (nrow(run_row) == 1) run_row$dataset_label[1] else lookup_dataset_label(ctx$dataset_id)
+      dataset_label <- if (nrow(run_row) == 1) run_row$dataset_label[1] else ctx$dataset_id
       study_label <- if (nrow(run_row) == 1) run_row$study[1] else "—"
       pipeline_label <- if (nrow(run_row) == 1) run_row$pipeline_name[1] else ctx$pipeline_name
       tbl <- data.frame(
@@ -677,7 +594,6 @@ prediction_module_server <- function(id) {
           )
         )
 
-        open_sidebar_step("prediction_upload")
         showNotification("Prediction complete.", type = "message")
       }, error = function(e) {
         add_log(paste0("ERROR: ", conditionMessage(e)))

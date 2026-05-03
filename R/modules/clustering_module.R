@@ -91,15 +91,7 @@ clustering_module_ui <- function(id) {
 
   tabPanel(
     "Clustering",
-    div(
-      class = "app-page",
-      app_page_header(
-        title = "Clustering & Annotation Lab",
-        subtitle = "Move from processed MSI data to interpretable tissue labels with a guided workflow for clustering, NDPI alignment, and annotation review.",
-        badge = "Step 2 of 4",
-        icon_name = "project-diagram"
-      ),
-      sidebarLayout(
+    sidebarLayout(
       sidebarPanel(
         width = 3,
 
@@ -586,7 +578,7 @@ clustering_module_ui <- function(id) {
         uiOutput(ns("cluster_layout")),
         textOutput(ns("status_text"))
       )
-    ))
+    )
   )
 }
 
@@ -1211,7 +1203,10 @@ clustering_module_server <- function(id) {
           updateSelectInput(session, "pipeline_select", choices = c("— no processed artifacts —" = ""))
         } else {
           labels <- vapply(pids, function(pid) {
-            format_processing_pipeline_label(pid)
+            tryCatch({
+              meta <- get_pipeline(pid)
+              paste0(meta$name[1], " (", substr(pid, 1, 8), "…)")
+            }, error = function(e) substr(pid, 1, 16))
           }, character(1))
           updateSelectInput(session, "pipeline_select", choices = c("— select —" = "", setNames(pids, labels)))
         }
@@ -2215,7 +2210,8 @@ clustering_module_server <- function(id) {
           tags$div(
             style = "color:green; margin-top:6px;",
             tags$b("✓ Committed"), tags$br(),
-            tags$small("Cluster artifact and annotations were saved to the database.")
+            tags$small("Artifact: ", substr(art_id, 1, 12), "…"), tags$br(),
+            tags$small("Annotation: ", substr(ann_id, 1, 12), "…")
           )
         )
         showNotification("Committed to database.", type = "message")
