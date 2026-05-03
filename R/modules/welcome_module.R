@@ -6,123 +6,98 @@ welcome_module_ui <- function(id) {
 
   tabPanel(
     "Welcome",
-
-    div(class = "welcome-container",
-
-      h1("MSI Clustering & Prediction Platform"),
-
-      p(
-        class = "lead",
-        "An interactive workflow for analysing Mass Spectrometry Imaging (MSI) data."
+    app_page_shell(
+      app_page_hero(
+        "MSI Clustering & Prediction Platform",
+        "An interactive workflow for analysing Mass Spectrometry Imaging (MSI) data across processing, clustering, training, prediction, and database management."
       ),
-
-      br(),
-
-      fluidRow(
-        column(
-          3,
-          div(
-            class = "welcome-card",
-            h4("1. Processing"),
-            icon("cogs", "fa-2x"),
-            p("Convert raw MSI data into feature matrices."),
-            actionButton(ns("show_processing"), "Learn more")
+      div(class = "welcome-container",
+        fluidRow(
+          column(
+            3,
+            div(
+              class = "welcome-card",
+              h4("1. Processing"),
+              icon("cogs", "fa-2x"),
+              p("Convert raw MSI data into feature matrices."),
+              actionButton(ns("show_processing"), "Learn more")
+            )
+          ),
+          column(
+            3,
+            div(
+              class = "welcome-card",
+              h4("2. Clustering"),
+              icon("project-diagram", "fa-2x"),
+              p("Explore spatial clusters and assign labels."),
+              actionButton(ns("show_clustering"), "Learn more")
+            )
+          ),
+          column(
+            3,
+            div(
+              class = "welcome-card",
+              h4("3. Training"),
+              icon("brain", "fa-2x"),
+              p("Train machine learning models."),
+              actionButton(ns("show_training"), "Learn more")
+            )
+          ),
+          column(
+            3,
+            div(
+              class = "welcome-card",
+              h4("4. Prediction"),
+              icon("chart-line", "fa-2x"),
+              p("Predict tissue classes in new data."),
+              actionButton(ns("show_prediction"), "Learn more")
+            )
           )
         ),
-        column(
-          3,
-          div(
-            class = "welcome-card",
-            h4("2. Clustering"),
-            icon("project-diagram", "fa-2x"),
-            p("Explore spatial clusters and assign labels."),
-            actionButton(ns("show_clustering"), "Learn more")
-          )
-        ),
-        column(
-          3,
-          div(
-            class = "welcome-card",
-            h4("3. Training"),
-            icon("brain", "fa-2x"),
-            p("Train machine learning models."),
-            actionButton(ns("show_training"), "Learn more")
-          )
-        ),
-        column(
-          3,
-          div(
-            class = "welcome-card",
-            h4("4. Prediction"),
-            icon("chart-line", "fa-2x"),
-            p("Predict tissue classes in new data."),
-            actionButton(ns("show_prediction"), "Learn more")
-          )
-        )
-      ),
-
-      br(),
-
-      uiOutput(ns("details")),
-
-      br(),
-
-      h3("Data Objects in the Platform"),
-      p(
-        class = "lead-small",
-        "Click an object in the workflow below to see what it represents and how it is used."
-      ),
-
-      div(
-        class = "object-flow-wrap",
-
-        div(
-          class = "object-flow-row",
-
-          actionButton(ns("obj_study"), "Study", class = "flow-object-btn"),
-          div(class = "flow-arrow", HTML("&rarr;")),
-
-          actionButton(ns("obj_sample"), "Sample", class = "flow-object-btn"),
-          div(class = "flow-arrow", HTML("&rarr;")),
-
-          actionButton(ns("obj_pipeline"), "Pipeline", class = "flow-object-btn"),
-          div(class = "flow-arrow", HTML("&rarr;")),
-
-          actionButton(ns("obj_artifact"), "Artifact", class = "flow-object-btn")
-        ),
-
-        div(class = "flow-break"),
-
-        div(
-          class = "object-flow-row",
-
-          actionButton(ns("obj_annset"), "Annotation Set", class = "flow-object-btn"),
-          div(class = "flow-arrow", HTML("&rarr;")),
-
-          actionButton(ns("obj_annotation"), "Annotation", class = "flow-object-btn"),
-          div(class = "flow-arrow", HTML("&rarr;")),
-
-          actionButton(ns("obj_dataset"), "Dataset", class = "flow-object-btn"),
-          div(class = "flow-arrow", HTML("&rarr;")),
-
-          actionButton(ns("obj_modelrun"), "Model Run", class = "flow-object-btn")
-        )
-      ),
-
-      br(),
-
-      uiOutput(ns("object_details")),
-
-      br(),
-
-      div(
-        class = "welcome-detail-box soft-box",
-        h4("Suggested workflow"),
+        br(),
+        uiOutput(ns("details")),
+        br(),
+        h3("Data Objects in the Platform"),
         p(
-          strong("Processing"), " creates feature representations from raw MSI data. ",
-          strong("Clustering"), " helps identify spatial structure and assign labels. ",
-          strong("Training"), " uses reproducible datasets to fit machine learning models. ",
-          strong("Prediction"), " applies trained models to new data."
+          class = "lead-small",
+          "Click an object in the workflow below to see what it represents and how it is used."
+        ),
+        div(
+          class = "object-flow-wrap",
+          div(
+            class = "object-flow-row",
+            actionButton(ns("obj_study"), "Study", class = "flow-object-btn"),
+            div(class = "flow-arrow", HTML("&rarr;")),
+            actionButton(ns("obj_sample"), "Sample", class = "flow-object-btn"),
+            div(class = "flow-arrow", HTML("&rarr;")),
+            actionButton(ns("obj_pipeline"), "Pipeline", class = "flow-object-btn"),
+            div(class = "flow-arrow", HTML("&rarr;")),
+            actionButton(ns("obj_artifact"), "Artifact", class = "flow-object-btn")
+          ),
+          div(class = "flow-break"),
+          div(
+            class = "object-flow-row",
+            actionButton(ns("obj_annset"), "Annotation Set", class = "flow-object-btn"),
+            div(class = "flow-arrow", HTML("&rarr;")),
+            actionButton(ns("obj_annotation"), "Annotation", class = "flow-object-btn"),
+            div(class = "flow-arrow", HTML("&rarr;")),
+            actionButton(ns("obj_dataset"), "Dataset", class = "flow-object-btn"),
+            div(class = "flow-arrow", HTML("&rarr;")),
+            actionButton(ns("obj_modelrun"), "Model Run", class = "flow-object-btn")
+          )
+        ),
+        br(),
+        uiOutput(ns("object_details")),
+        br(),
+        div(
+          class = "welcome-detail-box soft-box",
+          h4("Suggested workflow"),
+          p(
+            strong("Processing"), " creates feature representations from raw MSI data. ",
+            strong("Clustering"), " helps identify spatial structure and assign labels. ",
+            strong("Training"), " uses reproducible datasets to fit machine learning models. ",
+            strong("Prediction"), " applies trained models to new data."
+          )
         )
       )
     )

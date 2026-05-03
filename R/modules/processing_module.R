@@ -12,131 +12,191 @@
 
 processing_module_ui <- function(id) {
   ns <- NS(id)
-  tabPanel("Processing",
-    fluidRow(
-
-      # ── LEFT SIDEBAR (3 / 12) ──────────────────────────────────────────
-      column(3,
-
-        # ── 0. Study / Sample selection ────────────────────────────────
-        wellPanel(
-          h4("Study & Sample"),
-          radioButtons(ns("study_mode"), "Study:",
-            choices  = c("Create new Study" = "new",
-                         "Add to existing Study" = "existing"),
-            selected = "new"
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'new'", ns("study_mode")),
-            textInput(ns("new_study_name"), "Study name:", placeholder = "e.g. SSC_cohort_2025"),
-            textInput(ns("new_study_desc"), "Description (optional):"),
-            actionButton(ns("create_study_btn"), "Create Study",
-                         class = "btn-sm btn-success")
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'existing'", ns("study_mode")),
-            actionButton(ns("refresh_studies"), "Refresh", class = "btn-xs btn-default"),
-            selectInput(ns("existing_study_id"), "Select Study:",
-                        choices = c("(loading...)" = ""), width = "100%")
-          ),
-          uiOutput(ns("study_badge")),
-          hr(),
-          textInput(ns("sample_name_input"), "Sample name:",
-                    placeholder = "Leave empty to use filename"),
-          uiOutput(ns("sample_duplicate_warning"))
-        ),
-
-        # ── 1. File source ─────────────────────────────────────────────
-        wellPanel(
-          h4("Data Source"),
-          radioButtons(ns("data_source"), NULL,
-            choices  = c("Upload new files", "Use existing dataset"),
-            selected = "Upload new files"
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'Upload new files'", ns("data_source")),
-            uiOutput(ns("msi_upload_ui"))
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'Use existing dataset'", ns("data_source")),
-            uiOutput(ns("existing_sample_ui"))
-          )
-        ),
-
-        # ── 2. Processing parameters ───────────────────────────────────
-        wellPanel(
-          h4("Processing Parameters"),
-          numericInput(ns("resolution"), "Resolution (ppm):",
-                       value = 10, min = 1, max = 100, step = 1),
-          numericInput(ns("snr"),        "SNR:",
-                       value = 3,  min = 1.5, max = 30, step = 0.1),
-          numericInput(ns("tolerance"),  "Binning tolerance (mz):",
-                       value = 0.5, min = 0.01, max = 3, step = 0.01),
-          radioButtons(ns("ref_source"), "Reference list:",
-            choices  = c("From database", "Upload your own"),
-            selected = "From database"
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'Upload your own'", ns("ref_source")),
-            textInput(ns("ref_upload_name"), "Reference name (optional):",
-                      placeholder = "Defaults to the uploaded filename"),
-            fileInput(ns("ref_csv"), "Upload .csv", multiple = FALSE, accept = ".csv"),
-            actionButton(ns("save_uploaded_reference"), "Save uploaded reference",
-                         class = "btn-sm btn-default"),
-            tags$p(
-              class = "help-block",
-              "Saved uploads become available in the shared reference list for future runs."
+  tabPanel(
+    "Processing",
+    app_page_shell(
+      app_page_hero(
+        "Processing Studio",
+        "Prepare raw MSI data, configure the feature-generation pipeline, and inspect the resulting artifacts and quality-control plots in one consistent workspace."
+      ),
+      fluidRow(
+        column(
+          3,
+          tags$div(
+            class = "app-stack",
+            app_sidebar_step(
+              ns("step_study_sample"),
+              "1",
+              "Study & Sample",
+              status = app_step_status("Setup"),
+              open = TRUE,
+              radioButtons(
+                ns("study_mode"),
+                "Study:",
+                choices = c("Create new Study" = "new", "Add to existing Study" = "existing"),
+                selected = "new"
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'new'", ns("study_mode")),
+                textInput(ns("new_study_name"), "Study name:", placeholder = "e.g. SSC_cohort_2025"),
+                textInput(ns("new_study_desc"), "Description (optional):"),
+                actionButton(ns("create_study_btn"), "Create Study", class = "btn-sm btn-success")
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'existing'", ns("study_mode")),
+                actionButton(ns("refresh_studies"), "Refresh", class = "btn-xs btn-default"),
+                selectInput(
+                  ns("existing_study_id"),
+                  "Select Study:",
+                  choices = c("(loading...)" = ""),
+                  width = "100%"
+                )
+              ),
+              uiOutput(ns("study_badge")),
+              tags$div(class = "app-divider"),
+              textInput(
+                ns("sample_name_input"),
+                "Sample name:",
+                placeholder = "Leave empty to use filename"
+              ),
+              uiOutput(ns("sample_duplicate_warning"))
+            ),
+            app_sidebar_step(
+              ns("step_data_source"),
+              "2",
+              "Data Source",
+              status = app_step_status("Input"),
+              radioButtons(
+                ns("data_source"),
+                NULL,
+                choices = c("Upload new files", "Use existing dataset"),
+                selected = "Upload new files"
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'Upload new files'", ns("data_source")),
+                uiOutput(ns("msi_upload_ui"))
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'Use existing dataset'", ns("data_source")),
+                uiOutput(ns("existing_sample_ui"))
+              )
+            ),
+            app_sidebar_step(
+              ns("step_processing_params"),
+              "3",
+              "Processing Parameters",
+              status = app_step_status("Tuning"),
+              numericInput(ns("resolution"), "Resolution (ppm):", value = 10, min = 1, max = 100, step = 1),
+              numericInput(ns("snr"), "SNR:", value = 3, min = 1.5, max = 30, step = 0.1),
+              numericInput(
+                ns("tolerance"),
+                "Binning tolerance (mz):",
+                value = 0.5,
+                min = 0.01,
+                max = 3,
+                step = 0.01
+              ),
+              radioButtons(
+                ns("ref_source"),
+                "Reference list:",
+                choices = c("From database", "Upload your own"),
+                selected = "From database"
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'Upload your own'", ns("ref_source")),
+                textInput(
+                  ns("ref_upload_name"),
+                  "Reference name (optional):",
+                  placeholder = "Defaults to the uploaded filename"
+                ),
+                fileInput(ns("ref_csv"), "Upload .csv", multiple = FALSE, accept = ".csv"),
+                actionButton(
+                  ns("save_uploaded_reference"),
+                  "Save uploaded reference",
+                  class = "btn-sm btn-default"
+                ),
+                tags$p(
+                  class = "help-block",
+                  "Saved uploads become available in the shared reference list for future runs."
+                )
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
+                selectInput(ns("ref_csv_mongo"), "Select reference:", choices = "Loading...")
+              )
+            ),
+            app_sidebar_step(
+              ns("step_pipeline"),
+              "4",
+              "Pipeline",
+              status = app_step_status("Run"),
+              tags$div(
+                class = "app-helper",
+                tags$strong("Preview"),
+                tags$br(),
+                "The pipeline fingerprint updates with your current inputs so duplicate processing runs can be blocked before execution."
+              ),
+              verbatimTextOutput(ns("pipeline_id_preview")),
+              actionButton(
+                ns("run_processing"),
+                "Run Processing",
+                class = "btn-primary btn-lg app-btn-block"
+              ),
+              actionButton(
+                ns("clear_cache"),
+                "Clear local cache",
+                class = "btn-warning btn-sm app-btn-block"
+              )
             )
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'From database'", ns("ref_source")),
-            selectInput(ns("ref_csv_mongo"), "Select reference:", choices = "Loading...")
           )
         ),
-
-        # ── 3. Pipeline preview + run ──────────────────────────────────
-        wellPanel(
-          h4("Pipeline"),
-          verbatimTextOutput(ns("pipeline_id_preview")),
-          actionButton(ns("run_processing"), "Run Processing",
-                       class = "btn-primary btn-lg", style = "width:100%"),
-          br(), br(),
-          actionButton(ns("clear_cache"), "Clear local cache",
-                       class = "btn-warning btn-sm")
-        )
-      ),
-
-      # ── CENTRE: Log / status (4 / 12) ─────────────────────────────────
-      column(4,
-        h4("Existing Artifacts"),
-        p(tags$small("Artifacts for the current study + sample.
-                      Processing is blocked for exact duplicate pipeline_ids.")),
-        DT::DTOutput(ns("artifact_table")),
-        actionButton(ns("refresh_artifacts"), "Refresh",
-                     class = "btn-xs btn-default"),
-        hr(),
-        h4("Processing Log"),
-        verbatimTextOutput(ns("processing_log")),
-        hr(),
-        h4("Cache Status"),
-        verbatimTextOutput(ns("cache_status"))
-      ),
-
-      # ── RIGHT: Plots (5 / 12) ──────────────────────────────────────────
-      column(5,
-        uiOutput(ns("pipeline_status")),
-        wellPanel(
-          h4("MSI Images – Top 3 m/z (by variance)"),
-          tabsetPanel(
-            tabPanel("Raw",        plotOutput(ns("top3_raw_plot"),  height = "400px")),
-            tabPanel("Normalized", plotOutput(ns("top3_norm_plot"), height = "400px"))
+        column(
+          4,
+          tags$div(
+            class = "app-stack",
+            app_panel(
+              "Existing Artifacts",
+              subtitle = "Artifacts for the current study and sample. Processing is blocked for exact duplicate pipeline IDs.",
+              DT::DTOutput(ns("artifact_table")),
+              tags$div(style = "margin-top:12px;", actionButton(ns("refresh_artifacts"), "Refresh", class = "btn-xs btn-default"))
+            ),
+            app_panel(
+              "Processing Log",
+              subtitle = "Execution updates and validation messages for the current run.",
+              verbatimTextOutput(ns("processing_log"))
+            ),
+            app_panel(
+              "Cache Status",
+              subtitle = "Local cache state for reusable intermediate files.",
+              verbatimTextOutput(ns("cache_status"))
+            )
           )
         ),
-        wellPanel(
-          h4("Spatial vs Intensity Distance"),
-          tabsetPanel(
-            tabPanel("Binned",  plotOutput(ns("distance_binned_plot"),  height = "400px")),
-            tabPanel("Scatter", plotOutput(ns("distance_scatter_plot"), height = "400px"))
+        column(
+          5,
+          tags$div(
+            class = "app-stack",
+            app_panel(
+              "Pipeline Status",
+              subtitle = "Current registration status for the selected study, sample, and pipeline.",
+              uiOutput(ns("pipeline_status"))
+            ),
+            app_panel(
+              "MSI Images - Top 3 m/z (by variance)",
+              subtitle = "Compare raw and normalized views of the highest-variance features.",
+              tabsetPanel(
+                tabPanel("Raw", plotOutput(ns("top3_raw_plot"), height = "400px")),
+                tabPanel("Normalized", plotOutput(ns("top3_norm_plot"), height = "400px"))
+              )
+            ),
+            app_panel(
+              "Spatial vs Intensity Distance",
+              subtitle = "Inspect how spatial structure and intensity relationships shift across the generated feature matrix.",
+              tabsetPanel(
+                tabPanel("Binned", plotOutput(ns("distance_binned_plot"), height = "400px")),
+                tabPanel("Scatter", plotOutput(ns("distance_scatter_plot"), height = "400px"))
+              )
+            )
           )
         )
       )

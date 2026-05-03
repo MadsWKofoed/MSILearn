@@ -91,26 +91,31 @@ clustering_module_ui <- function(id) {
 
   tabPanel(
     "Clustering",
-    sidebarLayout(
-      sidebarPanel(
-        width = 3,
+    app_page_shell(
+      app_page_hero(
+        "Clustering Studio",
+        "Load processed MSI data, generate the cluster map, align histology when needed, and annotate tissue classes inside the shared management theme."
+      ),
+      sidebarLayout(
+        sidebarPanel(
+          width = 3,
 
-        tags$style(HTML("
+          tags$style(HTML("
           .workflow-step{
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
+            border: 1px solid #d8e0ea;
+            border-radius: 20px;
             margin-bottom: 14px;
-            background: #ffffff;
+            background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(249,251,253,0.98) 100%);
             overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
             transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
           }
 
           .workflow-step-head{
-            padding: 12px 14px;
-            font-weight: 700;
+            padding: 14px 16px;
+            font-weight: 800;
             font-size: 15px;
-            background: #f8fafc;
+            background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
             border-bottom: 1px solid #eef2f7;
             cursor: pointer;
             display: flex;
@@ -122,47 +127,48 @@ clustering_module_ui <- function(id) {
 
           .workflow-step:not(:has(.workflow-step-body.in)):hover{
             transform: translateY(-3px);
-            box-shadow: 0 8px 22px rgba(0,0,0,0.08);
-            border-color: #dbeafe;
+            box-shadow: 0 18px 34px rgba(15, 23, 42, 0.10);
+            border-color: #c8ddd8;
           }
 
           .workflow-step:not(:has(.workflow-step-body.in)) .workflow-step-head:hover{
-            background: #f4f7ff;
+            background: #f3f8f7;
           }
 
           .workflow-step-title{
             display: flex;
             align-items: center;
             gap: 10px;
+            color: #14213d;
           }
 
           .workflow-step-num{
-            width: 24px;
-            height: 24px;
+            width: 26px;
+            height: 26px;
             border-radius: 999px;
-            background: #eef2ff;
-            color: #3730a3;
+            background: rgba(15,118,110,0.12);
+            color: #0f766e;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             font-size: 12px;
-            font-weight: 700;
+            font-weight: 800;
             flex: 0 0 auto;
-            border: 1px solid #c7d2fe;
+            border: 1px solid rgba(15,118,110,0.18);
           }
 
           .workflow-step-status{
             font-size: 11px;
-            font-weight: 700;
-            padding: 4px 8px;
+            font-weight: 800;
+            padding: 4px 9px;
             border-radius: 999px;
-            background: #eef2ff;
-            color: #3730a3;
+            background: rgba(15,118,110,0.12);
+            color: #0f766e;
             white-space: nowrap;
           }
 
           .workflow-step-body{
-            padding: 12px 14px 14px 14px;
+            padding: 14px 16px 16px 16px;
           }
 
           .workflow-lead{
@@ -183,23 +189,23 @@ clustering_module_ui <- function(id) {
           }
 
           .helper-box{
-            background: #f8fbff;
-            border: 1px solid #dbeafe;
-            border-radius: 10px;
-            padding: 10px 12px;
+            background: linear-gradient(180deg, #f7fafc 0%, #f4f9f8 100%);
+            border: 1px solid #dfe8ee;
+            border-radius: 16px;
+            padding: 12px 14px;
             font-size: 12px;
-            color: #334155;
-            line-height: 1.5;
+            color: #435063;
+            line-height: 1.6;
             margin-bottom: 10px;
           }
 
           .helper-box strong{
-            color: #1e3a8a;
+            color: #14213d;
           }
 
           .helper-muted{
             font-size: 12px;
-            color: #6b7280;
+            color: #5b6472;
             margin-top: 4px;
             margin-bottom: 8px;
             line-height: 1.4;
@@ -207,7 +213,7 @@ clustering_module_ui <- function(id) {
 
           .mini-note{
             font-size: 11px;
-            color: #6b7280;
+            color: #5b6472;
             margin-top: 4px;
             line-height: 1.35;
           }
@@ -224,8 +230,8 @@ clustering_module_ui <- function(id) {
 
           .compact-help summary{
             cursor: pointer;
-            font-weight: 600;
-            color: #1f2937;
+            font-weight: 700;
+            color: #14213d;
             margin-bottom: 8px;
           }
 
@@ -238,18 +244,18 @@ clustering_module_ui <- function(id) {
           }
 
           .current-session-box{
-            background: linear-gradient(135deg, #f8fbff 0%, #fdfdff 100%);
-            border: 1px solid #dbeafe;
-            border-radius: 12px;
-            padding: 10px 12px;
+            background: linear-gradient(135deg, #f7fafc 0%, #fdfdfc 100%);
+            border: 1px solid #dfe8ee;
+            border-radius: 16px;
+            padding: 12px 14px;
             margin-bottom: 14px;
-            box-shadow: 0 1px 6px rgba(37,99,235,0.05);
+            box-shadow: 0 1px 6px rgba(15, 23, 42, 0.05);
           }
 
           .current-session-title{
             font-size: 12px;
-            font-weight: 700;
-            color: #3730a3;
+            font-weight: 800;
+            color: #0f766e;
             text-transform: uppercase;
             letter-spacing: 0.03em;
             margin-bottom: 6px;
@@ -278,25 +284,25 @@ clustering_module_ui <- function(id) {
           }
 
           .plot-card{
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
+            border: 1px solid #d8e0ea;
+            border-radius: 22px;
             margin-bottom: 16px;
             background: #ffffff;
             overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
           }
 
           .plot-card-head{
-            padding: 12px 14px;
-            font-weight: 700;
+            padding: 16px 18px 12px 18px;
+            font-weight: 800;
             font-size: 15px;
-            background: #f8fafc;
+            background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
             border-bottom: 1px solid #eef2f7;
-            color: #374151;
+            color: #14213d;
           }
 
           .plot-card-body{
-            padding: 12px 14px 14px 14px;
+            padding: 16px 18px 18px 18px;
           }
         ")),
 
@@ -531,52 +537,56 @@ clustering_module_ui <- function(id) {
             uiOutput(ns("commit_status"))
           )
         )
-      ),
+        ),
 
-      mainPanel(
-        width = 9,
-        tags$head(
-          tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/5.0.1/openseadragon.min.js"),
-          tags$script(src = "ndpi_viewer_sync.js"),
-          tags$script(HTML(
-            sprintf(
-              "
-              Shiny.addCustomMessageHandler('%s', function(msg){
-                if(window.ndpiSyncViewer){
-                  window.ndpiSyncViewer.init({
-                    containerId: msg.containerId,
-                    dziUrl: msg.dziUrl,
-                    inputPrefix: msg.inputPrefix
-                  });
-                }
-              });
-              Shiny.addCustomMessageHandler('%s', function(msg){
-                if(window.ndpiSyncViewer){
-                  window.ndpiSyncViewer.startPolygon();
-                }
-              });
-              ",
-              ns("ndpiLoadSlide"),
-              ns("ndpiStartPolygon")
-            )
-          ))
-        ),
-        conditionalPanel(
-          condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
-          tags$div(
-            class = "plot-card",
-            tags$div(class = "plot-card-head", "NDPI Viewer"),
-            tags$div(
-              class = "plot-card-body",
-              tags$div(
-                id = ns("ndpi_viewer"),
-                style = "width:100%;height:520px;border:1px solid #d1d5db;border-radius:8px;background:#111;"
+        mainPanel(
+          width = 9,
+          tags$head(
+            tags$script(src = "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/5.0.1/openseadragon.min.js"),
+            tags$script(src = "ndpi_viewer_sync.js"),
+            tags$script(HTML(
+              sprintf(
+                "
+                Shiny.addCustomMessageHandler('%s', function(msg){
+                  if(window.ndpiSyncViewer){
+                    window.ndpiSyncViewer.init({
+                      containerId: msg.containerId,
+                      dziUrl: msg.dziUrl,
+                      inputPrefix: msg.inputPrefix
+                    });
+                  }
+                });
+                Shiny.addCustomMessageHandler('%s', function(msg){
+                  if(window.ndpiSyncViewer){
+                    window.ndpiSyncViewer.startPolygon();
+                  }
+                });
+                ",
+                ns("ndpiLoadSlide"),
+                ns("ndpiStartPolygon")
               )
-            )
+            ))
+          ),
+          tags$div(
+            class = "app-stack",
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
+              tags$div(
+                class = "plot-card",
+                tags$div(class = "plot-card-head", "NDPI Viewer"),
+                tags$div(
+                  class = "plot-card-body",
+                  tags$div(
+                    id = ns("ndpi_viewer"),
+                    style = "width:100%;height:520px;border:1px solid #d1d5db;border-radius:8px;background:#111;"
+                  )
+                )
+              )
+            ),
+            uiOutput(ns("cluster_layout")),
+            textOutput(ns("status_text"))
           )
-        ),
-        uiOutput(ns("cluster_layout")),
-        textOutput(ns("status_text"))
+        )
       )
     )
   )

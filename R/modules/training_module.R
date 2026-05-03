@@ -1,167 +1,221 @@
 training_module_ui <- function(id) {
   ns <- NS(id)
-  tabPanel("Training",
-    fluidRow(
-
-      column(4,
-        wellPanel(
-          h4("0. Create Dataset"),
-          p(tags$small("Pin samples, pipeline, annotation set and dataset split seed into a frozen snapshot.")),
-          selectInput(ns("ds_study"), "Study:",
-                      choices = c("(loading...)" = ""), width = "100%"),
-          actionButton(ns("ds_refresh_study"), "\u21ba", class = "btn-xs"),
-          br(), br(),
-          selectInput(ns("ds_pipeline"), "Processing pipeline:",
-                      choices = c("— select study first —" = ""), width = "100%"),
-          selectInput(ns("ds_ann_set"), "Annotation set:",
-                      choices = c("— select study first —" = ""), width = "100%"),
-          tags$label("Samples (select multiple):"),
-          selectInput(ns("ds_samples"), NULL,
-                      choices  = c("— select study first —" = ""),
-                      multiple = TRUE, width = "100%"),
-          selectInput(
-            ns("ds_evaluation_mode"),
-            "Evaluation mode:",
-            choices = c(
-              "CV + held-out test" = "cv_plus_test",
-              "CV only" = "cv_only"
-            ),
-            selected = "cv_plus_test"
-          ),
-          selectInput(
-            ns("ds_split_strategy"),
-            "Split strategy:",
-            choices = c(
-              "Random" = "random",
-              "Spatial block" = "spatial_block"
-            ),
-            selected = "random"
-          ),
-          conditionalPanel(
-            condition = sprintf(
-              "input['%s'] == 'cv_plus_test' && input['%s'] != 'leave_one_sample_out'",
-              ns("ds_evaluation_mode"),
-              ns("ds_split_strategy")
-            ),
-            numericInput(ns("ds_train_frac"), "Train fraction:", value = 0.8,
-                         min = 0.5, max = 0.95, step = 0.05)
-          ),
-          conditionalPanel(
-            condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
-            radioButtons(
-              ns("spatial_buffer_mode"),
-              "Buffer / block setup:",
-              choices = c(
-                "Estimate from Moran's I" = "estimate",
-                "Set manually" = "manual"
-              ),
-              selected = "estimate",
-              inline = FALSE
-            ),
-            conditionalPanel(
-              condition = sprintf("input['%s'] == 'estimate'", ns("spatial_buffer_mode")),
-              actionButton(ns("estimate_spatial_btn"), "Estimate from Moran's I + correlogram",
-                class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"),
-              uiOutput(ns("estimate_spatial_text")),
-              plotOutput(ns("estimate_moran_plot"), height = "360px")
-            ),
-            numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
-            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
-          ),
-          conditionalPanel(
-            condition = sprintf(
-              "input['%s'] == 'spatial_block' || input['%s'] == 'leave_one_sample_out'",
-              ns("ds_split_strategy"),
-              ns("ds_split_strategy")
-            ),
-            actionButton(ns("run_spatial_preview_btn"), "Preview spatial split",
-              class = "btn-info btn-sm", style = "width:100%; margin-top:4px;"),
-            uiOutput(ns("spatial_preview_ui"))
-          ),
-          numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
-          numericInput(ns("ds_cv_folds"), "CV folds (0 = none):", value = 10, min = 0),
-          tags$small(style = "color:#666; display:block; margin-top:4px;",
-                     "CV folds are stored in the dataset snapshot. CV-only mode requires folds greater than 1."),
-          textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
-          actionButton(ns("create_dataset_btn"), "Create Dataset",
-                       class = "btn-success btn-sm", style = "width:100%"),
-          uiOutput(ns("create_dataset_status"))
-        ),
-
-        h4("1. Select Dataset"),
-        p(tags$small(
-          "Datasets are frozen snapshots that pin samples, pipeline, ",
-          "annotation set, and split seed. Select one to train on it."
-        )),
-        actionButton(ns("refresh_datasets"), "Refresh dataset list",
-                     class = "btn-sm btn-default"),
-        br(), br(),
-        selectInput(ns("dataset_filter_study"), "Study:",
-                    choices = c("All studies" = "__all__"), width = "100%"),
-        selectInput(ns("dataset_filter_eval_mode"), "Evaluation mode:",
-                    choices = c(
-                      "All" = "__all__",
-                      "CV only" = "cv_only",
-                      "CV + held-out test" = "cv_plus_test"
-                    ),
-                    width = "100%"),
-        selectInput(ns("dataset_filter_split_strategy"), "Split strategy:",
-                    choices = c(
-                      "All" = "__all__",
-                      "Random" = "random",
-                      "Spatial block" = "spatial_block",
-                      "Grouped sample-out" = "leave_one_sample_out"
-                    ),
-                    width = "100%"),
-        selectInput(ns("dataset_filter_pipeline"), "Processing pipeline:",
-                    choices = c("All pipelines" = "__all__"), width = "100%"),
-        selectInput(ns("dataset_filter_ann_set"), "Annotation set:",
-                    choices = c("All annotation sets" = "__all__"), width = "100%"),
-        DT::dataTableOutput(ns("dataset_table")),
-        tags$div(style = "display:none;",
-          selectInput(ns("dataset_id"), "Dataset:",
-                      choices = c("(loading...)" = ""), width = "100%")
-        ),
-        uiOutput(ns("dataset_info_ui")),
-
-        hr(),
-        h4("2. Hyperparameters"),
-        selectInput(
-          ns("normalize"),
-          "Normalisation",
-          choices = c(
-            "None"   = "none",
-            "TIC"    = "tic",
-            "Median" = "median",
-            "RMS"    = "rms"
-          ),
-          selected = "none"
-        ),
-        numericInput(ns("mtry"),          "mtry",                value = 31,   min = 1),
-        numericInput(ns("num_trees"),     "num.trees",           value = 500,  min = 10),
-        numericInput(ns("min_node_size"), "min.node.size",       value = 10,   min = 1),
-        selectInput( ns("splitrule"),     "splitrule",
-                     choices = c("gini", "extratrees"), selected = "gini"),
-
-        numericInput(ns("seed"),          "Training / CV seed",  value = 1234, min = 1),
-
-        hr(),
-        actionButton(ns("run_training"), "Train model",
-                     class = "btn-primary btn-lg", style = "width:100%"),
-        br(), br(),
-        verbatimTextOutput(ns("training_log"))
+  tabPanel(
+    "Training",
+    app_page_shell(
+      app_page_hero(
+        "Training Studio",
+        "Freeze reproducible datasets, configure model settings, and compare model runs inside a single workspace built around the Database Management visual system."
       ),
-
-      column(8,
-        h4("3. Model Runs for Selected Dataset"),
-        p(tags$small("Click a row to see full metrics below.")),
-        actionButton(ns("refresh_runs"), "Refresh run list",
-                     class = "btn-sm btn-default"),
-        br(), br(),
-        DT::dataTableOutput(ns("run_table")),
-        hr(),
-        h4("Run Details"),
-        uiOutput(ns("run_details_ui"))
+      fluidRow(
+        column(
+          4,
+          tags$div(
+            class = "app-stack",
+            app_sidebar_step(
+              ns("step_create_dataset"),
+              "1",
+              "Create Dataset",
+              status = app_step_status("Snapshot"),
+              open = TRUE,
+              tags$p(
+                class = "app-helper-muted",
+                "Pin samples, pipeline, annotation set, and split settings into a frozen dataset snapshot."
+              ),
+              selectInput(ns("ds_study"), "Study:", choices = c("(loading...)" = ""), width = "100%"),
+              actionButton(ns("ds_refresh_study"), "\u21ba", class = "btn-xs btn-default"),
+              tags$div(style = "height:10px;"),
+              selectInput(
+                ns("ds_pipeline"),
+                "Processing pipeline:",
+                choices = c("— select study first —" = ""),
+                width = "100%"
+              ),
+              selectInput(
+                ns("ds_ann_set"),
+                "Annotation set:",
+                choices = c("— select study first —" = ""),
+                width = "100%"
+              ),
+              tags$label("Samples (select multiple):"),
+              selectInput(
+                ns("ds_samples"),
+                NULL,
+                choices = c("— select study first —" = ""),
+                multiple = TRUE,
+                width = "100%"
+              ),
+              selectInput(
+                ns("ds_evaluation_mode"),
+                "Evaluation mode:",
+                choices = c("CV + held-out test" = "cv_plus_test", "CV only" = "cv_only"),
+                selected = "cv_plus_test"
+              ),
+              selectInput(
+                ns("ds_split_strategy"),
+                "Split strategy:",
+                choices = c("Random" = "random", "Spatial block" = "spatial_block"),
+                selected = "random"
+              ),
+              conditionalPanel(
+                condition = sprintf(
+                  "input['%s'] == 'cv_plus_test' && input['%s'] != 'leave_one_sample_out'",
+                  ns("ds_evaluation_mode"),
+                  ns("ds_split_strategy")
+                ),
+                numericInput(ns("ds_train_frac"), "Train fraction:", value = 0.8, min = 0.5, max = 0.95, step = 0.05)
+              ),
+              conditionalPanel(
+                condition = sprintf("input['%s'] == 'spatial_block'", ns("ds_split_strategy")),
+                radioButtons(
+                  ns("spatial_buffer_mode"),
+                  "Buffer / block setup:",
+                  choices = c("Estimate from Moran's I" = "estimate", "Set manually" = "manual"),
+                  selected = "estimate",
+                  inline = FALSE
+                ),
+                conditionalPanel(
+                  condition = sprintf("input['%s'] == 'estimate'", ns("spatial_buffer_mode")),
+                  actionButton(
+                    ns("estimate_spatial_btn"),
+                    "Estimate from Moran's I + correlogram",
+                    class = "btn-default btn-sm app-btn-block"
+                  ),
+                  uiOutput(ns("estimate_spatial_text")),
+                  plotOutput(ns("estimate_moran_plot"), height = "360px")
+                ),
+                numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
+                numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
+              ),
+              conditionalPanel(
+                condition = sprintf(
+                  "input['%s'] == 'spatial_block' || input['%s'] == 'leave_one_sample_out'",
+                  ns("ds_split_strategy"),
+                  ns("ds_split_strategy")
+                ),
+                actionButton(
+                  ns("run_spatial_preview_btn"),
+                  "Preview spatial split",
+                  class = "btn-info btn-sm app-btn-block"
+                ),
+                uiOutput(ns("spatial_preview_ui"))
+              ),
+              numericInput(ns("ds_seed"), "Dataset split seed:", value = 42, min = 1),
+              numericInput(ns("ds_cv_folds"), "CV folds (0 = none):", value = 10, min = 0),
+              tags$small(
+                style = "color:#5b6472; display:block; margin-top:4px;",
+                "CV folds are stored in the dataset snapshot. CV-only mode requires folds greater than 1."
+              ),
+              textInput(ns("ds_name"), "Dataset name:", placeholder = "e.g. SSC_cohort_RF_v1"),
+              actionButton(
+                ns("create_dataset_btn"),
+                "Create Dataset",
+                class = "btn-success btn-sm app-btn-block"
+              ),
+              uiOutput(ns("create_dataset_status"))
+            ),
+            app_sidebar_step(
+              ns("step_select_dataset"),
+              "2",
+              "Select Dataset",
+              status = app_step_status("Browse"),
+              tags$p(
+                class = "app-helper-muted",
+                "Datasets are frozen snapshots. Pick one here to train and compare model runs against a fixed input."
+              ),
+              actionButton(ns("refresh_datasets"), "Refresh dataset list", class = "btn-sm btn-default app-btn-block"),
+              selectInput(
+                ns("dataset_filter_study"),
+                "Study:",
+                choices = c("All studies" = "__all__"),
+                width = "100%"
+              ),
+              selectInput(
+                ns("dataset_filter_eval_mode"),
+                "Evaluation mode:",
+                choices = c("All" = "__all__", "CV only" = "cv_only", "CV + held-out test" = "cv_plus_test"),
+                width = "100%"
+              ),
+              selectInput(
+                ns("dataset_filter_split_strategy"),
+                "Split strategy:",
+                choices = c(
+                  "All" = "__all__",
+                  "Random" = "random",
+                  "Spatial block" = "spatial_block",
+                  "Grouped sample-out" = "leave_one_sample_out"
+                ),
+                width = "100%"
+              ),
+              selectInput(
+                ns("dataset_filter_pipeline"),
+                "Processing pipeline:",
+                choices = c("All pipelines" = "__all__"),
+                width = "100%"
+              ),
+              selectInput(
+                ns("dataset_filter_ann_set"),
+                "Annotation set:",
+                choices = c("All annotation sets" = "__all__"),
+                width = "100%"
+              ),
+              DT::dataTableOutput(ns("dataset_table")),
+              tags$div(
+                style = "display:none;",
+                selectInput(ns("dataset_id"), "Dataset:", choices = c("(loading...)" = ""), width = "100%")
+              ),
+              uiOutput(ns("dataset_info_ui"))
+            ),
+            app_sidebar_step(
+              ns("step_hyperparameters"),
+              "3",
+              "Hyperparameters",
+              status = app_step_status("Model"),
+              selectInput(
+                ns("normalize"),
+                "Normalisation",
+                choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms"),
+                selected = "none"
+              ),
+              numericInput(ns("mtry"), "mtry", value = 31, min = 1),
+              numericInput(ns("num_trees"), "num.trees", value = 500, min = 10),
+              numericInput(ns("min_node_size"), "min.node.size", value = 10, min = 1),
+              selectInput(ns("splitrule"), "splitrule", choices = c("gini", "extratrees"), selected = "gini"),
+              numericInput(ns("seed"), "Training / CV seed", value = 1234, min = 1)
+            ),
+            app_sidebar_step(
+              ns("step_train"),
+              "4",
+              "Train Model",
+              status = app_step_status("Run"),
+              tags$div(
+                class = "app-helper",
+                tags$strong("Tip"),
+                tags$br(),
+                "Train on the selected dataset only after checking the split strategy and normalisation settings above."
+              ),
+              actionButton(ns("run_training"), "Train model", class = "btn-primary btn-lg app-btn-block"),
+              verbatimTextOutput(ns("training_log"))
+            )
+          )
+        ),
+        column(
+          8,
+          tags$div(
+            class = "app-stack",
+            app_panel(
+              "Model Runs for Selected Dataset",
+              subtitle = "Click a row to inspect the full metrics and stored metadata below.",
+              head_extra = actionButton(ns("refresh_runs"), "Refresh run list", class = "btn-sm btn-default"),
+              DT::dataTableOutput(ns("run_table"))
+            ),
+            app_panel(
+              "Run Details",
+              subtitle = "Detailed metrics, provenance, and summary information for the selected model run.",
+              uiOutput(ns("run_details_ui"))
+            )
+          )
+        )
       )
     )
   )
