@@ -5,7 +5,7 @@ training_module_ui <- function(id) {
     app_page_shell(
       app_page_hero(
         "Training Studio",
-        "Freeze reproducible datasets, configure model settings, and compare model runs inside a single workspace built around the Database Management visual system."
+        "Train from an existing frozen dataset or create a new one only when you need a fresh snapshot before model fitting."
       ),
       fluidRow(
         column(
@@ -15,12 +15,18 @@ training_module_ui <- function(id) {
             app_sidebar_step(
               ns("step_create_dataset"),
               "1",
-              "Create Dataset",
-              status = app_step_status("Snapshot"),
-              open = TRUE,
+              "Create New Dataset (Optional)",
+              status = app_step_status("Optional"),
+              open = FALSE,
+              tags$div(
+                class = "app-helper",
+                tags$strong("Use this only if needed"),
+                tags$br(),
+                "If a suitable dataset already exists below, skip this section and go straight to dataset selection. Create a new dataset only when you need a new frozen snapshot."
+              ),
               tags$p(
                 class = "app-helper-muted",
-                "Pin samples, pipeline, annotation set, and split settings into a frozen dataset snapshot."
+                "This saves a study, pipeline, annotation set, sample selection, and split setup as a reusable training snapshot."
               ),
               selectInput(ns("ds_study"), "Study:", choices = c("(loading...)" = ""), width = "100%"),
               actionButton(ns("ds_refresh_study"), "\u21ba", class = "btn-xs btn-default"),
@@ -117,8 +123,15 @@ training_module_ui <- function(id) {
             app_sidebar_step(
               ns("step_select_dataset"),
               "2",
-              "Select Dataset",
-              status = app_step_status("Browse"),
+              "Select Existing Dataset",
+              status = app_step_status("Start Here"),
+              open = TRUE,
+              tags$div(
+                class = "app-helper",
+                tags$strong("Recommended path"),
+                tags$br(),
+                "Most training runs should start here. Pick an existing frozen dataset, then move on to hyperparameters and training."
+              ),
               tags$p(
                 class = "app-helper-muted",
                 "Datasets are frozen snapshots. Pick one here to train and compare model runs against a fixed input."
