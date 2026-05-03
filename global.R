@@ -20,6 +20,76 @@ css_classes <- function(...) {
   paste(parts, collapse = " ")
 }
 
+lookup_study_label <- function(study_id) {
+  sid <- as.character(study_id %||% "")
+  if (!nzchar(sid)) return("No study selected")
+  tryCatch({
+    df <- get_studies()
+    hit <- df[df$`_id` == sid, , drop = FALSE]
+    if (nrow(hit) == 0) sid else as.character(hit$name[1] %||% sid)
+  }, error = function(e) sid)
+}
+
+lookup_sample_label <- function(study_id, sample_id) {
+  sid <- as.character(study_id %||% "")
+  samp_id <- as.character(sample_id %||% "")
+  if (!nzchar(sid) || !nzchar(samp_id)) return(samp_id)
+  tryCatch({
+    df <- get_samples(sid)
+    hit <- df[df$`_id` == samp_id, , drop = FALSE]
+    if (nrow(hit) == 0) samp_id else as.character(hit$sample_name[1] %||% samp_id)
+  }, error = function(e) samp_id)
+}
+
+lookup_annotation_set_label <- function(study_id, annotation_set_id) {
+  sid <- as.character(study_id %||% "")
+  ann_id <- as.character(annotation_set_id %||% "")
+  if (!nzchar(ann_id)) return("No annotation set selected")
+  if (!nzchar(sid)) return(ann_id)
+  tryCatch({
+    df <- list_annotation_sets(sid)
+    hit <- df[df$`_id` == ann_id, , drop = FALSE]
+    if (nrow(hit) == 0) ann_id else as.character(hit$name[1] %||% ann_id)
+  }, error = function(e) ann_id)
+}
+
+lookup_dataset_label <- function(dataset_id) {
+  did <- as.character(dataset_id %||% "")
+  if (!nzchar(did)) return("No dataset selected")
+  tryCatch({
+    ds <- get_dataset(did)
+    as.character(ds$name[1] %||% did)
+  }, error = function(e) did)
+}
+
+format_processing_pipeline_label <- function(pipeline_id) {
+  pid <- as.character(pipeline_id %||% "")
+  if (!nzchar(pid)) return("No pipeline selected")
+
+  tryCatch({
+    meta <- get_pipeline(pid)
+    params <- extract_params(meta$params)
+    ref_name <- as.character(params$reference_name %||% "")
+    ref_label <- if (nzchar(ref_name)) {
+      tryCatch({
+        doc <- load_alignment_reference(ref_name)
+        as.character(doc$display_name %||% ref_name)
+      }, error = function(e) ref_name)
+    } else {
+      "reference"
+    }
+
+    if (identical(as.character(meta$type[1] %||% ""), "processing")) {
+      paste0(
+        "SNR ", params$snr %||% "?", " · tol ", params$tolerance %||% "?",
+        " · ", params$resolution %||% "?", " ppm · ", ref_label
+      )
+    } else {
+      as.character(meta$name[1] %||% pid)
+    }
+  }, error = function(e) pid)
+}
+
 app_page_header <- function(title, subtitle, badge = NULL, actions = NULL, icon_name = NULL) {
   tags$div(
     class = "app-page-hero",
@@ -60,6 +130,36 @@ app_panel <- function(title = NULL,
   )
 }
 
+app_workflow_step <- function(ns,
+                              step_id,
+                              number,
+                              title,
+                              ...,
+                              status = NULL,
+                              open = FALSE,
+                              onclick = NULL) {
+  tags$div(
+    class = "workflow-step",
+    tags$div(
+      class = "workflow-step-head",
+      `data-toggle` = "collapse",
+      `data-target` = paste0("#", ns(step_id)),
+      onclick = onclick,
+      tags$div(
+        class = "workflow-step-title",
+        tags$span(class = "workflow-step-num", number),
+        tags$span(title)
+      ),
+      status
+    ),
+    tags$div(
+      id = ns(step_id),
+      class = css_classes("workflow-step-body collapse", if (isTRUE(open)) "in" else NULL),
+      ...
+    )
+  )
+}
+
 app_sidebar_layout <- function(ns,
                                module_key,
                                sidebar_title,
@@ -71,7 +171,6 @@ app_sidebar_layout <- function(ns,
   tags$div(
     id = ns(paste0(module_key, "_shell")),
     class = "app-module-shell",
-    `data-sidebar-key` = paste0("sidebar:", ns(module_key)),
     tags$aside(
       class = "app-sidebar-shell",
       tags$div(
@@ -86,26 +185,11 @@ app_sidebar_layout <- function(ns,
               tags$div(class = "app-sidebar-title", sidebar_title),
               tags$div(class = "app-sidebar-subtitle", sidebar_subtitle)
             )
-          ),
-          tags$button(
-            type = "button",
-            class = "app-sidebar-toggle",
-            `data-sidebar-toggle` = "true",
-            title = "Collapse controls",
-            icon("angle-left")
           )
         ),
         tags$div(
           class = "app-sidebar-content",
           sidebar
-        ),
-        tags$button(
-          type = "button",
-          class = "app-sidebar-collapsed-hint",
-          `data-sidebar-toggle` = "true",
-          title = "Expand controls",
-          tags$span(class = "app-sidebar-collapsed-icon", icon(sidebar_icon)),
-          tags$span(class = "app-sidebar-collapsed-label", sidebar_hint)
         )
       )
     ),
@@ -115,21 +199,21 @@ app_sidebar_layout <- function(ns,
 
 custom_css <- tags$style(HTML("
 :root{
-  --app-bg:#edf3f8;
-  --app-bg-soft:#f8fbfd;
+  --app-bg:#eef1ef;
+  --app-bg-soft:#f8faf8;
   --app-panel:#ffffff;
-  --app-panel-strong:#f5f9fc;
-  --app-border:#d8e2ec;
-  --app-border-strong:#c8d5e2;
-  --app-ink:#112033;
-  --app-muted:#5c6b7c;
-  --app-primary:#155eef;
-  --app-primary-strong:#0f4ed8;
-  --app-primary-soft:#eaf1ff;
-  --app-success:#0f766e;
-  --app-warning:#b45309;
+  --app-panel-strong:#f4f7f5;
+  --app-border:#d7ddd7;
+  --app-border-strong:#c7d0ca;
+  --app-ink:#1a2523;
+  --app-muted:#5d6b66;
+  --app-primary:#486a66;
+  --app-primary-strong:#35514d;
+  --app-primary-soft:#e9f0ee;
+  --app-success:#2f6b52;
+  --app-warning:#9f6b22;
   --app-danger:#b42318;
-  --app-info:#0f766e;
+  --app-info:#486a66;
   --app-shadow:0 18px 48px rgba(15, 23, 42, 0.08);
   --app-shadow-soft:0 10px 28px rgba(15, 23, 42, 0.06);
 }
@@ -138,9 +222,9 @@ html,
 body{
   min-height:100%;
   background:
-    radial-gradient(circle at top left, rgba(21,94,239,0.10), transparent 30%),
-    radial-gradient(circle at top right, rgba(15,118,110,0.10), transparent 25%),
-    linear-gradient(180deg, #f7fafc 0%, var(--app-bg) 100%);
+    radial-gradient(circle at top left, rgba(72,106,102,0.10), transparent 28%),
+    radial-gradient(circle at top right, rgba(159,107,34,0.08), transparent 24%),
+    linear-gradient(180deg, #f8faf8 0%, var(--app-bg) 100%);
 }
 
 body{
@@ -149,50 +233,59 @@ body{
 }
 
 .container-fluid{
-  max-width:1600px;
+  max-width:1820px;
 }
 
 .navbar{
-  min-height:78px;
+  min-height:88px;
 }
 
 .navbar-default{
-  background:rgba(255,255,255,0.86);
+  background:rgba(251,252,251,0.90);
   border:none;
-  box-shadow:0 12px 30px rgba(15, 23, 42, 0.08);
+  box-shadow:0 12px 34px rgba(15, 23, 42, 0.07);
   backdrop-filter:blur(16px);
 }
 
 .navbar-default .navbar-brand{
   color:var(--app-ink);
-  font-size:20px;
+  font-size:21px;
   font-weight:800;
   letter-spacing:-0.03em;
-  height:78px;
+  height:88px;
   display:flex;
   align-items:center;
 }
 
+.navbar-default .navbar-nav{
+  margin-top:20px;
+  margin-bottom:18px;
+}
+
+.navbar-default .navbar-nav > li{
+  margin-right:8px;
+}
+
 .navbar-default .navbar-nav > li > a{
-  color:#415164;
+  color:#44534f;
   font-weight:700;
-  padding-top:28px;
-  padding-bottom:26px;
-  transition:color 0.18s ease;
+  padding:12px 18px;
+  border-radius:14px;
+  transition:color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .navbar-default .navbar-nav > li > a:hover,
 .navbar-default .navbar-nav > .open > a{
   color:var(--app-primary-strong);
-  background:transparent;
+  background:#eef3f0;
 }
 
 .navbar-default .navbar-nav > .active > a,
 .navbar-default .navbar-nav > .active > a:hover,
 .navbar-default .navbar-nav > .active > a:focus{
-  color:var(--app-primary-strong);
-  background:transparent;
-  box-shadow:inset 0 -3px 0 var(--app-primary);
+  color:#ffffff;
+  background:linear-gradient(135deg, var(--app-primary) 0%, var(--app-primary-strong) 100%);
+  box-shadow:0 12px 24px rgba(53,81,77,0.18);
 }
 
 .tab-content{
@@ -205,10 +298,10 @@ body{
 
 .app-page-hero{
   background:
-    radial-gradient(circle at top left, rgba(21,94,239,0.14), transparent 34%),
-    radial-gradient(circle at top right, rgba(15,118,110,0.12), transparent 28%),
-    linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(243,248,252,0.98) 100%);
-  border:1px solid #dbe6f0;
+    radial-gradient(circle at top left, rgba(72,106,102,0.14), transparent 34%),
+    radial-gradient(circle at top right, rgba(159,107,34,0.09), transparent 28%),
+    linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(245,248,246,0.98) 100%);
+  border:1px solid #dce4de;
   border-radius:28px;
   box-shadow:var(--app-shadow);
   padding:24px 28px;
@@ -226,8 +319,8 @@ body{
   gap:8px;
   padding:7px 12px;
   border-radius:999px;
-  background:rgba(17,32,51,0.06);
-  color:#314459;
+  background:rgba(53,81,77,0.08);
+  color:#415550;
   font-size:11px;
   font-weight:800;
   text-transform:uppercase;
@@ -245,7 +338,7 @@ body{
   width:48px;
   height:48px;
   border-radius:16px;
-  background:linear-gradient(135deg, rgba(21,94,239,0.14) 0%, rgba(15,118,110,0.10) 100%);
+  background:linear-gradient(135deg, rgba(72,106,102,0.16) 0%, rgba(159,107,34,0.08) 100%);
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -278,17 +371,17 @@ body{
 }
 
 .app-sidebar-shell{
-  width:360px;
-  flex:0 0 360px;
+  width:440px;
+  flex:0 0 440px;
   position:sticky;
-  top:96px;
+  top:108px;
   transition:flex-basis 0.28s ease, width 0.28s ease;
   z-index:3;
 }
 
 .app-sidebar-card{
   background:rgba(255,255,255,0.92);
-  border:1px solid #d9e4ef;
+  border:1px solid #d9e0da;
   border-radius:24px;
   box-shadow:var(--app-shadow);
   overflow:hidden;
@@ -301,7 +394,7 @@ body{
   gap:12px;
   padding:16px 18px 14px 18px;
   border-bottom:1px solid #e8eef5;
-  background:linear-gradient(180deg, #fbfdff 0%, #f5f9fd 100%);
+  background:linear-gradient(180deg, #fbfcfb 0%, #f4f7f5 100%);
 }
 
 .app-sidebar-title-wrap{
@@ -336,95 +429,11 @@ body{
   color:var(--app-muted);
 }
 
-.app-sidebar-toggle{
-  width:34px;
-  height:34px;
-  border-radius:12px;
-  border:1px solid #d5dfeb;
-  background:#ffffff;
-  color:#36506b;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  transition:transform 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
-}
-
-.app-sidebar-toggle:hover{
-  background:#f3f7fc;
-  border-color:#c5d3e0;
-}
-
 .app-sidebar-content{
   padding:18px;
   max-height:calc(100vh - 150px);
   overflow:auto;
   transition:opacity 0.22s ease, padding 0.22s ease;
-}
-
-.app-sidebar-collapsed-hint{
-  display:none;
-  width:100%;
-  border:none;
-  background:transparent;
-  padding:16px 10px 18px 10px;
-  align-items:center;
-  justify-content:center;
-  flex-direction:column;
-  gap:10px;
-  color:#36506b;
-}
-
-.app-sidebar-collapsed-icon{
-  width:40px;
-  height:40px;
-  border-radius:14px;
-  background:var(--app-primary-soft);
-  color:var(--app-primary-strong);
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-}
-
-.app-sidebar-collapsed-label{
-  font-size:11px;
-  font-weight:800;
-  letter-spacing:0.08em;
-  text-transform:uppercase;
-  writing-mode:vertical-rl;
-  transform:rotate(180deg);
-}
-
-.app-module-shell.is-collapsed .app-sidebar-shell{
-  width:82px;
-  flex-basis:82px;
-}
-
-.app-module-shell.is-collapsed .app-sidebar-content,
-.app-module-shell.is-collapsed .app-sidebar-title-stack{
-  opacity:0;
-  pointer-events:none;
-  height:0;
-  overflow:hidden;
-  padding:0;
-}
-
-.app-module-shell.is-collapsed .app-sidebar-head{
-  padding:14px 10px;
-  border-bottom:none;
-  justify-content:center;
-}
-
-.app-module-shell.is-collapsed .app-sidebar-title-wrap{
-  flex-direction:column;
-  align-items:center;
-}
-
-.app-module-shell.is-collapsed .app-sidebar-collapsed-hint{
-  display:flex;
-}
-
-.app-module-shell.is-collapsed .app-sidebar-toggle{
-  transform:rotate(180deg);
 }
 
 .app-main-shell{
@@ -564,23 +573,23 @@ small{
 
 .btn-primary{
   background:linear-gradient(135deg, var(--app-primary) 0%, var(--app-primary-strong) 100%);
-  box-shadow:0 12px 28px rgba(21,94,239,0.24);
+  box-shadow:0 12px 28px rgba(53,81,77,0.22);
 }
 
 .btn-success{
-  background:linear-gradient(135deg, #109488 0%, var(--app-success) 100%);
-  box-shadow:0 10px 24px rgba(15,118,110,0.18);
+  background:linear-gradient(135deg, #4e8867 0%, var(--app-success) 100%);
+  box-shadow:0 10px 24px rgba(47,107,82,0.16);
 }
 
 .btn-warning{
-  background:linear-gradient(135deg, #e9a23b 0%, var(--app-warning) 100%);
-  box-shadow:0 10px 24px rgba(180,83,9,0.16);
+  background:linear-gradient(135deg, #c88d39 0%, var(--app-warning) 100%);
+  box-shadow:0 10px 24px rgba(159,107,34,0.16);
   color:#ffffff;
 }
 
 .btn-info{
-  background:linear-gradient(135deg, #0f9488 0%, #0f766e 100%);
-  box-shadow:0 10px 24px rgba(15,118,110,0.18);
+  background:linear-gradient(135deg, #5f8278 0%, #486a66 100%);
+  box-shadow:0 10px 24px rgba(72,106,102,0.16);
 }
 
 .btn-danger{
@@ -615,9 +624,9 @@ small{
 .nav-tabs > li.active > a,
 .nav-tabs > li.active > a:hover,
 .nav-tabs > li.active > a:focus{
-  background:#1a2f45;
+  background:#314541;
   color:#ffffff;
-  box-shadow:0 10px 24px rgba(17,32,51,0.18);
+  box-shadow:0 10px 24px rgba(49,69,65,0.18);
 }
 
 .dataTables_wrapper .dataTables_length,
@@ -675,14 +684,14 @@ pre.shiny-text-output{
 }
 
 .shiny-notification-message{
-  background:#edf8f5;
-  color:#0d534d;
+  background:#edf6f0;
+  color:#204838;
   border-left:5px solid var(--app-success);
 }
 
 .shiny-notification-warning{
-  background:#fff6e8;
-  color:#8a4b09;
+  background:#fbf3e7;
+  color:#7f571d;
   border-left:5px solid var(--app-warning);
 }
 
@@ -736,6 +745,149 @@ pre.shiny-text-output{
 .welcome-card .fa-2x{
   color:var(--app-primary-strong);
   margin:10px 0 12px 0;
+}
+
+.workflow-step{
+  border:1px solid #dde4de;
+  border-radius:18px;
+  margin-bottom:14px;
+  background:#ffffff;
+  overflow:hidden;
+  box-shadow:0 4px 16px rgba(15,23,42,0.05);
+  transition:transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.workflow-step-head{
+  padding:13px 15px;
+  font-weight:800;
+  font-size:15px;
+  background:#f5f8f6;
+  border-bottom:1px solid #e7eee8;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  transition:background-color 0.18s ease;
+}
+
+.workflow-step:hover{
+  border-color:#cfd9d2;
+}
+
+.workflow-step-title{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.workflow-step-num{
+  width:26px;
+  height:26px;
+  border-radius:999px;
+  background:#e8f0ee;
+  color:#35514d;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:12px;
+  font-weight:800;
+  flex:0 0 auto;
+  border:1px solid #cbd8d3;
+}
+
+.workflow-step-status{
+  font-size:11px;
+  font-weight:800;
+  padding:5px 9px;
+  border-radius:999px;
+  background:#edf2ef;
+  color:#425550;
+  white-space:nowrap;
+}
+
+.workflow-step-body{
+  padding:14px 15px 16px 15px;
+}
+
+.workflow-step-body .well{
+  border:none;
+  box-shadow:none;
+  background:transparent;
+  padding:0;
+  margin-bottom:0;
+}
+
+.workflow-lead{
+  font-size:13px;
+  color:#53635e;
+  margin-bottom:10px;
+  line-height:1.5;
+}
+
+.workflow-subtitle{
+  font-size:12px;
+  font-weight:800;
+  color:#314541;
+  margin-top:10px;
+  margin-bottom:6px;
+  text-transform:uppercase;
+  letter-spacing:0.03em;
+}
+
+.helper-box{
+  background:#f5f8f6;
+  border:1px solid #dbe4de;
+  border-radius:12px;
+  padding:10px 12px;
+  font-size:12px;
+  color:#3f504b;
+  line-height:1.55;
+  margin-bottom:10px;
+}
+
+.helper-box strong{
+  color:#2f4742;
+}
+
+.helper-muted{
+  font-size:12px;
+  color:#6a7773;
+  margin-top:4px;
+  margin-bottom:8px;
+  line-height:1.4;
+}
+
+.mini-note{
+  font-size:11px;
+  color:#6a7773;
+  margin-top:4px;
+  line-height:1.4;
+}
+
+.btn-blockish{
+  width:100%;
+  margin-bottom:8px;
+}
+
+.section-divider{
+  margin:10px 0 12px 0;
+  border-top:1px solid #e8eeea;
+}
+
+.compact-help summary{
+  cursor:pointer;
+  font-weight:700;
+  color:#314541;
+  margin-bottom:8px;
+}
+
+.compact-help ol{
+  margin-bottom:0;
+  padding-left:18px;
+  font-size:12px;
+  color:#52635e;
+  line-height:1.55;
 }
 
 .welcome-detail-box{
@@ -808,36 +960,10 @@ pre.shiny-text-output{
     flex-direction:column;
   }
 
-  .app-sidebar-shell,
-  .app-module-shell.is-collapsed .app-sidebar-shell{
+  .app-sidebar-shell{
     width:100%;
     flex-basis:auto;
     position:static;
-  }
-
-  .app-module-shell.is-collapsed .app-sidebar-content,
-  .app-module-shell.is-collapsed .app-sidebar-title-stack{
-    opacity:1;
-    pointer-events:auto;
-    height:auto;
-    overflow:visible;
-    padding:18px;
-  }
-
-  .app-module-shell.is-collapsed .app-sidebar-head{
-    padding:16px 18px 14px 18px;
-    border-bottom:1px solid #e8eef5;
-    justify-content:space-between;
-  }
-
-  .app-module-shell.is-collapsed .app-sidebar-title-wrap{
-    flex-direction:row;
-    align-items:flex-start;
-  }
-
-  .app-sidebar-toggle,
-  .app-sidebar-collapsed-hint{
-    display:none !important;
   }
 }
 
@@ -868,48 +994,7 @@ pre.shiny-text-output{
 "))
 
 custom_js <- tags$script(HTML("
-(function(){
-  function applySidebarState(root, collapsed){
-    if(!root){ return; }
-    root.classList.toggle('is-collapsed', !!collapsed);
-  }
-
-  function restoreSidebarStates(){
-    var roots = document.querySelectorAll('.app-module-shell[data-sidebar-key]');
-    roots.forEach(function(root){
-      var key = root.getAttribute('data-sidebar-key');
-      if(!key || window.innerWidth < 1200){ return; }
-      try{
-        applySidebarState(root, window.localStorage.getItem(key) === 'collapsed');
-      }catch(err){}
-    });
-  }
-
-  document.addEventListener('click', function(event){
-    var toggle = event.target.closest('[data-sidebar-toggle]');
-    if(!toggle){ return; }
-    var root = toggle.closest('.app-module-shell');
-    if(!root){ return; }
-    var collapsed = !root.classList.contains('is-collapsed');
-    applySidebarState(root, collapsed);
-    var key = root.getAttribute('data-sidebar-key');
-    if(key && window.innerWidth >= 1200){
-      try{
-        window.localStorage.setItem(key, collapsed ? 'collapsed' : 'expanded');
-      }catch(err){}
-    }
-  });
-
-  document.addEventListener('shown.bs.tab', restoreSidebarStates);
-  document.addEventListener('shiny:connected', restoreSidebarStates);
-  window.addEventListener('resize', restoreSidebarStates);
-
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', restoreSidebarStates);
-  } else {
-    restoreSidebarStates();
-  }
-})();
+(function(){})();
 "))
 
 # Source function files

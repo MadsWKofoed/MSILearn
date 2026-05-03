@@ -26,42 +26,59 @@ processing_module_ui <- function(id) {
         ns = ns,
         module_key = "processing_sidebar",
         sidebar_title = "Processing Controls",
-        sidebar_subtitle = "Set up the study, data source, preprocessing parameters, and pipeline run without leaving the current page state.",
+        sidebar_subtitle = "Move through the setup step by step, and keep the full results area open while you work.",
         sidebar_icon = "cogs",
         sidebar_hint = "Processing",
         sidebar = tagList(
-          wellPanel(
-            h4("Study & Sample"),
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_study",
+            number = "1",
+            title = "Study and sample",
+            status = uiOutput(ns("step_study_status")),
+            open = TRUE,
+            tags$div(
+              class = "workflow-lead",
+              "Create or choose the study first, then define the sample name that this processing output belongs to."
+            ),
             radioButtons(ns("study_mode"), "Study:",
-              choices  = c("Create new Study" = "new",
-                           "Add to existing Study" = "existing"),
+              choices  = c("Create new Study" = "new", "Add to existing Study" = "existing"),
               selected = "new"
             ),
             conditionalPanel(
               condition = sprintf("input['%s'] == 'new'", ns("study_mode")),
               textInput(ns("new_study_name"), "Study name:", placeholder = "e.g. SSC_cohort_2025"),
               textInput(ns("new_study_desc"), "Description (optional):"),
-              actionButton(ns("create_study_btn"), "Create Study", class = "btn-sm btn-success")
+              actionButton(ns("create_study_btn"), "Create Study", class = "btn-sm btn-success btn-blockish")
             ),
             conditionalPanel(
               condition = sprintf("input['%s'] == 'existing'", ns("study_mode")),
-              actionButton(ns("refresh_studies"), "Refresh", class = "btn-xs btn-default"),
-              selectInput(ns("existing_study_id"), "Select Study:",
+              actionButton(ns("refresh_studies"), "Refresh study list", class = "btn-xs btn-default"),
+              selectInput(ns("existing_study_id"), "Select study:",
                 choices = c("(loading...)" = ""), width = "100%"
               )
             ),
             uiOutput(ns("study_badge")),
-            hr(),
+            tags$div(class = "section-divider"),
             textInput(ns("sample_name_input"), "Sample name:",
               placeholder = "Leave empty to use filename"
             ),
             uiOutput(ns("sample_duplicate_warning"))
           ),
-          wellPanel(
-            h4("Data Source"),
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_source",
+            number = "2",
+            title = "Choose data source",
+            status = uiOutput(ns("step_source_status")),
+            tags$div(
+              class = "workflow-lead",
+              "Either upload a fresh imzML and ibd pair or reuse a sample that is already registered in the selected study."
+            ),
             tags$p(
-              class = "help-block",
-              "Choose whether this run should start from newly uploaded MSI files or an already registered dataset."
+              class = "helper-box",
+              tags$strong("Tip: "),
+              "Use a clear sample name before running processing so downstream pages are easier to navigate."
             ),
             radioButtons(ns("data_source"), NULL,
               choices  = c("Upload new files", "Use existing dataset"),
@@ -76,11 +93,15 @@ processing_module_ui <- function(id) {
               uiOutput(ns("existing_sample_ui"))
             )
           ),
-          wellPanel(
-            h4("Processing Parameters"),
-            tags$p(
-              class = "help-block",
-              "Tune the core preprocessing settings. The resulting pipeline identifier is previewed exactly as it will be stored."
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_params",
+            number = "3",
+            title = "Processing parameters",
+            status = uiOutput(ns("step_params_status")),
+            tags$div(
+              class = "workflow-lead",
+              "Tune the preprocessing settings and choose the alignment reference used to create the feature matrix."
             ),
             numericInput(ns("resolution"), "Resolution (ppm):",
               value = 10, min = 1, max = 100, step = 1
@@ -114,19 +135,22 @@ processing_module_ui <- function(id) {
               selectInput(ns("ref_csv_mongo"), "Select reference:", choices = "Loading...")
             )
           ),
-          wellPanel(
-            h4("Pipeline"),
-            tags$p(
-              class = "help-block",
-              "Review the deterministic pipeline id before processing. Existing duplicate study, sample, and pipeline combinations are blocked automatically."
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_run",
+            number = "4",
+            title = "Review and run",
+            status = uiOutput(ns("step_run_status")),
+            tags$div(
+              class = "workflow-lead",
+              "Review the pipeline summary and launch processing. Exact duplicates are still blocked automatically in the backend."
             ),
             verbatimTextOutput(ns("pipeline_id_preview")),
             actionButton(ns("run_processing"), "Run Processing",
-              class = "btn-primary btn-lg", style = "width:100%"
+              class = "btn-primary btn-lg btn-blockish", style = "width:100%"
             ),
-            br(), br(),
             actionButton(ns("clear_cache"), "Clear local cache",
-              class = "btn-warning btn-sm"
+              class = "btn-warning btn-sm btn-blockish"
             )
           )
         ),
@@ -205,6 +229,33 @@ processing_module_server <- function(id) {
     add_log <- function(msg) {
       processing_log(paste0(processing_log(),
                              format(Sys.time(), "[%H:%M:%S]"), " ", msg, "\n"))
+    }
+
+    step_badge_ui <- function(text) {
+      tags$span(class = "workflow-step-status", text)
+    }
+
+    open_sidebar_step <- function(step = c("study", "source", "params", "run")) {
+      step <- match.arg(step)
+
+      ids <- c(
+        study = ns("step_study"),
+        source = ns("step_source"),
+        params = ns("step_params"),
+        run = ns("step_run")
+      )
+
+      target <- ids[[step]]
+      js <- sprintf(
+        "$('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('show');",
+        ids[["study"]], ids[["source"]], ids[["params"]], ids[["run"]], target
+      )
+
+      shinyjs::runjs(js)
     }
 
     cleanup_cardinal_temp <- function() {
@@ -355,6 +406,8 @@ processing_module_server <- function(id) {
           duration = NULL
         )
         msi_upload_reset_counter(msi_upload_reset_counter() + 1L)
+      } else {
+        open_sidebar_step("params")
       }
     }, ignoreInit = TRUE)
 
@@ -375,6 +428,7 @@ processing_module_server <- function(id) {
         return()
       }
       save_current_uploaded_reference(show_success = TRUE, switch_to_database = TRUE)
+      open_sidebar_step("run")
     })
 
     # ── Studies dropdown ───────────────────────────────────────────────────
@@ -393,8 +447,7 @@ processing_module_server <- function(id) {
         updateSelectInput(session, "existing_study_id",
                           choices = c("No studies found" = ""))
       } else {
-        ch <- setNames(studies_df[["_id"]],
-                       paste0(studies_df$name, " [", studies_df[["_id"]], "]"))
+        ch <- setNames(studies_df[["_id"]], studies_df$name)
         updateSelectInput(session, "existing_study_id", choices = ch)
       }
     })
@@ -411,14 +464,14 @@ processing_module_server <- function(id) {
       )
       if (!is.null(sid)) {
         active_study_id(sid)
-        showNotification(paste0("\u2713 Study created: ", sid), type = "message")
+        showNotification(paste0("\u2713 Study created: ", nm), type = "message")
         # Refresh the 'existing' dropdown so it is immediately available
         studies_df <- tryCatch(get_studies(), error = function(e) data.frame())
         if (nrow(studies_df) > 0 && "_id" %in% names(studies_df)) {
-          ch <- setNames(studies_df[["_id"]],
-                         paste0(studies_df$name, " [", studies_df[["_id"]], "]"))
+          ch <- setNames(studies_df[["_id"]], studies_df$name)
           updateSelectInput(session, "existing_study_id", choices = ch)
         }
+        open_sidebar_step("source")
       }
     })
 
@@ -427,14 +480,32 @@ processing_module_server <- function(id) {
       req(input$study_mode == "existing", input$existing_study_id,
           nzchar(input$existing_study_id))
       active_study_id(input$existing_study_id)
+      open_sidebar_step("source")
     })
+
+    observeEvent(input$existing_sample, {
+      if (identical(input$data_source %||% "", "Use existing dataset") &&
+          nzchar(input$existing_sample %||% "")) {
+        open_sidebar_step("params")
+      }
+    }, ignoreInit = TRUE)
+
+    observeEvent(input$ref_csv_mongo, {
+      if (identical(input$ref_source %||% "", "From database") &&
+          nzchar(input$ref_csv_mongo %||% "")) {
+        open_sidebar_step("run")
+      }
+    }, ignoreInit = TRUE)
 
     # ── Study badge ────────────────────────────────────────────────────────
     output$study_badge <- renderUI({
       sid <- active_study_id()
       if (is.null(sid)) return(tags$small(style="color:grey", "No study selected"))
-      tags$div(class="alert alert-info", style="padding:6px;margin:4px 0",
-               tags$b("Active study: "), sid)
+      tags$div(
+        class = "helper-box",
+        tags$strong("Active study: "),
+        lookup_study_label(sid)
+      )
     })
 
     # ── Existing-sample dropdown (for "Use existing dataset") ──────────────
@@ -447,6 +518,37 @@ processing_module_server <- function(id) {
       selectInput(ns("existing_sample"),  "Select sample:",
                   choices = setNames(samp_df[["_id"]], samp_df$sample_name),
                   width   = "100%")
+    })
+
+    output$step_study_status <- renderUI({
+      sid <- active_study_id() %||% ""
+      if (nzchar(sid)) step_badge_ui("Ready") else step_badge_ui("Select study")
+    })
+
+    output$step_source_status <- renderUI({
+      if (identical(input$data_source %||% "", "Use existing dataset")) {
+        if (nzchar(input$existing_sample %||% "")) step_badge_ui("Selected") else step_badge_ui("Choose sample")
+      } else {
+        validation <- raw_upload_validation()
+        if (isTRUE(validation$valid)) step_badge_ui("Files ready") else step_badge_ui("Upload files")
+      }
+    })
+
+    output$step_params_status <- renderUI({
+      ref_ready <- if (identical(input$ref_source %||% "", "Upload your own")) {
+        !is.null(input$ref_csv)
+      } else {
+        nzchar(input$ref_csv_mongo %||% "")
+      }
+      if (isTRUE(ref_ready)) step_badge_ui("Configured") else step_badge_ui("Choose reference")
+    })
+
+    output$step_run_status <- renderUI({
+      if (nzchar(active_study_id() %||% "") && !is.null(tryCatch(current_pipeline_params(), error = function(e) NULL))) {
+        step_badge_ui("Ready")
+      } else {
+        step_badge_ui("Waiting")
+      }
     })
 
     # ── Duplicate-name warning (for upload path) ───────────────────────────
@@ -534,12 +636,13 @@ processing_module_server <- function(id) {
       } else {
         params$reference_name
       }
-      pid <- compute_pipeline_id("processing", params)
-      paste0("pipeline_id:\n", substr(pid, 1, 16), "...\n\n",
-             "snr=",        params$snr,        "\n",
-             "tol=",        params$tolerance,  "\n",
-             "res=",        params$resolution, " ppm\n",
-             "ref=",        ref_label)
+      paste0(
+        "Pipeline summary\n\n",
+        "Signal-to-noise: ", params$snr, "\n",
+        "Binning tolerance: ", params$tolerance, " mz\n",
+        "Resolution: ", params$resolution, " ppm\n",
+        "Reference: ", ref_label
+      )
     })
 
     # ── Artifact table for current study + sample ──────────────────────────
@@ -601,7 +704,7 @@ processing_module_server <- function(id) {
           })
           
           data.frame(
-            pipeline_id = substr(pid, 1, 12),
+            pipeline = format_processing_pipeline_label(pid),
             snr         = pa$snr %||% NA,
             tolerance   = pa$tolerance %||% NA,
             resolution  = pa$resolution %||% NA,
@@ -611,7 +714,7 @@ processing_module_server <- function(id) {
           )
         }, error = function(e) {
           data.frame(
-            pipeline_id = substr(pid, 1, 12),
+            pipeline = format_processing_pipeline_label(pid),
             snr         = NA,
             tolerance   = NA,
             resolution  = NA,
@@ -623,6 +726,7 @@ processing_module_server <- function(id) {
       })
       
       df <- do.call(rbind, pipes)
+      names(df) <- c("Pipeline", "SNR", "Tolerance", "Resolution", "Reference", "Created at")
       
       DT::datatable(
         df,
@@ -715,7 +819,7 @@ processing_module_server <- function(id) {
                                pipeline_id = pipeline_id)
       if (nrow(arts) > 0) {
         showNotification(
-          paste0("Artifact already exists for this exact pipeline_id:\n", pipeline_id),
+          "A processed artifact with the same settings already exists for this sample.",
           type = "warning", duration = 12
         )
         return()
@@ -735,9 +839,9 @@ processing_module_server <- function(id) {
 
       tryCatch({
         add_log("=== PROCESSING STARTED ===")
-        add_log(sprintf("Study:  %s", study_id))
-        add_log(sprintf("Sample: %s  [id: %s]", sample_name, sample_id))
-        add_log(sprintf("pipeline_id: %s", pipeline_id))
+        add_log(sprintf("Study:  %s", lookup_study_label(study_id)))
+        add_log(sprintf("Sample: %s", sample_name))
+        add_log(sprintf("Pipeline: %s", format_processing_pipeline_label(pipeline_id)))
 
         # ── Work dir ───────────────────────────────────────────────────
         work_dir <- tempfile("msi_run_")
@@ -954,21 +1058,20 @@ processing_module_server <- function(id) {
 
         progress$set(value = 100, message = "Complete!")
         add_log(sprintf("✓ artifact_id: %s", artifact_id))
-        add_log(sprintf("✓ pipeline_id: %s", pipeline_id))
         add_log("=== PROCESSING COMPLETE ===")
 
         output$pipeline_status <- renderUI({
           div(class = "alert alert-success",
             h4("✅ Processing Complete"),
-            p(strong("Study:   "), study_id),
+            p(strong("Study:   "), lookup_study_label(study_id)),
             p(strong("Sample:  "), sample_name),
-            p(strong("sample_id: "), sample_id),
-            p(strong("pipeline_id: "), pipeline_id),
-            p(strong("artifact_id: "), artifact_id),
+            p(strong("Pipeline: "), format_processing_pipeline_label(pipeline_id)),
             p(strong("Features: "), length(mz_names), " m/z bins"),
             p(strong("Pixels:   "), nrow(full_df))
           )
         })
+
+        open_sidebar_step("run")
 
         showNotification(
           sprintf("✅ Processing complete! %d features", length(mz_names)),

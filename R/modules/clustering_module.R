@@ -1211,10 +1211,7 @@ clustering_module_server <- function(id) {
           updateSelectInput(session, "pipeline_select", choices = c("— no processed artifacts —" = ""))
         } else {
           labels <- vapply(pids, function(pid) {
-            tryCatch({
-              meta <- get_pipeline(pid)
-              paste0(meta$name[1], " (", substr(pid, 1, 8), "…)")
-            }, error = function(e) substr(pid, 1, 16))
+            format_processing_pipeline_label(pid)
           }, character(1))
           updateSelectInput(session, "pipeline_select", choices = c("— select —" = "", setNames(pids, labels)))
         }
@@ -2218,8 +2215,7 @@ clustering_module_server <- function(id) {
           tags$div(
             style = "color:green; margin-top:6px;",
             tags$b("✓ Committed"), tags$br(),
-            tags$small("Artifact: ", substr(art_id, 1, 12), "…"), tags$br(),
-            tags$small("Annotation: ", substr(ann_id, 1, 12), "…")
+            tags$small("Cluster artifact and annotations were saved to the database.")
           )
         )
         showNotification("Committed to database.", type = "message")

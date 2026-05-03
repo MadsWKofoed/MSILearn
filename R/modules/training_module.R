@@ -14,13 +14,21 @@ training_module_ui <- function(id) {
         ns = ns,
         module_key = "training_sidebar",
         sidebar_title = "Training Controls",
-        sidebar_subtitle = "Dataset creation, dataset selection, and model hyperparameters stay grouped here so the experiment flow is easier to scan.",
+        sidebar_subtitle = "Use the sidebar as a guided workflow, and keep larger diagnostics and results in the main workspace.",
         sidebar_icon = "sliders-h",
         sidebar_hint = "Training",
         sidebar = tagList(
-          wellPanel(
-            h4("0. Create Dataset"),
-            p(tags$small("Pin samples, pipeline, annotation set and dataset split seed into a frozen snapshot.")),
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_dataset_create",
+            number = "1",
+            title = "Create dataset",
+            status = uiOutput(ns("step_dataset_create_status")),
+            open = TRUE,
+            tags$div(
+              class = "workflow-lead",
+              "Freeze the study, processed MSI pipeline, annotation set, and split settings into a reproducible training dataset."
+            ),
             selectInput(ns("ds_study"), "Study:",
               choices = c("(loading...)" = ""), width = "100%"
             ),
@@ -77,16 +85,15 @@ training_module_ui <- function(id) {
                 selected = "estimate",
                 inline = FALSE
               ),
-              conditionalPanel(
-                condition = sprintf("input['%s'] == 'estimate'", ns("spatial_buffer_mode")),
-                actionButton(ns("estimate_spatial_btn"), "Estimate from Moran's I + correlogram",
-                  class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"
-                ),
-                uiOutput(ns("estimate_spatial_text")),
-                plotOutput(ns("estimate_moran_plot"), height = "360px")
+            conditionalPanel(
+              condition = sprintf("input['%s'] == 'estimate'", ns("spatial_buffer_mode")),
+              actionButton(ns("estimate_spatial_btn"), "Estimate from Moran's I + correlogram",
+                class = "btn-default btn-sm", style = "width:100%; margin-bottom:8px;"
               ),
-              numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
-              numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
+              uiOutput(ns("estimate_spatial_text"))
+            ),
+            numericInput(ns("ds_block_size"), "Block size (pixels):", value = 25, min = 2, step = 1),
+            numericInput(ns("ds_buffer_radius"), "Buffer radius (pixels):", value = 0, min = 0, step = 1)
             ),
             conditionalPanel(
               condition = sprintf(
@@ -110,8 +117,16 @@ training_module_ui <- function(id) {
             ),
             uiOutput(ns("create_dataset_status"))
           ),
-          wellPanel(
-            h4("1. Select Dataset"),
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_dataset_select",
+            number = "2",
+            title = "Select dataset",
+            status = uiOutput(ns("step_dataset_select_status")),
+            tags$div(
+              class = "workflow-lead",
+              "Review the frozen datasets available for training and choose the one you want to compare runs on."
+            ),
             p(tags$small(
               "Datasets are frozen snapshots that pin samples, pipeline, ",
               "annotation set, and split seed. Select one to train on it."
@@ -155,9 +170,16 @@ training_module_ui <- function(id) {
             ),
             uiOutput(ns("dataset_info_ui"))
           ),
-          wellPanel(
-            h4("2. Hyperparameters"),
-            p(tags$small("Set the model fitting options used for the selected frozen dataset.")),
+          app_workflow_step(
+            ns = ns,
+            step_id = "step_training_run",
+            number = "3",
+            title = "Configure and train",
+            status = uiOutput(ns("step_training_run_status")),
+            tags$div(
+              class = "workflow-lead",
+              "Choose model fitting settings for the selected dataset, then train and compare model runs."
+            ),
             selectInput(
               ns("normalize"),
               "Normalisation",
@@ -185,6 +207,12 @@ training_module_ui <- function(id) {
           )
         ),
         main = tagList(
+          app_panel(
+            title = "Spatial Diagnostic",
+            subtitle = "The Moran's I and correlogram diagnostic is shown here at full width when using spatial block estimation.",
+            uiOutput(ns("estimate_plot_caption_ui")),
+            plotOutput(ns("estimate_moran_plot"), height = "420px")
+          ),
           app_panel(
             title = "Model Runs for Selected Dataset",
             subtitle = "Filter the stored datasets in the left sidebar, train on the selected snapshot, and compare the resulting runs here.",
@@ -246,8 +274,64 @@ training_module_server <- function(id) {
       }, error = function(e) NULL)
     })
 
+    output$step_dataset_create_status <- renderUI({
+      sid <- input$ds_study %||% ""
+      pid <- input$ds_pipeline %||% ""
+      ann_id <- input$ds_ann_set %||% ""
+      samp_ids <- input$ds_samples %||% character(0)
+      if (nzchar(sid) && nzchar(pid) && nzchar(ann_id) && length(samp_ids) > 0) {
+        step_badge_ui("Ready")
+      } else {
+        step_badge_ui("Setup needed")
+      }
+    })
+
+    output$step_dataset_select_status <- renderUI({
+      if (nzchar(input$dataset_id %||% "")) step_badge_ui("Selected") else step_badge_ui("Choose dataset")
+    })
+
+    output$step_training_run_status <- renderUI({
+      if (nzchar(input$dataset_id %||% "")) step_badge_ui("Ready") else step_badge_ui("Waiting")
+    })
+
+    output$estimate_plot_caption_ui <- renderUI({
+      diag <- estimate_diag_rv()
+      if (is.null(diag)) {
+        return(tags$p(class = "helper-muted", "Run the Moran's I estimate from the dataset creation step to show the diagnostic here."))
+      }
+      tags$p(
+        class = "helper-muted",
+        paste0("Current estimate context: ", estimate_diag_label_rv())
+      )
+    })
+
     add_log <- function(msg) {
       log_val(paste0(log_val(), "\n", format(Sys.time(), "[%H:%M:%S] "), msg))
+    }
+
+    step_badge_ui <- function(text) {
+      tags$span(class = "workflow-step-status", text)
+    }
+
+    open_sidebar_step <- function(step = c("dataset_create", "dataset_select", "training_run")) {
+      step <- match.arg(step)
+
+      ids <- c(
+        dataset_create = ns("step_dataset_create"),
+        dataset_select = ns("step_dataset_select"),
+        training_run = ns("step_training_run")
+      )
+
+      target <- ids[[step]]
+      js <- sprintf(
+        "$('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('hide');
+        $('#%s').collapse('show');",
+        ids[["dataset_create"]], ids[["dataset_select"]], ids[["training_run"]], target
+      )
+
+      shinyjs::runjs(js)
     }
 
     split_strategy_label <- function(x) {
@@ -349,19 +433,19 @@ training_module_server <- function(id) {
 
       pipeline_label <- as.character(pipeline_name_map[[pipeline_id]] %||% "")
       if (!nzchar(pipeline_label)) {
-        pipeline_label <- substr(pipeline_id, 1, 12)
+        pipeline_label <- format_processing_pipeline_label(pipeline_id)
       }
 
       annotation_set_label <- as.character(annotation_set_name_map[[annotation_key]] %||% "")
       if (!nzchar(annotation_set_label)) {
-        annotation_set_label <- substr(annotation_set_id, 1, 12)
+        annotation_set_label <- "Unnamed annotation set"
       }
 
       data.frame(
         dataset_id = as.character(row$`_id`[1] %||% ds$`_id`[1] %||% ""),
         dataset_name = as.character(row$name[1] %||% ds$name[1] %||% ""),
         study_id = study_id,
-        study = unname(study_map[[study_id]] %||% study_id),
+        study = unname(study_map[[study_id]] %||% lookup_study_label(study_id)),
         pipeline_id = pipeline_id,
         pipeline_label = pipeline_label,
         annotation_set_id = annotation_set_id,
@@ -386,7 +470,7 @@ training_module_server <- function(id) {
       pipeline_ids <- pipeline_ids[nzchar(pipeline_ids)]
       pipeline_name_map <- stats::setNames(
         vapply(pipeline_ids, function(pid) {
-          tryCatch(as.character(get_pipeline(pid)$name[1] %||% pid), error = function(e) pid)
+          format_processing_pipeline_label(pid)
         }, character(1)),
         pipeline_ids
       )
@@ -969,6 +1053,7 @@ training_module_server <- function(id) {
     observeEvent(input$ds_study, {
       sid <- input$ds_study
       if (!nzchar(sid %||% "")) return()
+      open_sidebar_step("dataset_create")
 
       tryCatch({
         samp_df <- get_samples(sid)
@@ -990,10 +1075,7 @@ training_module_server <- function(id) {
                             choices = c("No processed artifacts" = ""))
         } else {
           labels <- vapply(pids, function(pid) {
-            tryCatch({
-              m <- get_pipeline(pid)
-              paste0(m$name[1], " (", substr(pid, 1, 8), "\u2026)")
-            }, error = function(e) substr(pid, 1, 16))
+            format_processing_pipeline_label(pid)
           }, character(1))
           updateSelectInput(session, "ds_pipeline",
                             choices = c("— select —" = "", setNames(pids, labels)))
@@ -1015,6 +1097,14 @@ training_module_server <- function(id) {
       }, error = function(e)
         updateSelectInput(session, "ds_ann_set", choices = c("Error" = ""))
       )
+    }, ignoreInit = TRUE)
+
+    observeEvent(input$ds_pipeline, {
+      if (nzchar(input$ds_pipeline %||% "")) open_sidebar_step("dataset_create")
+    }, ignoreInit = TRUE)
+
+    observeEvent(input$ds_ann_set, {
+      if (nzchar(input$ds_ann_set %||% "")) open_sidebar_step("dataset_create")
     }, ignoreInit = TRUE)
 
     observeEvent(list(input$ds_samples, input$ds_evaluation_mode), {
@@ -1211,10 +1301,15 @@ training_module_server <- function(id) {
         is_spatial_split <- identical(sp$strategy, "spatial_block")
         split_label <- if (identical(sp$strategy, "leave_one_sample_out")) {
           "Grouped sample-out"
+        } else if (identical(sp$strategy, "spatial_block")) {
+          "Spatial block"
         } else {
           sp$strategy %||% "random"
         }
         dataset_name <- as.character(ds$name[1] %||% input$dataset_id)
+        study_label <- lookup_study_label(ds$study_id[1] %||% "")
+        pipeline_label <- format_processing_pipeline_label(ds$pipeline_id[1] %||% "")
+        ann_set_label <- lookup_annotation_set_label(ds$study_id[1] %||% "", ds$annotation_set_id[1] %||% "")
         tagList(
           tags$div(
             style = "margin-bottom:6px;",
@@ -1222,10 +1317,10 @@ training_module_server <- function(id) {
             dataset_name
           ),
           tags$small(
-            tags$b("Study: "),    ds$study_id,  tags$br(),
+            tags$b("Study: "),    study_label,  tags$br(),
             tags$b("Samples: "),  n,            tags$br(),
-            tags$b("Pipeline: "), substr(ds$pipeline_id, 1, 12), "...", tags$br(),
-            tags$b("Ann. set: "), substr(ds$annotation_set_id, 1, 12), "...", tags$br(),
+            tags$b("Pipeline: "), pipeline_label, tags$br(),
+            tags$b("Annotation set: "), ann_set_label, tags$br(),
             tags$b("Stage: "),    ds$stage_type, tags$br(),
             tags$b("Evaluation mode: "), evaluation_mode_label(eval_mode), tags$br(),
             tags$b("Split strategy: "), split_label, tags$br(),
@@ -1682,10 +1777,11 @@ training_module_server <- function(id) {
         output$create_dataset_status <- renderUI(
           tags$div(class = "alert alert-success", style = "padding:6px; margin-top:6px;",
             tags$b("\u2713 Dataset created"), tags$br(),
-            tags$small(substr(dataset_id, 1, 16), "\u2026")
+            tags$small(nm)
           )
         )
-        showNotification(paste0("Dataset created: ", dataset_id), type = "message")
+        showNotification(paste0("Dataset created: ", nm), type = "message")
+        open_sidebar_step("dataset_select")
         refresh_dataset_browser(selected_dataset_id = dataset_id, reveal_dataset_id = dataset_id)
       }, error = function(e) {
         output$create_dataset_status <- renderUI(
@@ -1701,6 +1797,7 @@ training_module_server <- function(id) {
       tryCatch({
         runs_rv(list_model_runs(input$dataset_id))
         selected_run_id(NULL)
+        open_sidebar_step("training_run")
       }, error = function(e) {
         runs_rv(data.frame())
         selected_run_id(NULL)
@@ -1791,7 +1888,7 @@ training_module_server <- function(id) {
         showNotification("Select a dataset before training.", type = "warning"); return()
       }
       log_val("")
-      add_log(paste0("Starting training on dataset: ", dataset_id))
+      add_log(paste0("Starting training on dataset: ", lookup_dataset_label(dataset_id)))
       shinyjs::disable("run_training")
       on.exit(shinyjs::enable("run_training"), add = TRUE)
 
@@ -1806,8 +1903,8 @@ training_module_server <- function(id) {
           seed              = input$seed
         )
         last_run_id(run_id)
-        add_log(paste0("\u2713 Training complete. model_run_id: ", run_id))
-        showNotification(paste0("Training complete! Run ID: ", run_id), type = "message")
+        add_log("\u2713 Training complete.")
+        showNotification("Training complete.", type = "message")
       }, error = function(e) {
         add_log(paste0("\u2717 Error: ", conditionMessage(e)))
         showNotification(conditionMessage(e), type = "error", duration = 15)
@@ -1883,7 +1980,6 @@ training_module_server <- function(id) {
 
       tbl <- data.frame(
         run_id_full = df_sorted[["_id"]],
-        run_id      = substr(df_sorted[["_id"]], 1, 30),
         model_type  = df_sorted$model_type,
         evaluation  = eval_mode,
         normalisation = norm,
@@ -1898,6 +1994,12 @@ training_module_server <- function(id) {
         cv_acc      = cv_acc,
         created_at  = df_sorted$created_at,
         stringsAsFactors = FALSE
+      )
+
+      names(tbl) <- c(
+        "run_id_full", "Model type", "Evaluation mode", "Normalisation",
+        "mtry", "Trees", "Min node size", "Split rule", "CV folds",
+        "Primary score", "Test accuracy", "Test kappa", "CV mean accuracy", "Created at"
       )
 
       DT::datatable(
