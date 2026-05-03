@@ -182,7 +182,7 @@ training_module_ui <- function(id) {
             app_sidebar_step(
               ns("step_hyperparameters"),
               "3",
-              "Hyperparameters",
+              "Hyperparameters & Training",
               status = app_step_status("Model"),
               selectInput(
                 ns("normalize"),
@@ -194,13 +194,8 @@ training_module_ui <- function(id) {
               numericInput(ns("num_trees"), "num.trees", value = 500, min = 10),
               numericInput(ns("min_node_size"), "min.node.size", value = 10, min = 1),
               selectInput(ns("splitrule"), "splitrule", choices = c("gini", "extratrees"), selected = "gini"),
-              numericInput(ns("seed"), "Training / CV seed", value = 1234, min = 1)
-            ),
-            app_sidebar_step(
-              ns("step_train"),
-              "4",
-              "Train Model",
-              status = app_step_status("Run"),
+              numericInput(ns("seed"), "Training / CV seed", value = 1234, min = 1),
+              tags$div(class = "app-divider"),
               tags$div(
                 class = "app-helper",
                 tags$strong("Tip"),
