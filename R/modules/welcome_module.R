@@ -6,14 +6,19 @@ welcome_module_ui <- function(id) {
 
   tabPanel(
     "Welcome",
-
-    div(class = "welcome-container",
-
-      h1("MSI Clustering & Prediction Platform"),
+    div(
+      class = "app-page",
+      app_page_header(
+        title = "MSI Clustering & Prediction Platform",
+        subtitle = "An interactive analysis environment for Mass Spectrometry Imaging workflows, from preprocessing and clustering to training and prediction.",
+        badge = "Workflow Overview",
+        icon_name = "microscope"
+      ),
+      div(class = "welcome-container",
 
       p(
         class = "lead",
-        "An interactive workflow for analysing Mass Spectrometry Imaging (MSI) data."
+        "Choose a workflow area below to understand what each step does, which data objects it creates, and how the full MSI analysis pipeline fits together."
       ),
 
       br(),
@@ -125,7 +130,7 @@ welcome_module_ui <- function(id) {
           strong("Prediction"), " applies trained models to new data."
         )
       )
-    )
+    ))
   )
 }
 

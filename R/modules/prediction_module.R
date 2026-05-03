@@ -5,98 +5,128 @@ prediction_module_ui <- function(id) {
 
   tabPanel(
     "Prediction",
-    fluidRow(
-      column(
-        4,
-        wellPanel(
-          h4("1. Select Model Run"),
-          actionButton(ns("refresh_runs"), "Refresh model runs", class = "btn-sm btn-default"),
-          br(), br(),
-          selectInput(
-            ns("run_filter_study"),
-            "Study:",
-            choices = c("All studies" = "__all__"),
-            width = "100%"
-          ),
-          selectInput(
-            ns("run_filter_dataset"),
-            "Dataset:",
-            choices = c("All datasets" = "__all__"),
-            width = "100%"
-          ),
-          selectInput(
-            ns("run_filter_eval_mode"),
-            "Evaluation mode:",
-            choices = c(
-              "All" = "__all__",
-              "CV only" = "cv_only",
-              "CV + held-out test" = "cv_plus_test"
+    div(
+      class = "app-page",
+      app_page_header(
+        title = "Prediction Workspace",
+        subtitle = "Select a stored model run, upload a fresh raw MSI pair, and review prediction outputs in the same workflow-oriented layout used across the app.",
+        badge = "Step 4 of 4",
+        icon_name = "chart-line"
+      ),
+      app_sidebar_layout(
+        ns = ns,
+        module_key = "prediction_sidebar",
+        sidebar_title = "Prediction Controls",
+        sidebar_subtitle = "Filter saved model runs, confirm the resolved preprocessing context, and launch inference without hiding any current results.",
+        sidebar_icon = "upload",
+        sidebar_hint = "Predict",
+        sidebar = tagList(
+          wellPanel(
+            h4("1. Select Model Run"),
+            actionButton(ns("refresh_runs"), "Refresh model runs", class = "btn-sm btn-default"),
+            br(), br(),
+            selectInput(
+              ns("run_filter_study"),
+              "Study:",
+              choices = c("All studies" = "__all__"),
+              width = "100%"
             ),
-            width = "100%"
+            selectInput(
+              ns("run_filter_dataset"),
+              "Dataset:",
+              choices = c("All datasets" = "__all__"),
+              width = "100%"
+            ),
+            selectInput(
+              ns("run_filter_eval_mode"),
+              "Evaluation mode:",
+              choices = c(
+                "All" = "__all__",
+                "CV only" = "cv_only",
+                "CV + held-out test" = "cv_plus_test"
+              ),
+              width = "100%"
+            ),
+            selectInput(
+              ns("run_filter_pipeline"),
+              "Processing pipeline:",
+              choices = c("All pipelines" = "__all__"),
+              width = "100%"
+            ),
+            selectInput(
+              ns("run_filter_normalize"),
+              "Normalisation:",
+              choices = c("All" = "__all__"),
+              width = "100%"
+            ),
+            selectInput(
+              ns("run_filter_model_type"),
+              "Model type:",
+              choices = c("All" = "__all__"),
+              width = "100%"
+            ),
+            DT::dataTableOutput(ns("run_table")),
+            tags$div(
+              style = "display:none;",
+              selectInput(
+                ns("run_id"),
+                "Trained model:",
+                choices = c("(loading...)" = ""),
+                width = "100%"
+              )
+            ),
+            uiOutput(ns("run_info_ui"))
           ),
-          selectInput(
-            ns("run_filter_pipeline"),
-            "Processing pipeline:",
-            choices = c("All pipelines" = "__all__"),
-            width = "100%"
-          ),
-          selectInput(
-            ns("run_filter_normalize"),
-            "Normalisation:",
-            choices = c("All" = "__all__"),
-            width = "100%"
-          ),
-          selectInput(
-            ns("run_filter_model_type"),
-            "Model type:",
-            choices = c("All" = "__all__"),
-            width = "100%"
-          ),
-          DT::dataTableOutput(ns("run_table")),
-          tags$div(style = "display:none;",
-          selectInput(
-            ns("run_id"),
-            "Trained model:",
-            choices = c("(loading...)" = ""),
-            width = "100%"
-          )),
-          uiOutput(ns("run_info_ui"))
-        ),
-
-        wellPanel(
-          h4("2. Upload New Raw Data"),
-          fileInput(
-            ns("pred_files"),
-            "Upload one .imzML and one .ibd",
-            multiple = TRUE,
-            accept = c(".imzML", ".ibd")
-          ),
-          actionButton(
-            ns("run_prediction"),
-            "Run Prediction",
-            class = "btn-primary btn-lg",
-            style = "width:100%;"
+          wellPanel(
+            h4("2. Upload New Raw Data"),
+            tags$p(
+              class = "help-block",
+              "Inference will reuse the stored model run, linked dataset, and resolved processing parameters exactly as before."
+            ),
+            fileInput(
+              ns("pred_files"),
+              "Upload one .imzML and one .ibd",
+              multiple = TRUE,
+              accept = c(".imzML", ".ibd")
+            ),
+            actionButton(
+              ns("run_prediction"),
+              "Run Prediction",
+              class = "btn-primary btn-lg",
+              style = "width:100%;"
+            )
           )
-        )
-      ),
-
-      column(
-        3,
-        h4("Resolved Data Structure"),
-        DT::DTOutput(ns("pipeline_info_table")),
-        hr(),
-        h4("Prediction Log"),
-        verbatimTextOutput(ns("prediction_log")),
-        hr(),
-        h4("Class Counts"),
-        DT::DTOutput(ns("class_count_table"))
-      ),
-
-      column(
-        5,
-        wellPanel(
-          h4("Prediction Map"),
-          plotOutput(ns("prediction_plot"), height = "700px")
+        ),
+        main = fluidRow(
+          column(
+            4,
+            app_panel(
+              title = "Resolved Data Structure",
+              subtitle = "The selected run resolves back to the frozen dataset, preprocessing pipeline, and normalisation choices shown here.",
+              DT::DTOutput(ns("pipeline_info_table"))
+            ),
+            app_panel(
+              title = "Prediction Log",
+              subtitle = "Status messages and uploaded-file validation for the current prediction request.",
+              verbatimTextOutput(ns("prediction_log"))
+            ),
+            app_panel(
+              title = "Class Counts",
+              subtitle = "Predicted pixel totals by class for the current output map.",
+              DT::DTOutput(ns("class_count_table"))
+            )
+          ),
+          column(
+            8,
+            wellPanel(
+              h4("Prediction Map"),
+              tags$p(
+                class = "help-block",
+                "View the predicted tissue classes spatially across the uploaded sample."
+              ),
+              plotOutput(ns("prediction_plot"), height = "700px")
+            )
+          )
         )
       )
     )

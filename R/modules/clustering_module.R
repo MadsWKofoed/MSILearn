@@ -91,7 +91,15 @@ clustering_module_ui <- function(id) {
 
   tabPanel(
     "Clustering",
-    sidebarLayout(
+    div(
+      class = "app-page",
+      app_page_header(
+        title = "Clustering & Annotation Lab",
+        subtitle = "Move from processed MSI data to interpretable tissue labels with a guided workflow for clustering, NDPI alignment, and annotation review.",
+        badge = "Step 2 of 4",
+        icon_name = "project-diagram"
+      ),
+      sidebarLayout(
       sidebarPanel(
         width = 3,
 
@@ -578,7 +586,7 @@ clustering_module_ui <- function(id) {
         uiOutput(ns("cluster_layout")),
         textOutput(ns("status_text"))
       )
-    )
+    ))
   )
 }
 
