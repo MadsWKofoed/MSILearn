@@ -782,6 +782,7 @@ clustering_module_server <- function(id) {
     ndpi_runtime$proc <- NULL
     ndpi_runtime$port <- NULL
     ndpi_runtime$output_dir <- NULL
+    ndpi_runtime$resource_prefix <- NULL
 
     normalize_region_id <- function(x) {
       y <- trimws(as.character(x %||% ""))
@@ -911,6 +912,15 @@ clustering_module_server <- function(id) {
       ndpi_runtime$proc <- NULL
       ndpi_runtime$port <- NULL
       ndpi_runtime$output_dir <- NULL
+      ndpi_runtime$resource_prefix <- NULL
+    }
+
+    register_ndpi_resource <- function(output_dir, port) {
+      token <- gsub("[^A-Za-z0-9]", "", session$token %||% "session")
+      prefix <- sprintf("ndpi-%s-%d", token, as.integer(port))
+      shiny::addResourcePath(prefix, normalizePath(output_dir, mustWork = TRUE))
+      ndpi_runtime$resource_prefix <- prefix
+      prefix
     }
 
     cleanup_old_ndpi_tmp <- function(max_age_hours = 24) {
@@ -1725,9 +1735,11 @@ clustering_module_server <- function(id) {
       st_reg$ndpi_slide_name <- input$ndpi_file$name
       registration_state(st_reg)
 
+      resource_prefix <- register_ndpi_resource(out_dir, port)
+
       session$sendCustomMessage(ns("ndpiLoadSlide"), list(
         containerId = ns("ndpi_viewer"),
-        dziUrl = sprintf("http://127.0.0.1:%d/slide.dzi?ts=%d", port, as.integer(Sys.time())),
+        dziUrl = sprintf("/%s/slide.dzi?ts=%d", resource_prefix, as.integer(Sys.time())),
         inputPrefix = session$ns("")
       ))
 
