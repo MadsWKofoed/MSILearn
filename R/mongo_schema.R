@@ -35,6 +35,10 @@ initialise_schema <- function(db = DB_NAME, url = MONGO_URL) {
   .con("artifacts", db, url)$index('{"sample_id": 1, "stage_type": 1, "pipeline_id": 1}')
   .con("artifacts", db, url)$index('{"study_id": 1}')
 
+  # ── ndpi_images ───────────────────────────────────────────────────────────
+  .con("ndpi_images", db, url)$index('{"sample_id": 1}')
+  .con("ndpi_images", db, url)$index('{"study_id": 1}')
+
   # ── annotation_sets ──────────────────────────────────────────────────────
   .con("annotation_sets", db, url)$index('{"study_id": 1, "name": 1}')
 

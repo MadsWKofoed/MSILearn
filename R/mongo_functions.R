@@ -70,6 +70,20 @@ sanitize_name <- function(x) gsub("[^A-Za-z0-9._-]+", "_", x)
   readRDS(tmp)
 }
 
+# Upload a local file to GridFS.
+.upload_file <- function(path, filename, db = DB_NAME, url = MONGO_URL) {
+  stopifnot(file.exists(path))
+  .gridfs(db, url)$upload(path, name = filename)
+  filename
+}
+
+# Download a GridFS file to a local path.
+.download_file <- function(filename, dest_path, db = DB_NAME, url = MONGO_URL) {
+  dir.create(dirname(dest_path), recursive = TRUE, showWarnings = FALSE)
+  .gridfs(db, url)$download(filename, dest_path)
+  dest_path
+}
+
 
 # ============================================================================
 # B.  PROVENANCE-AWARE API
@@ -525,6 +539,129 @@ list_available_pipeline_ids <- function(sample_id, stage_type,
   res <- query_artifacts(sample_id = sample_id, stage_type = stage_type, db = db, url = url)
   if (nrow(res) == 0) return(character(0))
   unique(res$pipeline_id)
+}
+
+# ----------------------------------------------------------------------------
+# B4.NDPI  STORED NDPI VIEWER ASSETS
+# ----------------------------------------------------------------------------
+
+build_ndpi_archive <- function(output_dir, archive_path = tempfile(fileext = ".tar.gz")) {
+  stopifnot(dir.exists(output_dir))
+
+  files <- list.files(output_dir, recursive = TRUE, full.names = FALSE, all.files = FALSE, no.. = TRUE)
+  if (!("slide.dzi" %in% files)) {
+    stop("Processed NDPI directory does not contain slide.dzi.")
+  }
+
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(output_dir)
+
+  utils::tar(
+    tarfile = archive_path,
+    files = files,
+    compression = "gzip",
+    tar = "internal"
+  )
+
+  archive_path
+}
+
+extract_ndpi_archive <- function(archive_path, output_dir) {
+  stopifnot(file.exists(archive_path))
+
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  utils::untar(archive_path, exdir = output_dir)
+
+  if (!file.exists(file.path(output_dir, "slide.dzi"))) {
+    stop("Restored NDPI archive is missing slide.dzi.")
+  }
+
+  output_dir
+}
+
+query_ndpi_images <- function(study_id = NULL, sample_id = NULL,
+                              db = DB_NAME, url = MONGO_URL) {
+  parts <- list()
+  if (!is.null(study_id)) parts$study_id <- study_id
+  if (!is.null(sample_id)) parts$sample_id <- sample_id
+  q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
+  .con("ndpi_images", db, url)$find(q)
+}
+
+get_ndpi_image <- function(sample_id, db = DB_NAME, url = MONGO_URL) {
+  res <- query_ndpi_images(sample_id = sample_id, db = db, url = url)
+  if (nrow(res) == 0) {
+    return(data.frame(stringsAsFactors = FALSE))
+  }
+
+  if ("created_at" %in% names(res)) {
+    res <- res[order(as.character(res$created_at), decreasing = TRUE), , drop = FALSE]
+  }
+
+  res[1, , drop = FALSE]
+}
+
+upsert_ndpi_image <- function(output_dir, study_id, sample_id, ndpi_slide_name,
+                              db = DB_NAME, url = MONGO_URL) {
+  stopifnot(dir.exists(output_dir))
+
+  archive_path <- build_ndpi_archive(output_dir)
+  on.exit(unlink(archive_path), add = TRUE)
+
+  col <- .con("ndpi_images", db, url)
+  dup_q <- jsonlite::toJSON(list(sample_id = sample_id), auto_unbox = TRUE)
+  existing <- col$find(dup_q)
+
+  if (nrow(existing) > 0) {
+    old_files <- unique(as.character(existing$gridfs_name))
+    old_files <- old_files[!is.na(old_files) & nzchar(old_files)]
+    for (old_file in old_files) {
+      tryCatch(.gridfs(db, url)$remove(old_file), error = function(e) NULL)
+    }
+    col$remove(dup_q)
+  }
+
+  asset_id <- digest::digest(
+    list(sample_id = sample_id, type = "ndpi_image"),
+    algo = "sha256",
+    serialize = TRUE
+  )
+  filename <- paste0(asset_id, "_ndpi_deepzoom.tar.gz")
+  .upload_file(archive_path, filename, db = db, url = url)
+
+  archive_info <- file.info(archive_path)
+  .insert(col, list(
+    `_id` = asset_id,
+    study_id = study_id,
+    sample_id = sample_id,
+    ndpi_slide_name = ndpi_slide_name,
+    storage_format = "deepzoom_tar_gz",
+    gridfs_name = filename,
+    file_size = unname(as.numeric(archive_info$size[1] %||% NA_real_)),
+    created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  ))
+
+  message("✓ NDPI image saved: ", asset_id, " | sample: ", sample_id)
+  invisible(asset_id)
+}
+
+restore_ndpi_image <- function(sample_id, output_dir, db = DB_NAME, url = MONGO_URL) {
+  meta <- get_ndpi_image(sample_id, db = db, url = url)
+  if (nrow(meta) == 0) {
+    stop("No saved NDPI image for sample_id=", sample_id)
+  }
+
+  archive_path <- tempfile(fileext = ".tar.gz")
+  on.exit(unlink(archive_path), add = TRUE)
+
+  .download_file(as.character(meta$gridfs_name[1]), archive_path, db = db, url = url)
+  extract_ndpi_archive(archive_path, output_dir)
+
+  list(
+    meta = meta,
+    output_dir = output_dir
+  )
 }
 
 #' Compute (but do not persist) the deterministic pipeline_id for a parameter set.

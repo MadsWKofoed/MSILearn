@@ -358,9 +358,7 @@ clustering_module_ui <- function(id) {
               condition = sprintf("input['%s'] == 'msi_ndpi'", ns("annotation_mode")),
               tags$div(class = "section-divider"),
               div(class = "workflow-subtitle", "NDPI slide"),
-              fileInput(ns("ndpi_file"), "Upload NDPI slide", accept = c(".ndpi")),
-              numericInput(ns("ndpi_workers"), "NDPI preprocessing workers", value = 8, min = 1, max = 10, step = 1),
-              tags$div(class = "mini-note", "The NDPI file is tiled before viewing. More workers can speed this up, but use only what your machine can handle.")
+              uiOutput(ns("ndpi_source_ui"))
             )
           )
         ),
@@ -561,9 +559,15 @@ clustering_module_ui <- function(id) {
                     window.ndpiSyncViewer.startPolygon();
                   }
                 });
+                Shiny.addCustomMessageHandler('%s', function(msg){
+                  if(window.ndpiSyncViewer){
+                    window.ndpiSyncViewer.destroy(msg && msg.containerId ? msg.containerId : null);
+                  }
+                });
                 ",
                 ns("ndpiLoadSlide"),
-                ns("ndpiStartPolygon")
+                ns("ndpiStartPolygon"),
+                ns("ndpiClearSlide")
               )
             ))
           ),
@@ -602,6 +606,7 @@ clustering_module_server <- function(id) {
     active_artifact_id <- reactiveVal(NULL)
     active_ann_set_id  <- reactiveVal(NULL)
     current_region_id <- reactiveVal("R1")
+    saved_ndpi_info <- reactiveVal(NULL)
 
     processed_data          <- reactiveVal(NULL)
     clustered_data          <- reactiveVal(NULL)
@@ -699,16 +704,72 @@ clustering_module_server <- function(id) {
       base
     }
 
+    has_loaded_ndpi <- function() {
+      !is.null(ndpi_runtime$output_dir) &&
+        dir.exists(ndpi_runtime$output_dir) &&
+        !is.null(ndpi_runtime$resource_prefix) &&
+        nzchar(ndpi_runtime$resource_prefix %||% "")
+    }
+
     output$step_align_status <- renderUI({
       if (!identical(input$annotation_mode, "msi_ndpi")) {
         badge_ui("Optional")
       } else if (isTRUE(registration_state()$valid)) {
         badge_ui("Aligned")
-      } else if (!is.null(original_clustered()) && !is.null(ndpi_runtime$port)) {
+      } else if (!is.null(original_clustered()) && has_loaded_ndpi()) {
         badge_ui("Ready")
       } else {
         badge_ui("Waiting")
       }
+    })
+
+    output$ndpi_source_ui <- renderUI({
+      req(identical(input$annotation_mode, "msi_ndpi"))
+
+      info <- saved_ndpi_info()
+      slide_label <- if (!is.null(info) && is.data.frame(info) && nrow(info) > 0) {
+        as.character(info$ndpi_slide_name[1] %||% "")
+      } else {
+        ""
+      }
+      created_label <- if (!is.null(info) && is.data.frame(info) && nrow(info) > 0) {
+        as.character(info$created_at[1] %||% "")
+      } else {
+        ""
+      }
+      size_label <- if (!is.null(info) && is.data.frame(info) && nrow(info) > 0 && "file_size" %in% names(info)) {
+        dbm_bytes_label(info$file_size[1])
+      } else {
+        "—"
+      }
+
+      tagList(
+        if (!is.null(info) && is.data.frame(info) && nrow(info) > 0) {
+          tags$div(
+            class = "helper-box",
+            tags$strong("Saved NDPI found for this sample."),
+            tags$br(),
+            tags$span("Slide: ", if (nzchar(slide_label)) slide_label else "Unnamed NDPI"),
+            tags$br(),
+            tags$span("Stored package size: ", size_label),
+            if (nzchar(created_label)) {
+              tagList(tags$br(), tags$span("Saved: ", created_label))
+            },
+            tags$br(),
+            tags$span("The saved NDPI will load automatically when MSI data is loaded. Upload a new file below only if you want to replace it.")
+          )
+        } else {
+          tags$div(
+            class = "helper-box",
+            tags$strong("No saved NDPI found for this sample."),
+            tags$br(),
+            tags$span("Upload an NDPI slide below to preprocess it, store it in the database, and use it for alignment.")
+          )
+        },
+        fileInput(ns("ndpi_file"), "Upload NDPI slide", accept = c(".ndpi")),
+        numericInput(ns("ndpi_workers"), "NDPI preprocessing workers", value = 8, min = 1, max = 10, step = 1),
+        tags$div(class = "mini-note", "The NDPI file is tiled before viewing. More workers can speed this up, but use only what your machine can handle.")
+      )
     })
 
     output$step_annot_status <- renderUI({
@@ -764,7 +825,7 @@ clustering_module_server <- function(id) {
 
     # registration by polygon pairs only
     ndpi_draw_mode <- reactiveVal(NULL) # "registration" or "annotation"
-    registration_state <- reactiveVal(list(
+    new_registration_state <- function(slide_name = NULL) list(
       ndpi_reg_polys = list(),
       msi_reg_polys = list(),
       fit = NULL,
@@ -773,16 +834,18 @@ clustering_module_server <- function(id) {
       rms = NA_real_,
       rms_by_region = numeric(0),
       orientation_at_fit = NULL,
-      ndpi_slide_name = NULL,
+      ndpi_slide_name = slide_name,
       matched_region_ids = character(0),
       n_anchor_pairs = 0L
-    ))
+    )
+    registration_state <- reactiveVal(new_registration_state())
 
     ndpi_runtime <- new.env(parent = emptyenv())
     ndpi_runtime$proc <- NULL
     ndpi_runtime$port <- NULL
     ndpi_runtime$output_dir <- NULL
     ndpi_runtime$resource_prefix <- NULL
+    ndpi_runtime$slide_name <- NULL
 
     normalize_region_id <- function(x) {
       y <- trimws(as.character(x %||% ""))
@@ -897,12 +960,27 @@ clustering_module_server <- function(id) {
       tryCatch(jsonlite::fromJSON(txt), error = function(e) NULL)
     }
 
-    stop_ndpi_server <- function() {
+    clear_ndpi_viewer <- function() {
+      session$sendCustomMessage(ns("ndpiClearSlide"), list(containerId = ns("ndpi_viewer")))
+    }
+
+    reset_registration_state <- function(slide_name = ndpi_runtime$slide_name) {
+      registration_state(new_registration_state(slide_name = slide_name))
+      current_region_id("R1")
+      ndpi_draw_mode(NULL)
+    }
+
+    stop_ndpi_server <- function(clear_viewer = TRUE) {
       p <- ndpi_runtime$proc
       out_dir <- ndpi_runtime$output_dir
+      resource_prefix <- ndpi_runtime$resource_prefix
 
       if (!is.null(p) && p$is_alive()) {
         try(p$kill(), silent = TRUE)
+      }
+
+      if (!is.null(resource_prefix) && nzchar(resource_prefix)) {
+        try(shiny::removeResourcePath(resource_prefix), silent = TRUE)
       }
 
       if (!is.null(out_dir) && dir.exists(out_dir)) {
@@ -913,14 +991,133 @@ clustering_module_server <- function(id) {
       ndpi_runtime$port <- NULL
       ndpi_runtime$output_dir <- NULL
       ndpi_runtime$resource_prefix <- NULL
+      ndpi_runtime$slide_name <- NULL
+
+      if (isTRUE(clear_viewer)) {
+        clear_ndpi_viewer()
+      }
     }
 
-    register_ndpi_resource <- function(output_dir, port) {
+    register_ndpi_resource <- function(output_dir, label = "ndpi") {
       token <- gsub("[^A-Za-z0-9]", "", session$token %||% "session")
-      prefix <- sprintf("ndpi-%s-%d", token, as.integer(port))
+      slug <- gsub("[^A-Za-z0-9]", "", as.character(label %||% "ndpi"))
+      prefix <- sprintf("ndpi-%s-%s-%d", token, if (nzchar(slug)) slug else "ndpi", as.integer(Sys.time()))
       shiny::addResourcePath(prefix, normalizePath(output_dir, mustWork = TRUE))
       ndpi_runtime$resource_prefix <- prefix
       prefix
+    }
+
+    create_ndpi_output_dir <- function(slide_name) {
+      base_ndpi_tmp <- get_ndpi_temp_base()
+      slide_stub <- tools::file_path_sans_ext(basename(slide_name %||% "ndpi_slide.ndpi"))
+      slide_stub <- gsub("[^A-Za-z0-9._-]", "_", slide_stub)
+      out_dir <- file.path(
+        base_ndpi_tmp,
+        paste0(slide_stub, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+      )
+      dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+      out_dir
+    }
+
+    mount_ndpi_output_dir <- function(output_dir, slide_name) {
+      prefix <- register_ndpi_resource(output_dir, label = slide_name)
+
+      ndpi_runtime$output_dir <- output_dir
+      ndpi_runtime$slide_name <- slide_name
+      ndpi_runtime$proc <- NULL
+      ndpi_runtime$port <- NULL
+
+      reset_registration_state(slide_name = slide_name)
+
+      session$sendCustomMessage(ns("ndpiLoadSlide"), list(
+        containerId = ns("ndpi_viewer"),
+        dziUrl = sprintf("/%s/slide.dzi?ts=%d", prefix, as.integer(Sys.time())),
+        inputPrefix = session$ns("")
+      ))
+    }
+
+    load_saved_ndpi_into_viewer <- function(sample_id) {
+      meta <- get_ndpi_image(sample_id)
+      if (nrow(meta) == 0) {
+        return(FALSE)
+      }
+
+      stop_ndpi_server(clear_viewer = TRUE)
+      out_dir <- create_ndpi_output_dir(as.character(meta$ndpi_slide_name[1] %||% "saved_ndpi.ndpi"))
+      restored <- restore_ndpi_image(sample_id = sample_id, output_dir = out_dir)
+      slide_name <- as.character(restored$meta$ndpi_slide_name[1] %||% "saved_ndpi.ndpi")
+
+      mount_ndpi_output_dir(out_dir, slide_name = slide_name)
+      saved_ndpi_info(restored$meta)
+      showNotification("Loaded saved NDPI slide from database.", type = "message")
+      TRUE
+    }
+
+    preprocess_uploaded_ndpi <- function(slide_path, slide_name, workers, study_id, sample_id) {
+      stop_ndpi_server(clear_viewer = TRUE)
+
+      out_dir <- create_ndpi_output_dir(slide_name)
+      py <- find_python_bin()
+      script <- locate_preprocess_script()
+      port <- find_free_port()
+
+      args <- c(
+        script,
+        "--slide", normalizePath(slide_path, mustWork = TRUE),
+        "--output-dir", normalizePath(out_dir, mustWork = TRUE),
+        "--host", "127.0.0.1",
+        "--port", as.character(port),
+        "--workers", as.character(workers %||% 6)
+      )
+
+      proc <- processx::process$new(
+        command = py,
+        args = args,
+        stdout = "|",
+        stderr = "|",
+        cleanup = TRUE
+      )
+
+      ndpi_runtime$proc <- proc
+      ndpi_runtime$port <- port
+      ndpi_runtime$output_dir <- out_dir
+      ndpi_runtime$slide_name <- slide_name
+
+      t0 <- Sys.time()
+      ready <- FALSE
+      repeat {
+        st <- read_status_json(port)
+        if (!is.null(st) && isTRUE(st$ready)) {
+          ready <- TRUE
+          break
+        }
+        if (!proc$is_alive()) break
+        if (as.numeric(difftime(Sys.time(), t0, units = "secs")) > 240) break
+        Sys.sleep(0.5)
+      }
+
+      if (!ready) {
+        err_tail <- tryCatch(paste(proc$read_error_lines(), collapse = "\n"), error = function(e) "")
+        stop("NDPI preprocessing failed or timed out. ", err_tail)
+      }
+
+      if (!is.null(proc) && proc$is_alive()) {
+        try(proc$kill(), silent = TRUE)
+      }
+      ndpi_runtime$proc <- NULL
+      ndpi_runtime$port <- NULL
+
+      upsert_ndpi_image(
+        output_dir = out_dir,
+        study_id = study_id,
+        sample_id = sample_id,
+        ndpi_slide_name = slide_name
+      )
+
+      meta <- get_ndpi_image(sample_id)
+      saved_ndpi_info(meta)
+      mount_ndpi_output_dir(out_dir, slide_name = slide_name)
+      TRUE
     }
 
     cleanup_old_ndpi_tmp <- function(max_age_hours = 24) {
@@ -1177,6 +1374,22 @@ clustering_module_server <- function(id) {
       })
     }
 
+    refresh_saved_ndpi_for_sample <- function(sample_id) {
+      if (is.null(sample_id) || !nzchar(sample_id)) {
+        saved_ndpi_info(NULL)
+        return(invisible(NULL))
+      }
+
+      info <- tryCatch(get_ndpi_image(sample_id), error = function(e) data.frame(stringsAsFactors = FALSE))
+      if (is.null(info) || !is.data.frame(info) || nrow(info) == 0) {
+        saved_ndpi_info(NULL)
+      } else {
+        saved_ndpi_info(info)
+      }
+
+      invisible(saved_ndpi_info())
+    }
+
     observeEvent(input$refresh_studies, load_studies(), ignoreInit = FALSE)
     session$onFlushed(function() {
       cleanup_old_ndpi_tmp()
@@ -1191,10 +1404,17 @@ clustering_module_server <- function(id) {
       sid <- input$study_select
       if (!nzchar(sid)) {
         active_study_id(NULL)
+        active_sample_id(NULL)
+        saved_ndpi_info(NULL)
+        stop_ndpi_server(clear_viewer = TRUE)
+        reset_registration_state()
         updateSelectInput(session, "sample_select", choices = c("— select study first —" = ""))
         return()
       }
       active_study_id(sid)
+      stop_ndpi_server(clear_viewer = TRUE)
+      reset_registration_state()
+      saved_ndpi_info(NULL)
       tryCatch({
         df <- get_samples(sid)
         if (is.null(df) || nrow(df) == 0 || !("_id" %in% names(df))) {
@@ -1213,10 +1433,16 @@ clustering_module_server <- function(id) {
       samp <- input$sample_select
       if (!nzchar(samp)) {
         active_sample_id(NULL)
+        saved_ndpi_info(NULL)
+        stop_ndpi_server(clear_viewer = TRUE)
+        reset_registration_state()
         updateSelectInput(session, "pipeline_select", choices = c("— select sample first —" = ""))
         return()
       }
       active_sample_id(samp)
+      stop_ndpi_server(clear_viewer = TRUE)
+      reset_registration_state()
+      refresh_saved_ndpi_for_sample(samp)
       tryCatch({
         pids <- list_available_pipeline_ids(samp, "binned_dataframe")
         if (length(pids) == 0) {
@@ -1281,6 +1507,18 @@ clustering_module_server <- function(id) {
 
         progress$set(value = 40, message = "Downloading from GridFS...")
         df <- load_artifact_by_pipeline(samp, "binned_dataframe", pid)
+
+        if (identical(input$annotation_mode, "msi_ndpi") && !has_loaded_ndpi()) {
+          progress$set(value = 65, message = "Loading NDPI slide...")
+          restored <- tryCatch(load_saved_ndpi_into_viewer(samp), error = function(e) {
+            showNotification(paste("Saved NDPI could not be restored:", e$message), type = "warning", duration = 8)
+            FALSE
+          })
+
+          if (!isTRUE(restored)) {
+            showNotification("No saved NDPI was found for this sample. Upload an NDPI slide to continue with MSI + NDPI.", type = "message", duration = 8)
+          }
+        }
 
         progress$set(value = 90, message = "Finalising...")
         processed_data(df)
@@ -1590,20 +1828,7 @@ clustering_module_server <- function(id) {
     })
 
     observeEvent(input$reset_registration, {
-      st <- registration_state()
-      st$ndpi_reg_polys <- list()
-      st$msi_reg_polys <- list()
-      st$fit <- NULL
-      st$fit_by_region <- list()
-      st$valid <- FALSE
-      st$rms <- NA_real_
-      st$rms_by_region <- numeric(0)
-      st$orientation_at_fit <- NULL
-      st$matched_region_ids <- character(0)
-      st$n_anchor_pairs <- 0L
-      registration_state(st)
-
-      current_region_id("R1")
+      reset_registration_state(slide_name = registration_state()$ndpi_slide_name)
       showNotification("Registration reset.", type = "message")
     })
 
@@ -1651,7 +1876,8 @@ clustering_module_server <- function(id) {
         return()
       }
 
-      st$fit <- NULL
+      best_region <- names(rms_by_region)[which.min(rms_by_region)][1]
+      st$fit <- fit_by_region[[best_region]]
       st$fit_by_region <- fit_by_region
       st$valid <- TRUE
       st$rms <- min(rms_by_region)
@@ -1674,76 +1900,27 @@ clustering_module_server <- function(id) {
       req(input$annotation_mode == "msi_ndpi")
       req(input$ndpi_file$datapath)
 
-      stop_ndpi_server()
-
-      base_ndpi_tmp <- get_ndpi_temp_base()
-
-      slide_stub <- tools::file_path_sans_ext(basename(input$ndpi_file$name))
-      slide_stub <- gsub("[^A-Za-z0-9._-]", "_", slide_stub)
-
-      out_dir <- file.path(
-        base_ndpi_tmp,
-        paste0(slide_stub, "_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-      )
-      dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-      py <- find_python_bin()
-      script <- locate_preprocess_script()
-      port <- find_free_port()
-
-      args <- c(
-        script,
-        "--slide", normalizePath(input$ndpi_file$datapath, mustWork = TRUE),
-        "--output-dir", normalizePath(out_dir, mustWork = TRUE),
-        "--host", "127.0.0.1",
-        "--port", as.character(port),
-        "--workers", as.character(input$ndpi_workers %||% 6)
-      )
-
-      proc <- processx::process$new(
-        command = py,
-        args = args,
-        stdout = "|",
-        stderr = "|",
-        cleanup = TRUE
-      )
-
-      ndpi_runtime$proc <- proc
-      ndpi_runtime$port <- port
-      ndpi_runtime$output_dir <- out_dir
-
-      t0 <- Sys.time()
-      ready <- FALSE
-      repeat {
-        st <- read_status_json(port)
-        if (!is.null(st) && isTRUE(st$ready)) {
-          ready <- TRUE
-          break
-        }
-        if (!proc$is_alive()) break
-        if (as.numeric(difftime(Sys.time(), t0, units = "secs")) > 240) break
-        Sys.sleep(0.5)
-      }
-
-      if (!ready) {
-        err_tail <- tryCatch(paste(proc$read_error_lines(), collapse = "\n"), error = function(e) "")
-        showNotification(paste("NDPI preprocessing failed or timed out.", err_tail), type = "error", duration = 10)
+      study_id <- active_study_id()
+      sample_id <- active_sample_id()
+      if (is.null(study_id) || !nzchar(study_id) || is.null(sample_id) || !nzchar(sample_id)) {
+        showNotification("Select a study and sample before uploading an NDPI slide.", type = "warning")
         return()
       }
 
-      st_reg <- registration_state()
-      st_reg$ndpi_slide_name <- input$ndpi_file$name
-      registration_state(st_reg)
+      tryCatch({
+        preprocess_uploaded_ndpi(
+          slide_path = input$ndpi_file$datapath,
+          slide_name = input$ndpi_file$name,
+          workers = input$ndpi_workers %||% 6,
+          study_id = study_id,
+          sample_id = sample_id
+        )
+        showNotification("NDPI ready and saved to database.", type = "message")
+      }, error = function(e) {
+        showNotification(paste("NDPI preprocessing failed:", e$message), type = "error", duration = 10)
+        return()
+      })
 
-      resource_prefix <- register_ndpi_resource(out_dir, port)
-
-      session$sendCustomMessage(ns("ndpiLoadSlide"), list(
-        containerId = ns("ndpi_viewer"),
-        dziUrl = sprintf("/%s/slide.dzi?ts=%d", resource_prefix, as.integer(Sys.time())),
-        inputPrefix = session$ns("")
-      ))
-
-      showNotification("NDPI ready.", type = "message")
       if (!is.null(processed_data())) {
         open_sidebar_step("cluster")
       }
