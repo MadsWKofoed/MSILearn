@@ -66,6 +66,7 @@ processing_module_ui <- function(id) {
               "2",
               "Data Source",
               status = app_step_status("Input"),
+              class = "app-accordion-overflow-visible",
               radioButtons(
                 ns("data_source"),
                 NULL,

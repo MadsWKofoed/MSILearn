@@ -166,8 +166,14 @@ body{
   border-radius: 20px;
   background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(249,251,253,0.98) 100%);
   overflow: hidden;
+  position: relative;
   box-shadow: var(--app-shadow);
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.app-accordion-item.app-accordion-overflow-visible,
+.app-accordion-item.app-accordion-overflow-visible .app-accordion-body{
+  overflow: visible;
 }
 
 .app-accordion-item:not(:has(.app-accordion-body.in)):hover{
@@ -344,6 +350,15 @@ body{
   border-radius: 14px;
   border-color: #d6e0e8;
   box-shadow: none;
+}
+
+.app-shell .app-accordion-overflow-visible .selectize-control{
+  position: relative;
+  z-index: 25;
+}
+
+.app-shell .app-accordion-overflow-visible .selectize-dropdown{
+  z-index: 3000;
 }
 
 .app-shell .btn-default{
