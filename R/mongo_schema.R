@@ -30,10 +30,10 @@ initialise_schema <- function(db = DB_NAME, url = MONGO_URL) {
   # ── pipelines ─────────────────────────────────────────────────────────────
   .con("pipelines", db, url)$index('{"type": 1, "params_hash": 1}')
 
-  # ── artifacts ─────────────────────────────────────────────────────────────
+  # ── pipeline_outputs ─────────────────────────────────────────────────────────────
   # Unique per (sample_id, stage_type, pipeline_id).
-  .con("artifacts", db, url)$index('{"sample_id": 1, "stage_type": 1, "pipeline_id": 1}')
-  .con("artifacts", db, url)$index('{"study_id": 1}')
+  .con("pipeline_outputs", db, url)$index('{"sample_id": 1, "stage_type": 1, "pipeline_id": 1}')
+  .con("pipeline_outputs", db, url)$index('{"study_id": 1}')
 
   # ── ndpi_images ───────────────────────────────────────────────────────────
   .con("ndpi_images", db, url)$index('{"sample_id": 1}')

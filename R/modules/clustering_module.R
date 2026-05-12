@@ -603,7 +603,7 @@ clustering_module_server <- function(id) {
     active_study_id    <- reactiveVal(NULL)
     active_sample_id   <- reactiveVal(NULL)
     active_pipeline_id <- reactiveVal(NULL)
-    active_artifact_id <- reactiveVal(NULL)
+    active_pipeline_output_id <- reactiveVal(NULL)
     active_ann_set_id  <- reactiveVal(NULL)
     current_region_id <- reactiveVal("R1")
     saved_ndpi_info <- reactiveVal(NULL)
@@ -1446,7 +1446,7 @@ clustering_module_server <- function(id) {
       tryCatch({
         pids <- list_available_pipeline_ids(samp, "binned_dataframe")
         if (length(pids) == 0) {
-          updateSelectInput(session, "pipeline_select", choices = c("— no processed artifacts —" = ""))
+          updateSelectInput(session, "pipeline_select", choices = c("— no processed Pipeline Outputs —" = ""))
         } else {
           labels <- vapply(pids, function(pid) {
             tryCatch({
@@ -1501,12 +1501,12 @@ clustering_module_server <- function(id) {
       on.exit(progress$close(), add = TRUE)
 
       tryCatch({
-        art_meta <- query_artifacts(sample_id = samp, stage_type = "binned_dataframe", pipeline_id = pid)
-        if (nrow(art_meta) == 0) stop("No artifact found for this sample + pipeline.")
-        active_artifact_id(art_meta[["_id"]][1])
+        output_meta <- query_pipeline_outputs(sample_id = samp, stage_type = "binned_dataframe", pipeline_id = pid)
+        if (nrow(output_meta) == 0) stop("No Pipeline Output found for this sample + pipeline.")
+        active_pipeline_output_id(output_meta[["_id"]][1])
 
         progress$set(value = 40, message = "Downloading from GridFS...")
-        df <- load_artifact_by_pipeline(samp, "binned_dataframe", pid)
+        df <- load_pipeline_output_by_pipeline(samp, "binned_dataframe", pid)
 
         if (identical(input$annotation_mode, "msi_ndpi") && !has_loaded_ndpi()) {
           progress$set(value = 65, message = "Loading NDPI slide...")
@@ -2311,7 +2311,7 @@ clustering_module_server <- function(id) {
     observeEvent(input$commit_db, {
       study_id <- active_study_id()
       sample_id <- active_sample_id()
-      artifact_id <- active_artifact_id()
+      pipeline_output_id <- active_pipeline_output_id()
       ann_set_id <- active_ann_set_id()
       pid <- active_pipeline_id()
       base_df <- original_clustered()
@@ -2363,13 +2363,13 @@ clustering_module_server <- function(id) {
           code_version = "dev"
         )
 
-        progress$set(value = 50, message = "Saving clustering artifact...")
+        progress$set(value = 50, message = "Saving clustering Pipeline Output...")
 
-        art_id <- save_clustering_artifact(
+        output_id <- save_clustering_pipeline_output(
           clustered_df = df_to_save,
           study_id = study_id,
           sample_id = sample_id,
-          input_artifact_id = artifact_id %||% "",
+          input_pipeline_output_id = pipeline_output_id %||% "",
           cluster_pipeline_id = cluster_pid
         )
 
@@ -2409,7 +2409,7 @@ clustering_module_server <- function(id) {
           tags$div(
             style = "color:green; margin-top:6px;",
             tags$b("✓ Committed"), tags$br(),
-            tags$small("Artifact: ", substr(art_id, 1, 12), "…"), tags$br(),
+            tags$small("Pipeline Output: ", substr(output_id, 1, 12), "…"), tags$br(),
             tags$small("Annotation: ", substr(ann_id, 1, 12), "…")
           )
         )

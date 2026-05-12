@@ -6,8 +6,8 @@
 #   1. User chooses "Create new Study" OR "Add to existing Study".
 #   2. Sample is registered (or retrieved) via upsert_sample().
 #   3. Parameters → deterministic pipeline_id shown before running.
-#   4. Artifact table shows all existing (sample, pipeline_id) combos.
-#   5. Run Processing → saves via save_artifact(); errors on exact duplicate.
+#   4. Pipeline Output table shows all existing (sample, pipeline_id) combos.
+#   5. Run Processing → saves via save_pipeline_output(); errors on exact duplicate.
 #   6. No "most recent" logic anywhere.
 
 processing_module_ui <- function(id) {
@@ -17,7 +17,7 @@ processing_module_ui <- function(id) {
     app_page_shell(
       app_page_hero(
         "Processing Studio",
-        "Prepare raw MSI data, configure the feature-generation pipeline, and inspect the resulting artifacts and quality-control plots in one consistent workspace."
+        "Prepare raw MSI data, configure the feature-generation pipeline, and inspect the resulting Pipeline Outputs and quality-control plots in one consistent workspace."
       ),
       fluidRow(
         column(
@@ -151,10 +151,10 @@ processing_module_ui <- function(id) {
           tags$div(
             class = "app-stack",
             app_panel(
-              "Existing Artifacts",
-              subtitle = "Artifacts for the current study and sample. Processing is blocked for exact duplicate pipeline IDs.",
-              DT::DTOutput(ns("artifact_table")),
-              tags$div(style = "margin-top:12px;", actionButton(ns("refresh_artifacts"), "Refresh", class = "btn-xs btn-default"))
+              "Existing Pipeline Outputs",
+              subtitle = "Pipeline Outputs for the current study and sample. Processing is blocked for exact duplicate pipeline IDs.",
+              DT::DTOutput(ns("pipeline_output_table")),
+              tags$div(style = "margin-top:12px;", actionButton(ns("refresh_pipeline_outputs"), "Refresh", class = "btn-xs btn-default"))
             ),
             app_panel(
               "Processing Log",
@@ -475,7 +475,7 @@ processing_module_server <- function(id) {
       if (sample_name_exists(sid, nm)) {
         tags$div(class = "alert alert-warning", style = "padding:4px; font-size:12px",
                  "⚠ A sample with this name already exists in this study.",
-                 " Processing will attach a new artifact to the existing sample.")
+                 " Processing will attach a new Pipeline Output to the existing sample.")
       } else NULL
     })
 
@@ -560,9 +560,9 @@ processing_module_server <- function(id) {
              "ref=",        ref_label)
     })
 
-    # ── Artifact table for current study + sample ──────────────────────────
-    output$artifact_table <- DT::renderDT({
-      input$refresh_artifacts
+    # ── Pipeline Output table for current study + sample ──────────────────────────
+    output$pipeline_output_table <- DT::renderDT({
+      input$refresh_pipeline_outputs
       sid <- active_study_id()
       
       if (is.null(sid)) {
@@ -587,22 +587,22 @@ processing_module_server <- function(id) {
       }
       
       sample_id <- get_sample_id(sid, nm)
-      arts <- query_artifacts(
+      outputs <- query_pipeline_outputs(
         sample_id  = sample_id,
         stage_type = "binned_dataframe"
       )
       
-      if (nrow(arts) == 0) {
+      if (nrow(outputs) == 0) {
         return(
           DT::datatable(
-            data.frame(message = "No artifacts yet"),
+            data.frame(message = "No Pipeline Outputs yet"),
             rownames = FALSE,
             options = list(dom = "t", paging = FALSE, searching = FALSE)
           )
         )
       }
       
-      pipes <- lapply(arts$pipeline_id, function(pid) {
+      pipes <- lapply(outputs$pipeline_id, function(pid) {
         tryCatch({
           p  <- get_pipeline(pid)
           pa <- extract_params(p$params)
@@ -624,7 +624,7 @@ processing_module_server <- function(id) {
             tolerance   = pa$tolerance %||% NA,
             resolution  = pa$resolution %||% NA,
             reference   = ref_display,
-            created_at  = arts$created_at[arts$pipeline_id == pid][1],
+            created_at  = outputs$created_at[outputs$pipeline_id == pid][1],
             stringsAsFactors = FALSE
           )
         }, error = function(e) {
@@ -729,11 +729,11 @@ processing_module_server <- function(id) {
       sample_id <- upsert_sample(study_id, sample_name)
 
       # Block exact duplicate
-      arts <- query_artifacts(sample_id = sample_id, stage_type = "binned_dataframe",
+      outputs <- query_pipeline_outputs(sample_id = sample_id, stage_type = "binned_dataframe",
                                pipeline_id = pipeline_id)
-      if (nrow(arts) > 0) {
+      if (nrow(outputs) > 0) {
         showNotification(
-          paste0("Artifact already exists for this exact pipeline_id:\n", pipeline_id),
+          paste0("Pipeline Output already exists for this exact pipeline_id:\n", pipeline_id),
           type = "warning", duration = 12
         )
         return()
@@ -775,7 +775,7 @@ processing_module_server <- function(id) {
           ibd_idx   <- upload_validation$ibd_idx
 
           # Reuse the existing raw-file storage path for uploaded imzML/ibd pairs.
-          existing_raw <- query_legacy_artifacts(sample_name = sample_name,
+          existing_raw <- query_legacy_pipeline_outputs(sample_name = sample_name,
                                                  stage_type  = "raw_files")
           if (nrow(existing_raw) > 0) {
             add_log("⚠ Raw files already in database — skipping upload")
@@ -947,7 +947,7 @@ processing_module_server <- function(id) {
         add_log(sprintf("Feature matrix: %d pixels × %d features",
                         nrow(full_df), length(mz_names)))
 
-        # ── STEP 8: Register pipeline + save artifact ──────────────────
+        # ── STEP 8: Register pipeline + save Pipeline Output ──────────────────
         progress$set(value = 96, message = "Saving to MongoDB...")
 
         upsert_pipeline(
@@ -958,7 +958,7 @@ processing_module_server <- function(id) {
           code_version = "dev"
         )
 
-        artifact_id <- save_artifact(
+        pipeline_output_id <- save_pipeline_output(
           obj         = full_df,
           study_id    = study_id,
           sample_id   = sample_id,
@@ -971,7 +971,7 @@ processing_module_server <- function(id) {
         )
 
         progress$set(value = 100, message = "Complete!")
-        add_log(sprintf("✓ artifact_id: %s", artifact_id))
+        add_log(sprintf("✓ Pipeline Output ID: %s", pipeline_output_id))
         add_log(sprintf("✓ pipeline_id: %s", pipeline_id))
         add_log("=== PROCESSING COMPLETE ===")
 
@@ -982,7 +982,7 @@ processing_module_server <- function(id) {
             p(strong("Sample:  "), sample_name),
             p(strong("sample_id: "), sample_id),
             p(strong("pipeline_id: "), pipeline_id),
-            p(strong("artifact_id: "), artifact_id),
+            p(strong("Pipeline Output ID: "), pipeline_output_id),
             p(strong("Features: "), length(mz_names), " m/z bins"),
             p(strong("Pixels:   "), nrow(full_df))
           )

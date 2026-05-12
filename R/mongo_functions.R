@@ -4,7 +4,7 @@
 # The file is split into three layers:
 #   A. Low-level utilities (sanitisation, GridFS read/write)
 #   B. New provenance-aware API  (studies / samples / pipelines /
-#      artifacts / annotation_sets / annotations / datasets / model_runs)
+#      pipeline_outputs / annotation_sets / annotations / datasets / model_runs)
 #   C. Raw-file compatibility helpers used by the processing workflow.
 #      These keep the existing raw GridFS storage path intact while the main
 #      app objects use the provenance-aware collections above.
@@ -230,10 +230,10 @@ list_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
 
 
 # ----------------------------------------------------------------------------
-# B4.  ARTIFACTS
+# B4.  PIPELINE OUTPUTS
 # ----------------------------------------------------------------------------
 
-#' Save a processed R object as a versioned artifact.
+#' Save a processed R object as a versioned Pipeline Output.
 #'
 #' Enforces the unique index (sample_id, stage_type, pipeline_id).
 #' Errors immediately if a duplicate would be created.
@@ -244,34 +244,34 @@ list_samples <- function(study_id, db = DB_NAME, url = MONGO_URL) {
 #' @param pipeline_id pipeline _id (from upsert_pipeline).
 #' @param stage_type  character, e.g. "binned_dataframe".
 #'
-#' @return artifact_id (character).
-save_artifact <- function(obj, study_id, sample_id, pipeline_id, stage_type,
+#' @return pipeline_output_id (character).
+save_pipeline_output <- function(obj, study_id, sample_id, pipeline_id, stage_type,
                           extra_meta = list(),
                           db = DB_NAME, url = MONGO_URL) {
 
-  col   <- .con("artifacts", db, url)
+  col   <- .con("pipeline_outputs", db, url)
   dup_q <- jsonlite::toJSON(
     list(sample_id = sample_id, stage_type = stage_type, pipeline_id = pipeline_id),
     auto_unbox = TRUE
   )
   if (col$count(dup_q) > 0) {
     stop(
-      "Artifact already exists for sample_id=", sample_id,
+      "Pipeline Output already exists for sample_id=", sample_id,
       ", stage_type=", stage_type, ", pipeline_id=", pipeline_id,
-      ". Use load_artifact_by_pipeline() to retrieve it."
+      ". Use load_pipeline_output_by_pipeline() to retrieve it."
     )
   }
 
-  artifact_id <- digest::digest(
+  pipeline_output_id <- digest::digest(
     list(sample_id = sample_id, stage_type = stage_type, pipeline_id = pipeline_id),
     algo = "sha256", serialize = TRUE
   )
-  filename <- paste0(artifact_id, "_", stage_type, ".rds")
+  filename <- paste0(pipeline_output_id, "_", stage_type, ".rds")
   .upload_rds(obj, filename, db, url)
 
   .insert(col, c(
     list(
-      `_id`       = artifact_id,
+      `_id`       = pipeline_output_id,
       study_id    = study_id,
       sample_id   = sample_id,
       pipeline_id = pipeline_id,
@@ -282,34 +282,34 @@ save_artifact <- function(obj, study_id, sample_id, pipeline_id, stage_type,
     extra_meta
   ))
 
-  message("✓ Artifact saved: ", artifact_id,
+  message("✓ Pipeline Output saved: ", pipeline_output_id,
           " (", stage_type, " | sample: ", sample_id, ")")
-  invisible(artifact_id)
+  invisible(pipeline_output_id)
 }
 
-#' Load an artifact strictly by (sample_id, stage_type, pipeline_id).
+#' Load a Pipeline Output strictly by (sample_id, stage_type, pipeline_id).
 #' Never falls back to "most recent". Errors if not found.
-load_artifact_by_pipeline <- function(sample_id, stage_type, pipeline_id,
+load_pipeline_output_by_pipeline <- function(sample_id, stage_type, pipeline_id,
                                       db = DB_NAME, url = MONGO_URL) {
-  col <- .con("artifacts", db, url)
+  col <- .con("pipeline_outputs", db, url)
   q   <- jsonlite::toJSON(
     list(sample_id = sample_id, stage_type = stage_type, pipeline_id = pipeline_id),
     auto_unbox = TRUE
   )
   res <- col$find(q)
   if (nrow(res) == 0) {
-    stop("No artifact for sample_id=", sample_id,
+    stop("No Pipeline Output for sample_id=", sample_id,
          ", stage_type=", stage_type, ", pipeline_id=", pipeline_id)
   }
   if (nrow(res) > 1) {
-    stop("Integrity error: multiple artifacts match. Check unique index.")
+    stop("Integrity error: multiple Pipeline Outputs match. Check unique index.")
   }
   .download_rds(res$gridfs_name[1], db, url)
 }
 
 
-#' Query artifact metadata (returns data.frame of metadata rows, not the data).
-query_artifacts <- function(study_id = NULL, sample_id = NULL,
+#' Query Pipeline Output metadata (returns data.frame of metadata rows, not the data).
+query_pipeline_outputs <- function(study_id = NULL, sample_id = NULL,
                             stage_type = NULL, pipeline_id = NULL,
                             db = DB_NAME, url = MONGO_URL) {
   parts <- list()
@@ -318,7 +318,7 @@ query_artifacts <- function(study_id = NULL, sample_id = NULL,
   if (!is.null(stage_type))  parts$stage_type  <- stage_type
   if (!is.null(pipeline_id)) parts$pipeline_id <- pipeline_id
   q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
-  .con("artifacts", db, url)$find(q)
+  .con("pipeline_outputs", db, url)$find(q)
 }
 
 
@@ -494,20 +494,20 @@ sample_name_exists <- function(study_id, sample_name, db = DB_NAME, url = MONGO_
   col$count(q) > 0
 }
 
-#' Save a clustering result as a first-class artifact.
+#' Save a clustering result as a first-class Pipeline Output.
 #' cluster_pipeline_id must be produced by upsert_pipeline(type="clustering", ...).
 #'
-#' Upsert semantics: if an artifact already exists for the same
+#' Upsert semantics: if a Pipeline Output already exists for the same
 #' (sample_id, stage_type="clustering_result", cluster_pipeline_id), the
-#' existing artifact_id is returned and no duplicate is written.  This allows
+#' existing pipeline_output_id is returned and no duplicate is written.  This allows
 #' the user to re-commit after adjusting cluster labels without errors.
-save_clustering_artifact <- function(clustered_df,
+save_clustering_pipeline_output <- function(clustered_df,
                                      study_id,
                                      sample_id,
-                                     input_artifact_id,
+                                     input_pipeline_output_id,
                                      cluster_pipeline_id,
                                      db = DB_NAME, url = MONGO_URL) {
-  col   <- .con("artifacts", db, url)
+  col   <- .con("pipeline_outputs", db, url)
   dup_q <- jsonlite::toJSON(
     list(sample_id = sample_id,
          stage_type  = "clustering_result",
@@ -516,27 +516,27 @@ save_clustering_artifact <- function(clustered_df,
   )
   existing <- col$find(dup_q, fields = '{"_id":1}')
   if (nrow(existing) > 0) {
-    message("[save_clustering_artifact] Artifact already exists: ",
+    message("[save_clustering_pipeline_output] Pipeline Output already exists: ",
             existing[["_id"]][1], " — returning existing id.")
     return(invisible(existing[["_id"]][1]))
   }
-  save_artifact(
+  save_pipeline_output(
     obj         = clustered_df,
     study_id    = study_id,
     sample_id   = sample_id,
     pipeline_id = cluster_pipeline_id,
     stage_type  = "clustering_result",
-    extra_meta  = list(input_artifact_id = input_artifact_id),
+    extra_meta  = list(input_pipeline_output_id = input_pipeline_output_id),
     db          = db,
     url         = url
   )
 }
 
-#' List all unique pipeline_ids that produced artifacts of a given stage_type
+#' List all unique pipeline_ids that produced Pipeline Outputs of a given stage_type
 #' for a given sample.
 list_available_pipeline_ids <- function(sample_id, stage_type,
                                         db = DB_NAME, url = MONGO_URL) {
-  res <- query_artifacts(sample_id = sample_id, stage_type = stage_type, db = db, url = url)
+  res <- query_pipeline_outputs(sample_id = sample_id, stage_type = stage_type, db = db, url = url)
   if (nrow(res) == 0) return(character(0))
   unique(res$pipeline_id)
 }
@@ -688,7 +688,7 @@ compute_pipeline_id <- function(type, params, code_version = "dev") {
 #' @param sample_ids        Character vector of sample _ids.
 #' @param pipeline_id       Determines which features to use.
 #' @param annotation_set_id Determines which labels to use.
-#' @param stage_type        Artifact stage_type to pull features from.
+#' @param stage_type        Pipeline Output stage_type to pull features from.
 #' @param feature_spec      list(type, version) describing feature extraction.
 #' @param split             list(strategy, seed, train_frac).
 #' @param name              Human-readable label.
@@ -726,15 +726,15 @@ create_dataset <- function(study_id,
          " cannot be mixed with study_id=", study_id)
   }
 
-  # --- validate: artifact exists for every sample ---
-  arts_col <- .con("artifacts", db, url)
+  # --- validate: Pipeline Output exists for every sample ---
+  outputs_col <- .con("pipeline_outputs", db, url)
   for (sid in sample_ids) {
     q <- jsonlite::toJSON(
       list(sample_id = sid, stage_type = stage_type, pipeline_id = pipeline_id),
       auto_unbox = TRUE
     )
-    if (arts_col$count(q) == 0) {
-      stop("Missing artifact (", stage_type, ") for sample_id=", sid,
+    if (outputs_col$count(q) == 0) {
+      stop("Missing Pipeline Output (", stage_type, ") for sample_id=", sid,
            " with pipeline_id=", pipeline_id)
     }
   }
@@ -828,9 +828,9 @@ materialize_training_source <- function(sample_ids,
     sid <- sample_ids[i]
     message("[materialize]  [", i, "/", length(sample_ids), "] sample_id: ", sid)
 
-    feat_df <- load_artifact_by_pipeline(sid, stage_type, pipeline_id, db, url)
+    feat_df <- load_pipeline_output_by_pipeline(sid, stage_type, pipeline_id, db, url)
     mz_cols <- grep("^mz_", colnames(feat_df), value = TRUE)
-    if (length(mz_cols) == 0) stop("No mz_ columns in artifact for sample_id=", sid)
+    if (length(mz_cols) == 0) stop("No mz_ columns in Pipeline Output for sample_id=", sid)
 
     ann_df <- load_annotation(sid, annotation_set_id, db, url)
 
@@ -1303,7 +1303,7 @@ save_raw_pair_to_mongo <- function(sample_name, imzml_path, ibd_path,
   stopifnot(file.exists(imzml_path), file.exists(ibd_path))
 
   grid <- mongolite::gridfs(db = db_name, prefix = bucket, url = mongo_url)
-  meta <- .con("processing_artifacts_metadata", db_name, mongo_url)
+  meta <- .con("processing_pipeline_outputs_metadata", db_name, mongo_url)
 
   base     <- tools::file_path_sans_ext(basename(sample_name))
   ts       <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -1334,12 +1334,12 @@ fetch_raw_pair_from_mongo <- function(sample_name, dest_dir,
                                       mongo_url = MONGO_URL,
                                       bucket    = "fs") {
   grid      <- mongolite::gridfs(db = db_name, prefix = bucket, url = mongo_url)
-  meta      <- .con("processing_artifacts_metadata", db_name, mongo_url)
-  artifacts <- meta$find(jsonlite::toJSON(
+  meta      <- .con("processing_pipeline_outputs_metadata", db_name, mongo_url)
+  pipeline_outputs <- meta$find(jsonlite::toJSON(
     list(sample_name = sample_name, stage_type = "raw_files"), auto_unbox = TRUE
   ))
-  if (nrow(artifacts) == 0) stop("No raw_files for sample: ", sample_name)
-  row <- artifacts[nrow(artifacts), , drop = FALSE]
+  if (nrow(pipeline_outputs) == 0) stop("No raw_files for sample: ", sample_name)
+  row <- pipeline_outputs[nrow(pipeline_outputs), , drop = FALSE]
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)
   base <- tools::file_path_sans_ext(basename(sample_name))
   fi   <- file.path(dest_dir, paste0(base, ".imzML"))
@@ -1358,7 +1358,7 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
                                 mongo_url = MONGO_URL) {
 
   if (stage_type %in% c("control_mean", "snr_reference")) {
-    meta   <- .con("processing_artifacts_metadata", db_name, mongo_url)
+    meta   <- .con("processing_pipeline_outputs_metadata", db_name, mongo_url)
     q_list <- list(sample_name = sample_name, stage_type = stage_type)
     if (stage_type == "snr_reference" && !is.null(params$snr)) q_list$snr <- params$snr
     if (meta$count(jsonlite::toJSON(q_list, auto_unbox = TRUE)) > 0) {
@@ -1376,7 +1376,7 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
   grid_res <- grid$upload(tmp, name = filename)
   grid_id  <- as.character(grid_res$id)
 
-  meta <- .con("processing_artifacts_metadata", db_name, mongo_url)
+  meta <- .con("processing_pipeline_outputs_metadata", db_name, mongo_url)
   .insert(meta, c(
     list(
       gridfs_id   = grid_id,
@@ -1394,8 +1394,8 @@ save_stage_to_mongo <- function(msi_object, run_id, stage_type,
 }
 
 
-# Legacy artifact query (wraps old collection; used by processing_module.R).
-query_legacy_artifacts <- function(sample_name    = NULL,
+# Legacy Pipeline Output query (wraps old collection; used by processing_module.R).
+query_legacy_pipeline_outputs <- function(sample_name    = NULL,
                                    stage_type     = NULL,
                                    snr            = NULL,
                                    tolerance      = NULL,
@@ -1411,7 +1411,7 @@ query_legacy_artifacts <- function(sample_name    = NULL,
   if (!is.null(reference_name)) parts$reference_name <- reference_name
   if (!is.null(run_id))         parts$run_id         <- run_id
   q <- if (length(parts) == 0) "{}" else jsonlite::toJSON(parts, auto_unbox = TRUE)
-  .con("processing_artifacts_metadata", db_name, mongo_url)$find(q)
+  .con("processing_pipeline_outputs_metadata", db_name, mongo_url)$find(q)
 }
 
 

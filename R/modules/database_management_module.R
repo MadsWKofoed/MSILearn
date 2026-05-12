@@ -416,7 +416,7 @@ database_management_module_ui <- function(id) {
               ),
               tags$div(
                 class = "dbm-danger-note",
-                "Deletion is permanent. Cascading cleanup is applied where records have dependent datasets, artifacts, NDPI images, annotations, model runs, or related metadata."
+                "Deletion is permanent. Cascading cleanup is applied where records have dependent datasets, Pipeline Outputs, NDPI images, annotations, model runs, or related metadata."
               ),
               uiOutput(ns("delete_report_ui"))
             )
@@ -936,7 +936,7 @@ database_management_module_server <- function(id) {
         tags$p(
           class = if (isTRUE(policy$allowed)) "dbm-safe-note" else "dbm-danger-note",
           if (identical(input$collection, "studies")) {
-            "Deleting a study cascades to dependent samples, artifacts, NDPI images, annotations, datasets, model runs, and related metadata."
+            "Deleting a study cascades to dependent samples, Pipeline Outputs, NDPI images, annotations, datasets, model runs, and related metadata."
           } else if (isTRUE(policy$allowed)) {
             "This selected object can be deleted after confirmation."
           } else {

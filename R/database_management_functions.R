@@ -11,12 +11,12 @@ library(dplyr)
 dbm_catalog <- function() {
   data.frame(
     key = c(
-      "studies", "samples", "pipelines", "artifacts",
+      "studies", "samples", "pipelines", "pipeline_outputs",
       "ndpi_images", "annotation_sets", "annotations", "datasets", "model_runs",
       "alignment_references", "ndpi_registrations"
     ),
     label = c(
-      "Studies", "Samples", "Pipelines", "Artifacts",
+      "Studies", "Samples", "Pipelines", "Pipeline Outputs",
       "NDPI images", "Annotation sets", "Annotations", "Datasets", "Model runs",
       "Alignment references", "NDPI registrations"
     ),
@@ -24,7 +24,7 @@ dbm_catalog <- function() {
       "Top-level projects/cohorts.",
       "Samples registered under studies.",
       "Deterministic processing/clustering pipelines.",
-      "Stored artifacts backed by GridFS.",
+      "Stored Pipeline Outputs backed by GridFS.",
       "Saved NDPI viewer packages backed by GridFS.",
       "Allowed label vocabularies.",
       "Pixel-level annotations backed by GridFS.",
@@ -44,11 +44,11 @@ dbm_requires_study_filter <- function(collection) {
 }
 
 dbm_supports_study_filter <- function(collection) {
-  collection %in% c("samples", "annotation_sets", "artifacts", "ndpi_images", "annotations", "datasets", "ndpi_registrations")
+  collection %in% c("samples", "annotation_sets", "pipeline_outputs", "ndpi_images", "annotations", "datasets", "ndpi_registrations")
 }
 
 dbm_supports_sample_filter <- function(collection) {
-  collection %in% c("artifacts", "ndpi_images", "annotations", "ndpi_registrations")
+  collection %in% c("pipeline_outputs", "ndpi_images", "annotations", "ndpi_registrations")
 }
 
 # ---- Small generic helpers -------------------------------------------------
@@ -287,9 +287,9 @@ dbm_filter_index <- function(collection, db = DB_NAME, url = MONGO_URL) {
       ann_df <- dbm_safe_find("annotation_sets", db = db, url = url)
       study_rows_from_ids(ann_df$study_id)
     },
-    artifacts = {
-      art_df <- dbm_safe_find("artifacts", db = db, url = url)
-      sample_rows_from_ids(art_df$sample_id, fallback_study_ids = art_df$study_id)
+    pipeline_outputs = {
+      output_df <- dbm_safe_find("pipeline_outputs", db = db, url = url)
+      sample_rows_from_ids(output_df$sample_id, fallback_study_ids = output_df$study_id)
     },
     ndpi_images = {
       ndpi_df <- dbm_safe_find("ndpi_images", db = db, url = url)
@@ -373,8 +373,8 @@ dbm_get_collection_data <- function(collection,
       if (!is.null(study_id) && nzchar(study_id)) get_samples(study_id, db = db, url = url) else dbm_safe_find("samples", db = db, url = url)
     },
     pipelines = dbm_safe_find("pipelines", db = db, url = url),
-    artifacts = {
-      query_artifacts(study_id = if (!is.null(study_id) && nzchar(study_id)) study_id else NULL,
+    pipeline_outputs = {
+      query_pipeline_outputs(study_id = if (!is.null(study_id) && nzchar(study_id)) study_id else NULL,
                       sample_id = if (!is.null(sample_id) && nzchar(sample_id)) sample_id else NULL,
                       db = db, url = url)
     },
@@ -471,7 +471,7 @@ dbm_prepare_display <- function(df, collection, db = DB_NAME, url = MONGO_URL) {
         stringsAsFactors = FALSE
       )
     },
-    artifacts = {
+    pipeline_outputs = {
       show <- data.frame(
         id = col_or_default(df, "_id"),
         study = lookup(col_or_default(df, "study_id"), study_map),
@@ -666,7 +666,7 @@ dbm_domain_mix <- function(counts_df) {
     studies = "Study setup",
     samples = "Study setup",
     pipelines = "Processing",
-    artifacts = "Processing",
+    pipeline_outputs = "Processing",
     ndpi_images = "Processing",
     ndpi_registrations = "Processing",
     annotation_sets = "Annotation",
@@ -773,7 +773,7 @@ dbm_delete_policy <- function(collection, record = NULL) {
     annotations = "Delete selected annotation",
     annotation_sets = "Delete selected annotation set",
     ndpi_images = "Delete selected NDPI image",
-    artifacts = "Delete selected artifact",
+    pipeline_outputs = "Delete selected Pipeline Output",
     samples = "Delete selected sample",
     pipelines = "Delete selected pipeline",
     "Delete selected record"
@@ -793,13 +793,13 @@ dbm_delete_policy <- function(collection, record = NULL) {
 # ---- Deletion helpers ------------------------------------------------------
 
 dbm_internal_collections <- function() {
-  c("processing_artifacts_metadata", "clustering_metadata")
+  c("processing_pipeline_outputs_metadata", "clustering_metadata")
 }
 
 dbm_collection_label <- function(collection) {
   labels <- c(
     stats::setNames(dbm_catalog()$label, dbm_catalog()$key),
-    processing_artifacts_metadata = "Legacy processing metadata",
+    processing_pipeline_outputs_metadata = "Legacy processing metadata",
     clustering_metadata = "Clustering metadata"
   )
   unname(labels[[collection]] %||% collection)
@@ -884,7 +884,7 @@ dbm_record_selector <- function(collection, record) {
       type = as.character(r$type[1] %||% ""),
       params_hash = as.character(r$params_hash[1] %||% "")
     ),
-    artifacts = list(
+    pipeline_outputs = list(
       sample_id = as.character(r$sample_id[1] %||% ""),
       stage_type = as.character(r$stage_type[1] %||% ""),
       pipeline_id = as.character(r$pipeline_id[1] %||% "")
@@ -922,7 +922,7 @@ dbm_record_selector <- function(collection, record) {
       ndpi_slide_name = as.character(r$ndpi_slide_name[1] %||% ""),
       created_at = as.character(r$created_at[1] %||% "")
     ),
-    processing_artifacts_metadata = list(
+    processing_pipeline_outputs_metadata = list(
       sample_name = as.character(r$sample_name[1] %||% ""),
       stage_type = as.character(r$stage_type[1] %||% ""),
       run_id = as.character(r$run_id[1] %||% ""),
@@ -1043,10 +1043,10 @@ dbm_find_datasets <- function(sample_ids = character(0),
   ds[keep, , drop = FALSE]
 }
 
-dbm_collect_datasets_from_artifacts <- function(artifacts_df, db = DB_NAME, url = MONGO_URL) {
-  sample_ids <- dbm_extract_field_values(artifacts_df, "sample_id")
-  pipeline_ids <- dbm_extract_field_values(artifacts_df, "pipeline_id")
-  stage_types <- dbm_extract_field_values(artifacts_df, "stage_type")
+dbm_collect_datasets_from_pipeline_outputs <- function(pipeline_outputs_df, db = DB_NAME, url = MONGO_URL) {
+  sample_ids <- dbm_extract_field_values(pipeline_outputs_df, "sample_id")
+  pipeline_ids <- dbm_extract_field_values(pipeline_outputs_df, "pipeline_id")
+  stage_types <- dbm_extract_field_values(pipeline_outputs_df, "stage_type")
   dbm_find_datasets(
     sample_ids = sample_ids,
     pipeline_ids = pipeline_ids,
@@ -1073,15 +1073,15 @@ dbm_dependency_rules <- function() {
       list(child = "samples", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "annotation_sets", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "datasets", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
-      list(child = "artifacts", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "pipeline_outputs", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "ndpi_images", query = function(df) list(study_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id")))))
     ),
     samples = list(
-      list(child = "artifacts", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "pipeline_outputs", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "ndpi_images", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "annotations", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "ndpi_registrations", query = function(df) list(sample_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
-      list(child = "processing_artifacts_metadata", query = function(df) {
+      list(child = "processing_pipeline_outputs_metadata", query = function(df) {
         sample_names <- dbm_extract_field_values(df, "sample_name")
         if (length(sample_names) == 0) return(NULL)
         list(sample_name = list(`$in` = as.list(sample_names)))
@@ -1092,14 +1092,14 @@ dbm_dependency_rules <- function() {
       })
     ),
     pipelines = list(
-      list(child = "artifacts", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
+      list(child = "pipeline_outputs", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "datasets", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "ndpi_registrations", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id"))))),
       list(child = "clustering_metadata", query = function(df) list(pipeline_id = list(`$in` = as.list(dbm_extract_field_values(df, "_id")))))
     ),
-    artifacts = list(
+    pipeline_outputs = list(
       list(child = "datasets", collect = function(df, db, url) {
-        dbm_collect_datasets_from_artifacts(df, db = db, url = url)
+        dbm_collect_datasets_from_pipeline_outputs(df, db = db, url = url)
       })
     ),
     ndpi_images = list(
@@ -1167,8 +1167,8 @@ dbm_plan_delete_order <- function() {
     "annotations",
     "ndpi_registrations",
     "ndpi_images",
-    "artifacts",
-    "processing_artifacts_metadata",
+    "pipeline_outputs",
+    "processing_pipeline_outputs_metadata",
     "clustering_metadata",
     "annotation_sets",
     "samples",
@@ -1476,7 +1476,7 @@ dbm_record_title <- function(collection, record) {
     studies = paste0("Study: ", dbm_first_chr(r$name, dbm_first_chr(r$`_id`))),
     samples = paste0("Sample: ", dbm_first_chr(r$sample_name, dbm_first_chr(r$`_id`))),
     pipelines = paste0("Pipeline: ", dbm_first_chr(r$name, dbm_first_chr(r$`_id`))),
-    artifacts = paste0("Artifact: ", dbm_first_chr(r$stage_type, dbm_first_chr(r$`_id`))),
+    pipeline_outputs = paste0("Pipeline Output: ", dbm_first_chr(r$stage_type, dbm_first_chr(r$`_id`))),
     ndpi_images = paste0("NDPI image: ", dbm_first_chr(r$ndpi_slide_name, dbm_first_chr(r$`_id`))),
     annotation_sets = paste0("Annotation set: ", dbm_first_chr(r$name, dbm_first_chr(r$`_id`))),
     annotations = paste0("Annotation: ", dbm_first_chr(r$`_id`)),

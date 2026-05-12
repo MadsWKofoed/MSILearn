@@ -234,7 +234,7 @@ run_prediction_from_upload <- function(run_id,
 # predict_from_model_run()
 #
 # Load a persisted model and predict on new features.
-# Feature matrix must come from an artifact loaded via pipeline_id,
+# Feature matrix must come from a Pipeline Output loaded via pipeline_id,
 # NOT from ad-hoc file loading.
 #
 # @param run_id      model_run_id (from save_model_run / train_ranger_from_dataset).

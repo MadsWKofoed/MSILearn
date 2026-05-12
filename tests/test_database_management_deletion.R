@@ -23,10 +23,10 @@ make_fake_db_state <- function() {
       list(`_id` = "pipe_processing", type = "processing", name = "Processing", params_hash = "pipe_processing", created_at = "2026-05-02T10:03:00Z"),
       list(`_id` = "pipe_clustering", type = "clustering", name = "Clustering", params_hash = "pipe_clustering", created_at = "2026-05-02T10:04:00Z")
     ),
-    artifacts = list(
-      list(`_id` = "artifact_1", study_id = "study_1", sample_id = "sample_1", pipeline_id = "pipe_processing", stage_type = "binned_dataframe", gridfs_name = "artifact_1.rds", created_at = "2026-05-02T10:05:00Z"),
-      list(`_id` = "artifact_2", study_id = "study_1", sample_id = "sample_2", pipeline_id = "pipe_processing", stage_type = "binned_dataframe", gridfs_name = "artifact_2.rds", created_at = "2026-05-02T10:06:00Z"),
-      list(`_id` = "artifact_cluster", study_id = "study_1", sample_id = "sample_1", pipeline_id = "pipe_clustering", stage_type = "clustering_result", gridfs_name = "artifact_cluster.rds", input_artifact_id = "artifact_1", created_at = "2026-05-02T10:07:00Z")
+    pipeline_outputs = list(
+      list(`_id` = "pipeline_output_1", study_id = "study_1", sample_id = "sample_1", pipeline_id = "pipe_processing", stage_type = "binned_dataframe", gridfs_name = "pipeline_output_1.rds", created_at = "2026-05-02T10:05:00Z"),
+      list(`_id` = "pipeline_output_2", study_id = "study_1", sample_id = "sample_2", pipeline_id = "pipe_processing", stage_type = "binned_dataframe", gridfs_name = "pipeline_output_2.rds", created_at = "2026-05-02T10:06:00Z"),
+      list(`_id` = "pipeline_output_cluster", study_id = "study_1", sample_id = "sample_1", pipeline_id = "pipe_clustering", stage_type = "clustering_result", gridfs_name = "pipeline_output_cluster.rds", input_pipeline_output_id = "pipeline_output_1", created_at = "2026-05-02T10:07:00Z")
     ),
     annotation_sets = list(
       list(`_id` = "annset_1", study_id = "study_1", name = "Regions", created_at = "2026-05-02T10:08:00Z")
@@ -48,7 +48,7 @@ make_fake_db_state <- function() {
     ndpi_registrations = list(
       list(sample_id = "sample_1", pipeline_id = "pipe_processing", ndpi_slide_name = "slide_a.ndpi", created_at = "2026-05-02T10:13:00Z")
     ),
-    processing_artifacts_metadata = list(
+    processing_pipeline_outputs_metadata = list(
       list(sample_name = "Sample A", stage_type = "raw_files", imzml_gridfs_name = "sample_a.imzML", ibd_gridfs_name = "sample_a.ibd", created_at = "2026-05-02T10:14:00Z")
     ),
     clustering_metadata = list(
@@ -177,7 +177,7 @@ run_tests <- function() {
     report <- dbm_delete_record("studies", record = study)
     assert_true(as.integer(report$deleted[["studies"]]) == 1L, "Study deletion should remove the selected study.")
     assert_true(as.integer(report$deleted[["samples"]]) == 2L, "Study deletion should remove linked samples.")
-    assert_true(as.integer(report$deleted[["artifacts"]]) == 3L, "Study deletion should remove linked artifacts, including clustering results.")
+    assert_true(as.integer(report$deleted[["pipeline_outputs"]]) == 3L, "Study deletion should remove linked Pipeline Outputs, including clustering results.")
     assert_true(as.integer(report$deleted[["datasets"]]) == 1L, "Study deletion should remove linked datasets.")
     assert_true(as.integer(report$deleted[["model_runs"]]) == 1L, "Study deletion should remove linked model runs.")
     assert_true(dbm_safe_count("studies") == 0L, "Study should be deleted.")
@@ -219,9 +219,9 @@ run_tests <- function() {
   })
 
   with_fake_db({
-    clustering_artifact <- dbm_safe_find_list("artifacts", list(`_id` = "artifact_cluster"))
-    report <- dbm_delete_record("artifacts", record = clustering_artifact)
-    assert_true(as.integer(report$deleted[["artifacts"]]) == 1L, "Clustering result deletion should remove the selected artifact.")
+    clustering_pipeline_output <- dbm_safe_find_list("pipeline_outputs", list(`_id` = "pipeline_output_cluster"))
+    report <- dbm_delete_record("pipeline_outputs", record = clustering_pipeline_output)
+    assert_true(as.integer(report$deleted[["pipeline_outputs"]]) == 1L, "Clustering result deletion should remove the selected Pipeline Output.")
     assert_true(dbm_safe_count("datasets") == 1L, "Deleting a clustering result should not delete unrelated datasets.")
   })
 

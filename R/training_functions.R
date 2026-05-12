@@ -1346,7 +1346,7 @@ build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) 
 # train_ranger_from_dataset()
 #
 # The one authorised entry point for training a Random Forest model.
-# All data comes from dataset_id; no direct artifact loading elsewhere.
+# All data comes from dataset_id; no direct pipeline_output loading elsewhere.
 #
 # @param dataset_id       Frozen dataset snapshot _id.
 # @param mtry             Number of variables randomly sampled at each split.

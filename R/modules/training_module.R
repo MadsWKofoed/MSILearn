@@ -614,7 +614,7 @@ training_module_server <- function(id) {
       for (i in seq_along(sample_ids)) {
         sid <- sample_ids[i]
 
-        feat_df <- load_artifact_by_pipeline(sid, stage_type, pipeline_id)
+        feat_df <- load_pipeline_output_by_pipeline(sid, stage_type, pipeline_id)
         ann_df  <- load_annotation(sid, annotation_set_id)
 
         merged <- merge(
@@ -1010,11 +1010,11 @@ training_module_server <- function(id) {
       )
 
       tryCatch({
-        arts <- query_artifacts(study_id = sid, stage_type = "binned_dataframe")
-        pids <- unique(arts$pipeline_id)
+        outputs <- query_pipeline_outputs(study_id = sid, stage_type = "binned_dataframe")
+        pids <- unique(outputs$pipeline_id)
         if (length(pids) == 0) {
           updateSelectInput(session, "ds_pipeline",
-                            choices = c("No processed artifacts" = ""))
+                            choices = c("No processed Pipeline Outputs" = ""))
         } else {
           labels <- vapply(pids, function(pid) {
             tryCatch({
