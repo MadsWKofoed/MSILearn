@@ -1620,7 +1620,7 @@ clustering_module_server <- function(id) {
               normalize_method = input$normalize,
               cor_radius = input$cor_radius %||% 1,
               cor_scale = input$cor_scale %||% 25,
-              cor_cores = max(parallel::detectCores() - 1, 1),
+              cor_cores = app_worker_count(),
               minMem = input$minMem %||% 0.5
             )
             vsclust_membership_data(result)

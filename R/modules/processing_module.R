@@ -494,7 +494,7 @@ processing_module_server <- function(id) {
         # existing_sample value is sample_id – fetch sample_name
         samp_col <- mongolite::mongo(collection = "samples",
                                      db  = DB_NAME,
-                                     url = "mongodb://localhost:27018")
+                                     url = MONGO_URL)
         row <- samp_col$find(
           sprintf('{"_id": "%s"}', input$existing_sample),
           fields = '{"sample_name":1}'
@@ -788,7 +788,7 @@ processing_module_server <- function(id) {
             )
             # Back-fill raw_ref into the sample document
             mongolite::mongo(collection = "samples", db = DB_NAME,
-                             url = "mongodb://localhost:27018")$update(
+                             url = MONGO_URL)$update(
               sprintf('{"_id": "%s"}', sample_id),
               jsonlite::toJSON(list(`$set` = list(raw_ref = raw_refs)),
                                auto_unbox = TRUE)

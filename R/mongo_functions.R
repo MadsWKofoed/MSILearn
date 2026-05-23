@@ -13,8 +13,7 @@ library(digest)
 library(jsonlite)
 library(mongolite)
 
-DB_NAME   <- "MSI_DB"
-MONGO_URL <- "mongodb://localhost:27018"
+source("R/config.R")
 
 # Null-coalescing operator used throughout
 `%||%` <- function(a, b) if (!is.null(a)) a else b
@@ -1417,8 +1416,8 @@ query_legacy_pipeline_outputs <- function(sample_name    = NULL,
 
 
 get_model_run <- function(run_id,
-                          db = "MSI_DB",
-                          url = "mongodb://localhost:27018") {
+                          db = DB_NAME,
+                          url = MONGO_URL) {
   con <- mongolite::mongo(collection = "model_runs", db = db, url = url)
   doc <- con$find(query = sprintf('{"_id": "%s"}', run_id))
   if (nrow(doc) == 0) return(NULL)

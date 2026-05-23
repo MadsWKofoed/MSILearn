@@ -2,8 +2,7 @@
 # MongoDB schema initialisation and index enforcement.
 # Call `initialise_schema()` once at application startup (idempotent).
 
-DB_NAME  <- "MSI_DB"
-MONGO_URL <- "mongodb://localhost:27018"
+source("R/config.R")
 
 # ---------------------------------------------------------------------------
 # Internal connection helper (opens a fresh connection per call; mongolite

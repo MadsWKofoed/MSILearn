@@ -1,0 +1,10 @@
+.git
+.codex_tmp
+.DS_Store
+.RData
+.Rhistory
+.Rproj.user
+.env
+.ndpi_tmp
+docker-version-audit-*
+mongo-data

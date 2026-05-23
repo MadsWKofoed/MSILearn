@@ -3,8 +3,10 @@
 options(shiny.maxRequestSize = 5000 * 1024^2)
 options(shiny.launch.browser = TRUE)
 
+source("R/config.R")
+
 # Parallel settings (shared across app)
-bp <- max(1L, parallel::detectCores(logical = FALSE) - 22L)
+bp <- app_worker_count()
 
 # One canonical BiocParallel backend for the whole app
 msi_bpparam <- BiocParallel::MulticoreParam(workers = bp)

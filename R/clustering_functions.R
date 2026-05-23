@@ -198,7 +198,11 @@ compute_neighbor_cor <- function(dat,
   offset_weight <- 1 / offset_step
 
   workers <- max(1L, as.integer(cores))
-  max_cores <- parallel::detectCores(logical = FALSE)
+  max_cores <- if (exists("app_available_cores", mode = "function")) {
+    app_available_cores(logical = FALSE)
+  } else {
+    parallel::detectCores(logical = FALSE)
+  }
   if (is.finite(max_cores)) {
     workers <- min(workers, max_cores)
   }
@@ -275,7 +279,8 @@ compute_neighbor_cor <- function(dat,
 # MSIClust clustering
 run_msiclust <- function(full_df, k = 3,
                          normalize_method = c("none", "tic", "median", "rms"),
-                         cor_radius = 1, cor_scale = 25, cor_cores = parallel::detectCores() - 22,
+                         cor_radius = 1, cor_scale = 25,
+                         cor_cores = if (exists("app_worker_count", mode = "function")) app_worker_count() else max(1L, parallel::detectCores(logical = FALSE) - 1L),
                          minMem = 0.5) {
   
   normalize_method <- match.arg(normalize_method)

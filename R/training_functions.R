@@ -1462,7 +1462,12 @@ train_ranger_from_dataset <- function(
   used_parallel <- FALSE
 
   if (is.null(workers)) {
-    workers <- min(as.integer(cv_folds), 15L)
+    max_auto_workers <- if (exists("app_worker_count", mode = "function")) {
+      app_worker_count(max_workers = 15L)
+    } else {
+      15L
+    }
+    workers <- min(as.integer(cv_folds), max_auto_workers)
   } else {
     workers <- as.integer(workers)
   }

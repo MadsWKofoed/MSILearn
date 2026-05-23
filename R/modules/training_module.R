@@ -1417,7 +1417,7 @@ training_module_server <- function(id) {
           max_pairs_per_bin = 300L,
           local_decay_threshold = 0.2,
           seed = as.integer(input$ds_seed %||% 42L),
-          workers = max(1L, min(8L, parallel::detectCores(logical = FALSE) - 1L))
+          workers = app_worker_count(max_workers = 8L)
         )
 
         src_key <- paste(
