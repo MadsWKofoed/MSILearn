@@ -14,9 +14,6 @@ Database settings are read from environment variables:
 | `MONGO_URL` | `mongodb://localhost:27018` | `mongodb://mongo:27017` |
 | `MONGO_HOST_PORT` | not used | `27018` |
 | `MONGO_VERSION` | not used | `8.2.7` |
-| `R_VERSION` | not used | `4.4.3` |
-| `BIOC_VERSION` | not used | `3.20` |
-| `CRAN_SNAPSHOT` | not used | `2026-03-10` |
 | `APP_WORKERS` | unset, auto-sized | unset, auto-sized |
 | `APP_WORKER_MAX` | `8` | `8` |
 | `APP_WORKER_RESERVE_CORES` | `1` | `1` |
@@ -49,7 +46,7 @@ The Docker image mirrors the remote server audit as closely as practical:
 - Python `3.10` from Ubuntu 22.04, with Flask/OpenSlide pip packages pinned in the Dockerfile
 - MongoDB `8.2.7`
 
-R package versions captured from the server are listed in `docker/r-packages.csv`. CRAN dependencies are installed from Posit's Ubuntu Jammy binary repository at the configured snapshot date, then direct CRAN packages are checked against the manifest and reinstalled from CRAN source archives when needed. Bioconductor packages are installed through `BiocManager`.
+R package versions captured from the server are listed in `docker/r-packages.csv`. CRAN dependencies are installed from Posit's Ubuntu Jammy binary repository at the pinned `2026-03-10` snapshot date, then direct CRAN packages are checked against the manifest and reinstalled from CRAN source archives when needed. Bioconductor packages are installed through `BiocManager` using Bioconductor `3.20`.
 
 For strict long-term reproducibility, add an `renv.lock` file from a known-working local setup and update the Dockerfile to run `renv::restore()` instead of installing package names directly.
 

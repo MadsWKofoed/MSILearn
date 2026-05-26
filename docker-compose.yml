@@ -4,10 +4,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        R_VERSION: ${R_VERSION:-4.4.3}
-        BIOC_VERSION: ${BIOC_VERSION:-3.20}
-        CRAN_SNAPSHOT: ${CRAN_SNAPSHOT:-2026-03-10}
     environment:
       SHINY_PORT: ${SHINY_PORT:-3838}
       MONGO_DB: ${MONGO_DB:-MSI_DB}
