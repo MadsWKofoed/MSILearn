@@ -6,7 +6,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MONGO_DB=MSI_DB \
     MONGO_URL=mongodb://mongo:27017 \
     LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+    LC_ALL=C.UTF-8 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_PROGRESS_BAR=off
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean
 
@@ -59,7 +61,7 @@ RUN python3 -c "exec('import time, urllib.request\\nurl=\"https://cdn.posit.co/r
     && rm -f /tmp/r-4.4.3.deb \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir --progress-bar off --retries 5 --timeout 60 \
     Flask==3.1.3 \
     openslide-bin==4.0.0.12 \
     openslide-python==1.4.3
@@ -68,6 +70,7 @@ COPY docker/r-packages.csv /tmp/r-packages.csv
 COPY docker/install_r_packages.R /tmp/install_r_packages.R
 RUN CRAN_REPO="https://packagemanager.posit.co/cran/__linux__/jammy/2026-03-10" \
     BIOC_VERSION="3.20" \
+    R_INSTALL_NCPUS="1" \
     Rscript /tmp/install_r_packages.R /tmp/r-packages.csv
 
 WORKDIR /app

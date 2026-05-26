@@ -12,7 +12,10 @@ if (length(missing_cols) > 0L) {
 
 cran_repo <- Sys.getenv("CRAN_REPO", unset = "https://packagemanager.posit.co/cran/__linux__/jammy/2026-03-10")
 bioc_version <- Sys.getenv("BIOC_VERSION", unset = "3.20")
-ncpus <- max(1L, min(4L, parallel::detectCores()))
+ncpus <- suppressWarnings(as.integer(Sys.getenv("R_INSTALL_NCPUS", unset = "1")))
+if (is.na(ncpus) || ncpus < 1L) {
+  ncpus <- 1L
+}
 
 options(
   repos = c(CRAN = cran_repo),
