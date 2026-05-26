@@ -13,6 +13,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     BIOC_VERSION=${BIOC_VERSION} \
     CRAN_REPO=https://packagemanager.posit.co/cran/__linux__/jammy/${CRAN_SNAPSHOT}
 
+RUN rm -f /etc/apt/apt.conf.d/docker-clean
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
