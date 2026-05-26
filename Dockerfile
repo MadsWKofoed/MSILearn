@@ -8,10 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Europe/Copenhagen \
     SHINY_PORT=3838 \
     MONGO_DB=MSI_DB \
-    MONGO_URL=mongodb://mongo:27017 \
-    R_VERSION=${R_VERSION} \
-    BIOC_VERSION=${BIOC_VERSION} \
-    CRAN_REPO=https://packagemanager.posit.co/cran/__linux__/jammy/${CRAN_SNAPSHOT}
+    MONGO_URL=mongodb://mongo:27017
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean
 
@@ -50,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     zlib1g-dev \
+    && sed -i 's/^# *\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -72,7 +70,9 @@ RUN python3 -m pip install --no-cache-dir \
 
 COPY docker/r-packages.csv /tmp/r-packages.csv
 COPY docker/install_r_packages.R /tmp/install_r_packages.R
-RUN Rscript /tmp/install_r_packages.R /tmp/r-packages.csv
+RUN CRAN_REPO="https://packagemanager.posit.co/cran/__linux__/jammy/${CRAN_SNAPSHOT}" \
+    BIOC_VERSION="${BIOC_VERSION}" \
+    Rscript /tmp/install_r_packages.R /tmp/r-packages.csv
 
 WORKDIR /app
 COPY . /app
