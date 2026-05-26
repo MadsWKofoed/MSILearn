@@ -7,9 +7,16 @@ source("R/config.R")
 
 # Parallel settings (shared across app)
 bp <- app_worker_count()
+parallel_backend <- tolower(.env_or_default("APP_BIOCPARALLEL_BACKEND", "snow"))
 
 # One canonical BiocParallel backend for the whole app
-msi_bpparam <- BiocParallel::MulticoreParam(workers = bp)
+msi_bpparam <- if (bp <= 1L) {
+  BiocParallel::SerialParam()
+} else if (identical(parallel_backend, "multicore")) {
+  BiocParallel::MulticoreParam(workers = bp)
+} else {
+  BiocParallel::SnowParam(workers = bp, type = "SOCK")
+}
 BiocParallel::register(msi_bpparam, default = TRUE)
 
 # Cardinal parallel workers

@@ -23,12 +23,15 @@ Database settings are read from environment variables:
 | `APP_WORKER_CPU_FRACTION` | `0.75` | `0.75` |
 | `APP_MEMORY_PER_WORKER_GB` | `2` | `2` |
 | `APP_RESERVE_MEMORY_GB` | `2` | `2` |
+| `APP_BIOCPARALLEL_BACKEND` | `snow` | `snow` |
 
 The local defaults preserve the existing development workflow. When the app runs inside Docker, Compose sets `MONGO_URL` to the MongoDB service name (`mongo`) so the app does not depend on `localhost` inside the container.
 
 `APP_PLATFORM` defaults to `linux/amd64` to match the remote server audit. Docker Desktop runs this platform through emulation on Apple Silicon Macs.
 
 The worker settings control how many parallel workers the app uses for shared BiocParallel/Cardinal work and auto-sized training/clustering tasks. Leave `APP_WORKERS` empty for automatic sizing. The auto-sizer uses the CPU cores and memory visible inside Docker, reserves some headroom for the laptop, and caps workers at `APP_WORKER_MAX`. Set `APP_WORKERS` to a positive integer only when you want to force a specific worker count.
+
+`APP_BIOCPARALLEL_BACKEND=snow` uses socket workers, which is safer for Shiny/Docker than forked multicore workers. Set it to `multicore` only if you specifically want forked workers on a Linux host and have tested that processing is stable.
 
 Check the worker count seen by the running app container:
 
