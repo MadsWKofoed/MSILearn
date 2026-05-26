@@ -44,10 +44,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     zlib1g-dev \
+    && rm -f /etc/dpkg/dpkg.cfg.d/pkg-config-hook \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -c "exec('import time, urllib.request\\nurl=\"https://cdn.posit.co/r/ubuntu-2204/pkgs/r-4.4.3_1_amd64.deb\"\\nout=\"/tmp/r-4.4.3.deb\"\\nlast=None\\nfor attempt in range(1, 6):\\n    try:\\n        urllib.request.urlretrieve(url, out)\\n        break\\n    except Exception as exc:\\n        last=exc\\n        print(f\"download attempt {attempt} failed: {exc}\", flush=True)\\n        time.sleep(5)\\nelse:\\n    raise last')" \
     && apt-get update \
+    && rm -f /etc/dpkg/dpkg.cfg.d/pkg-config-hook \
     && apt-get install -y --no-install-recommends /tmp/r-4.4.3.deb \
     && ln -sf /opt/R/4.4.3/bin/R /usr/local/bin/R \
     && ln -sf /opt/R/4.4.3/bin/Rscript /usr/local/bin/Rscript \
