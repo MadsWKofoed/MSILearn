@@ -868,13 +868,7 @@ materialize_training_source <- function(sample_ids,
 #' @return Named list: train_X, train_y, test_X, test_y,
 #'         split_info, dataset_meta, pipeline_meta.
 
-# --- helpers for dataset split strategies ---------------------------------
-#assign_spatial_block_ids <- function(meta, block_size) {
-#  block_size <- max(1L, as.integer(round(block_size)))
-#  bx <- floor((meta$x - min(meta$x, na.rm = TRUE)) / block_size)
-#  by <- floor((meta$y - min(meta$y, na.rm = TRUE)) / block_size)
-#  paste(meta$sample_id, bx, by, sep = "__")
-#}
+
 
 compute_buffer_exclusion_idx <- function(meta, test_idx, buffer_radius, block_size) {
   buffer_radius <- suppressWarnings(as.numeric(buffer_radius))
