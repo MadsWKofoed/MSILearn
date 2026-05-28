@@ -178,8 +178,8 @@ app_worker_count <- function(max_workers = .env_int_or_default("APP_WORKER_MAX",
   )
 
   memory_gb <- app_available_memory_gb()
-  memory_per_worker_gb <- max(0.25, .env_num_or_default("APP_MEMORY_PER_WORKER_GB", 2))
-  reserve_memory_gb <- max(0, .env_num_or_default("APP_RESERVE_MEMORY_GB", 2))
+  memory_per_worker_gb <- max(0.25, .env_num_or_default("APP_MEMORY_PER_WORKER_GB", 4))
+  reserve_memory_gb <- max(0, .env_num_or_default("APP_RESERVE_MEMORY_GB", 4))
   memory_workers <- if (is.finite(memory_gb)) {
     max(1L, floor((memory_gb - reserve_memory_gb) / memory_per_worker_gb))
   } else {

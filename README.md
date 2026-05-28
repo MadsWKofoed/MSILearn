@@ -10,6 +10,8 @@ Database settings are read from environment variables:
 | --- | --- | --- |
 | `APP_PLATFORM` | not used | `linux/amd64` |
 | `APP_PORT` | not used | `3838` |
+| `APP_CPUS` | not used | `2` |
+| `APP_MEM_LIMIT` | not used | `8g` |
 | `MONGO_DB` | `MSI_DB` | `MSI_DB` |
 | `MONGO_URL` | `mongodb://localhost:27018` | `mongodb://mongo:27017` |
 | `MONGO_HOST_PORT` | not used | `27018` |
@@ -18,17 +20,46 @@ Database settings are read from environment variables:
 | `APP_WORKER_MAX` | `8` | `8` |
 | `APP_WORKER_RESERVE_CORES` | `1` | `1` |
 | `APP_WORKER_CPU_FRACTION` | `0.75` | `0.75` |
-| `APP_MEMORY_PER_WORKER_GB` | `2` | `2` |
-| `APP_RESERVE_MEMORY_GB` | `2` | `2` |
+| `APP_MEMORY_PER_WORKER_GB` | `4` | `4` |
+| `APP_RESERVE_MEMORY_GB` | `4` | `4` |
 | `APP_BIOCPARALLEL_BACKEND` | `snow` | `snow` |
 
 The local defaults preserve the existing development workflow. When the app runs inside Docker, Compose sets `MONGO_URL` to the MongoDB service name (`mongo`) so the app does not depend on `localhost` inside the container.
 
 `APP_PLATFORM` defaults to `linux/amd64` to match the remote server audit. Docker Desktop runs this platform through emulation on Apple Silicon Macs.
 
-The worker settings control how many parallel workers the app uses for shared BiocParallel/Cardinal work and auto-sized training/clustering tasks. Leave `APP_WORKERS` empty for automatic sizing. The auto-sizer uses the CPU cores and memory visible inside Docker, reserves some headroom for the laptop, and caps workers at `APP_WORKER_MAX`. Set `APP_WORKERS` to a positive integer only when you want to force a specific worker count.
+Docker has hard container limits and the app has worker settings. `APP_CPUS` and `APP_MEM_LIMIT` are Docker-only hard caps for the app container. The worker settings control how many parallel workers the app starts for shared BiocParallel/Cardinal work and auto-sized training/clustering tasks.
+
+Leave `APP_WORKERS` empty for automatic sizing. The auto-sizer uses the CPU cores and memory visible to R, reserves some headroom, and caps workers at `APP_WORKER_MAX`. Set `APP_WORKERS` to a positive integer when you want to force a specific worker count.
 
 `APP_BIOCPARALLEL_BACKEND=snow` uses socket workers, which is safer for Shiny/Docker than forked multicore workers. Set it to `multicore` only if you specifically want forked workers on a Linux host and have tested that processing is stable.
+
+Use `.env.example` as the conservative default for laptop Docker runs. On a large shared server running Docker, use `.env.server.example` as the starting point:
+
+```sh
+cp .env.server.example .env
+```
+
+For direct R runs on the server, use `.Renviron.server.example` instead:
+
+```sh
+cp .Renviron.server.example .Renviron
+```
+
+Do not use `.env.server.example` for direct R unless you also change `MONGO_URL`, because Docker uses `mongodb://mongo:27017` while direct R normally uses the host-mapped `mongodb://localhost:27018`.
+
+For direct R runs, Docker hard caps do not apply. Configure workers with shell environment variables or a `.Renviron` file:
+
+```sh
+export APP_WORKERS=12
+Rscript -e 'shiny::runApp(".", host = "0.0.0.0", port = 3838)'
+```
+
+or:
+
+```sh
+cp .Renviron.server.example .Renviron
+```
 
 Check the worker count seen by the running app container:
 
