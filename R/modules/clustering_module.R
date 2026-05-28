@@ -36,7 +36,7 @@ make_raster_png <- function(df, fill_var, colors) {
   base64enc::dataURI(file = tmp, mime = "image/png")
 }
 
-# r
+
 parse_plotly_path_to_shape <- function(path) {
   if (is.null(path) || !nzchar(path)) return(NULL)
   coords <- regmatches(path, gregexpr("[-+]?[0-9]*\\.?[0-9]+,[-+]?[0-9]*\\.?[0-9]+", path))[[1]]
