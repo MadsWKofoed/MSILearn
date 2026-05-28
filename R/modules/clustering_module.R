@@ -766,9 +766,7 @@ clustering_module_server <- function(id) {
             tags$span("Upload an NDPI slide below to preprocess it, store it in the database, and use it for alignment.")
           )
         },
-        fileInput(ns("ndpi_file"), "Upload NDPI slide", accept = c(".ndpi")),
-        numericInput(ns("ndpi_workers"), "NDPI preprocessing workers", value = 8, min = 1, max = 10, step = 1),
-        tags$div(class = "mini-note", "The NDPI file is tiled before viewing. More workers can speed this up, but use only what your machine can handle.")
+        fileInput(ns("ndpi_file"), "Upload NDPI slide", accept = c(".ndpi"))
       )
     })
 
@@ -1067,7 +1065,7 @@ clustering_module_server <- function(id) {
         "--output-dir", normalizePath(out_dir, mustWork = TRUE),
         "--host", "127.0.0.1",
         "--port", as.character(port),
-        "--workers", as.character(workers %||% 6)
+        "--workers", as.character(max(1L, as.integer(workers)))
       )
 
       proc <- processx::process$new(
@@ -1911,7 +1909,7 @@ clustering_module_server <- function(id) {
         preprocess_uploaded_ndpi(
           slide_path = input$ndpi_file$datapath,
           slide_name = input$ndpi_file$name,
-          workers = input$ndpi_workers %||% 6,
+          workers = app_worker_count(),
           study_id = study_id,
           sample_id = sample_id
         )

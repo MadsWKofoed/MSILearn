@@ -309,7 +309,7 @@ def coordinator_preprocess(
 
         jobs = build_jobs(levels, max(1, int(batch_rows)))
 
-        num_workers = max(1, min(int(requested_workers), 10))
+        num_workers = max(1, int(requested_workers))
         update_json(
             status_path,
             workers=num_workers,
@@ -616,7 +616,7 @@ def main():
     status_path = output_dir_p / STATUS_FILE
     failed_path = output_dir_p / FAILED_FILE
 
-    requested_workers = max(1, min(int(args.workers), 10))
+    requested_workers = max(1, int(args.workers))
 
     atomic_write_json(
         status_path,
