@@ -687,21 +687,71 @@ prediction_module_server <- function(id) {
         )
       )
 
+      class_levels <- sort(unique(as.character(df$Predicted)))
+      df$Predicted <- factor(df$Predicted, levels = class_levels)
+
+      base_palette <- c(
+        healthy = "#E69F00",
+        necrosis = "#CC79A7",
+        tumor = "#0072B2",
+        stroma = "#009E73",
+        background = "#6B7280",
+        no_cluster = "#9CA3AF"
+      )
+      fallback_palette <- c(
+        "#D55E00", "#009E73", "#56B4E9", "#F0E442",
+        "#332288", "#88CCEE", "#117733", "#882255",
+        "#44AA99", "#999933", "#AA4499", "#DDCC77"
+      )
+      class_colors <- stats::setNames(rep(NA_character_, length(class_levels)), class_levels)
+      known_class <- tolower(names(class_colors))
+      known_match <- known_class %in% names(base_palette)
+      class_colors[known_match] <- base_palette[known_class[known_match]]
+      missing_colors <- is.na(class_colors)
+      if (any(missing_colors)) {
+        class_colors[missing_colors] <- rep(fallback_palette, length.out = sum(missing_colors))
+      }
+      legend_rows <- if (length(class_levels) > 4) 2 else 1
+
       ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, fill = Predicted)) +
-        ggplot2::geom_tile() +
-        ggplot2::scale_y_reverse() +
+        ggplot2::geom_tile(width = 1, height = 1) +
+        ggplot2::scale_fill_manual(values = class_colors, drop = FALSE) +
+        ggplot2::scale_y_reverse(expand = ggplot2::expansion(mult = c(0.01, 0.01))) +
+        ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.01, 0.01))) +
         ggplot2::coord_fixed() +
         ggplot2::facet_wrap(~ runNames) +
-        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme_minimal(base_size = 16) +
         ggplot2::theme(
           legend.position = "bottom",
-          strip.text = ggplot2::element_text(face = "bold")
+          legend.direction = "horizontal",
+          legend.title = ggplot2::element_text(size = 17, face = "bold", color = "#111827"),
+          legend.text = ggplot2::element_text(size = 15, color = "#111827"),
+          legend.key.size = grid::unit(18, "pt"),
+          legend.spacing.x = grid::unit(10, "pt"),
+          panel.grid.major = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.35),
+          panel.grid.minor = ggplot2::element_blank(),
+          plot.title = ggplot2::element_text(size = 20, face = "bold", color = "#111827", margin = ggplot2::margin(b = 8)),
+          axis.title = ggplot2::element_text(size = 17, face = "bold", color = "#111827"),
+          axis.text = ggplot2::element_text(size = 14, color = "#4B5563"),
+          strip.text = ggplot2::element_text(size = 16, face = "bold", color = "#111827"),
+          strip.background = ggplot2::element_rect(fill = "#F3F4F6", color = NA),
+          plot.margin = ggplot2::margin(12, 16, 12, 16)
+        ) +
+        ggplot2::guides(
+          fill = ggplot2::guide_legend(
+            title.position = "left",
+            title.hjust = 0.5,
+            nrow = legend_rows,
+            byrow = TRUE,
+            override.aes = list(width = 1, height = 1)
+          )
         ) +
         ggplot2::labs(
+          title = "Predicted tissue classes",
           x = "x",
           y = "y",
           fill = "Predicted"
         )
-    })
+    }, res = 140)
   })
 }
