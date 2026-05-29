@@ -604,6 +604,7 @@ app_sidebar_step <- function(id, number, title, ..., status = NULL, open = FALSE
 source("R/mongo_schema.R")        # schema initialisation (indexes)
 source("R/mongo_functions.R")     # all DB helpers (provenance API + legacy)
 source("R/alignment_reference_db.R")
+source("R/feature_standardization_functions.R")
 source("R/clustering_functions.R")
 source("R/processing_functions.R")
 source("R/training_functions.R")

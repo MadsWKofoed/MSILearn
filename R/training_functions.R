@@ -10,6 +10,9 @@
 #   4. Every training run is persisted via save_model_run().
 #   5. Class weights are computed deterministically from training labels.
 
+if (!exists("standardize_feature_matrix", mode = "function")) {
+  source("R/feature_standardization_functions.R")
+}
 
 # ---------------------------------------------------------------------------
 # Compute class weights from a factor of training labels.
@@ -1362,6 +1365,7 @@ build_cv_indices_from_split <- function(train_meta, split_info, cv_folds, seed) 
 train_ranger_from_dataset <- function(
     dataset_id,
     normalize_method = c("none", "tic", "median", "rms"),
+    feature_standardize = c("none", "sd", "zscore"),
     mtry           = 31L,
     splitrule      = "gini",
     min_node_size  = 10L,
@@ -1383,6 +1387,7 @@ train_ranger_from_dataset <- function(
   )
 
   normalize_method <- match.arg(normalize_method)
+  feature_standardize <- match.arg(feature_standardize)
 
   # ── 1. Load dataset ───────────────────────────────────────────────
   message("[train] Loading dataset: ", dataset_id)
@@ -1419,6 +1424,22 @@ train_ranger_from_dataset <- function(
   train_X <- normalize_feature_matrix(train_X, normalize_method)
   if (has_test_data) {
     test_X <- normalize_feature_matrix(test_X, normalize_method)
+  }
+
+  message("[train] Applying feature standardization: ", feature_standardize)
+  feature_standardization <- standardize_feature_matrix(
+    train_X,
+    method = feature_standardize,
+    return_params = TRUE
+  )
+  train_X <- feature_standardization$data
+  if (has_test_data) {
+    test_X <- standardize_feature_matrix(
+      test_X,
+      method = feature_standardize,
+      center = feature_standardization$center,
+      scale = feature_standardization$scale
+    )
   }
 
   label_encoder <- make_class_label_encoder(train_y)
@@ -1510,6 +1531,7 @@ train_ranger_from_dataset <- function(
 
   hyperparams <- list(
     normalize_method = normalize_method,
+    feature_standardize = feature_standardize,
     mtry          = as.integer(mtry),
     splitrule     = splitrule,
     min_node_size = as.integer(min_node_size),
@@ -1638,6 +1660,11 @@ train_ranger_from_dataset <- function(
     num.threads  = num_threads
   )
   fit$msi_class_label_encoder <- list(label_encoder$map_df)
+  fit$msi_feature_standardization <- list(
+    method = feature_standardize,
+    center = feature_standardization$center,
+    scale = feature_standardization$scale
+  )
   message("[train] Model fitting finished.")
   metrics_scalar <- list(
     evaluation_mode = evaluation_mode,

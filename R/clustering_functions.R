@@ -1,5 +1,9 @@
 # R/clustering_functions.R
 
+if (!exists("standardize_feature_matrix", mode = "function")) {
+  source("R/feature_standardization_functions.R")
+}
+
 # Pixel-wise normalization (TIC/median/RMS) on signal columns only
 normalize_pixels <- function(
   data,
@@ -61,8 +65,12 @@ normalize_pixels_wrapper <- function(data, method = c("none", "tic", "median", "
 }
 
 # K-means clustering
-run_kmeans <- function(full_df, k = 3, normalize_method = c("none", "tic", "median", "rms")) {
+run_kmeans <- function(full_df,
+                       k = 3,
+                       normalize_method = c("none", "tic", "median", "rms"),
+                       feature_standardize = c("none", "sd", "zscore")) {
   normalize_method <- match.arg(normalize_method)
+  feature_standardize <- match.arg(feature_standardize)
 
   mz_cols <- grep("^mz_", colnames(full_df), value = TRUE)
   if (length(mz_cols) == 0) stop("run_kmeans(): No mz_ columns found.")
@@ -83,6 +91,14 @@ run_kmeans <- function(full_df, k = 3, normalize_method = c("none", "tic", "medi
     full_df_out
   }
 
+  standardized <- standardize_feature_dataframe(
+    data = df_norm,
+    signal_cols = mz_cols,
+    method = feature_standardize,
+    return_params = TRUE
+  )
+  df_norm <- standardized$data
+
   feature_matrix <- as.matrix(df_norm[, mz_cols, drop = FALSE])
   feature_matrix[!is.finite(feature_matrix)] <- 0 
   km <- kmeans(feature_matrix, centers = k, nstart = 25)
@@ -93,10 +109,15 @@ run_kmeans <- function(full_df, k = 3, normalize_method = c("none", "tic", "medi
 
 # VSClust clustering
 
-run_vsclust <- function(full_df, k = 3, normalize_method = c("none", "tic", "median", "rms"),
-                        Sds = 1.3, minMem = 0.5) {
+run_vsclust <- function(full_df,
+                        k = 3,
+                        normalize_method = c("none", "tic", "median", "rms"),
+                        feature_standardize = c("none", "sd", "zscore"),
+                        Sds = 1.3,
+                        minMem = 0.5) {
 
   normalize_method <- match.arg(normalize_method)
+  feature_standardize <- match.arg(feature_standardize)
 
   # Drop runNames, but keep x/y available in full_df for plotting later
   msi_df_clust <- full_df[, !names(full_df) %in% "runNames", drop = FALSE]
@@ -115,8 +136,16 @@ run_vsclust <- function(full_df, k = 3, normalize_method = c("none", "tic", "med
     # take only signal columns for VSClust
     X_vs <- as.matrix(df_norm[, mz_cols, drop = FALSE])
   } else {
-    X_vs <- as.matrix(msi_df_clust[, mz_cols, drop = FALSE])
+    df_norm <- msi_df_clust
   }
+
+  df_std <- standardize_feature_dataframe(
+    data = df_norm,
+    signal_cols = mz_cols,
+    method = feature_standardize
+  )
+  X_vs <- as.matrix(df_std[, mz_cols, drop = FALSE])
+  X_vs[!is.finite(X_vs)] <- 0
 
   fuzz <- determine_fuzz(
     dims = dim(X_vs),
@@ -279,11 +308,13 @@ compute_neighbor_cor <- function(dat,
 # MSIClust clustering
 run_msiclust <- function(full_df, k = 3,
                          normalize_method = c("none", "tic", "median", "rms"),
+                         feature_standardize = c("none", "sd", "zscore"),
                          cor_radius = 1, cor_scale = 25,
                          cor_cores = if (exists("app_worker_count", mode = "function")) app_worker_count() else max(1L, parallel::detectCores(logical = FALSE) - 1L),
                          minMem = 0.5) {
   
   normalize_method <- match.arg(normalize_method)
+  feature_standardize <- match.arg(feature_standardize)
   t0 <- Sys.time()
   
   # MSIClust requires normalization — inv_cor_scaled fuzzifiers are not
@@ -296,8 +327,8 @@ run_msiclust <- function(full_df, k = 3,
   mz_cols <- grep("^mz_", names(full_df), value = TRUE)
   if (length(mz_cols) == 0) stop("run_msiclust(): No mz_ columns found.")
   
-  message(sprintf("[MSIClust] Start: %d pixels, %d features, k=%d, norm=%s, r=%d, cores=%d",
-                  nrow(full_df), length(mz_cols), k, normalize_method, cor_radius, cor_cores))
+  message(sprintf("[MSIClust] Start: %d pixels, %d features, k=%d, norm=%s, standardize=%s, r=%d, cores=%d",
+                  nrow(full_df), length(mz_cols), k, normalize_method, feature_standardize, cor_radius, cor_cores))
   
   cor_input_cols <- c("x", "y", mz_cols)
   cor_data <- full_df[, intersect(cor_input_cols, names(full_df)), drop = FALSE]
@@ -341,7 +372,15 @@ run_msiclust <- function(full_df, k = 3,
   
   message(sprintf("[MSIClust] Normalization done (%.1f sec)", as.numeric(Sys.time() - t3, units = "secs")))
   
+  message(sprintf("[MSIClust] Feature standardization (%s)...", feature_standardize))
+  cor_data_norm_xy <- standardize_feature_dataframe(
+    data = cor_data_norm_xy,
+    signal_cols = mz_cols,
+    method = feature_standardize
+  )
+
   X_clust <- as.matrix(cor_data_norm_xy[, mz_cols, drop = FALSE])
+  X_clust[!is.finite(X_clust)] <- 0
   
   message("[MSIClust] Computing fuzzifiers...")
   t4 <- Sys.time()

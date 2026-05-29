@@ -190,6 +190,12 @@ training_module_ui <- function(id) {
                 choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms"),
                 selected = "none"
               ),
+              selectInput(
+                ns("feature_standardize"),
+                "Feature standardisation",
+                choices = c("None" = "none", "SD" = "sd", "Z-score" = "zscore"),
+                selected = "none"
+              ),
               numericInput(ns("mtry"), "mtry", value = 31, min = 1),
               numericInput(ns("num_trees"), "num.trees", value = 500, min = 10),
               numericInput(ns("min_node_size"), "min.node.size", value = 10, min = 1),
@@ -1407,6 +1413,7 @@ training_module_server <- function(id) {
         )
 
         X_est <- normalize_feature_matrix(src$X, input$normalize %||% "none")
+        X_est <- standardize_feature_matrix(X_est, input$feature_standardize %||% "none")
 
         diag_info <- compute_feature_moran_diagnostics(
           X = X_est,
@@ -1461,7 +1468,9 @@ training_module_server <- function(id) {
           paste0(
             length(samp_ids), " sample(s), ",
             nrow(src$X), " annotated pixels, normalize=",
-            input$normalize %||% "none"
+            input$normalize %||% "none",
+            ", feature_standardize=",
+            input$feature_standardize %||% "none"
           )
         )
 
@@ -1826,6 +1835,7 @@ training_module_server <- function(id) {
         run_id <- train_ranger_from_dataset(
           dataset_id        = dataset_id,
           normalize_method  = input$normalize,
+          feature_standardize = input$feature_standardize,
           mtry              = input$mtry,
           splitrule         = input$splitrule,
           min_node_size     = input$min_node_size,
@@ -1880,6 +1890,7 @@ training_module_server <- function(id) {
 
       if (is.data.frame(hp_obj)) {
         norm  <- as.character(hp_obj$normalize_method %||% NA)
+        std   <- as.character(hp_obj$feature_standardize %||% NA)
         mtry  <- as.character(hp_obj$mtry %||% NA)
         trees <- as.character(hp_obj$num_trees %||% NA)
         node  <- as.character(hp_obj$min_node_size %||% NA)
@@ -1888,6 +1899,7 @@ training_module_server <- function(id) {
         eval_mode <- vapply(hp_obj$evaluation_mode %||% rep("cv_plus_test", n), eval_mode_display, character(1))
       } else {
         norm  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "normalize_method"), character(1))
+        std   <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "feature_standardize"), character(1))
         mtry  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "mtry"), character(1))
         trees <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "num_trees"), character(1))
         node  <- vapply(seq_len(n), \(i) hp_get(hp_obj[[i]], "min_node_size"), character(1))
@@ -1914,6 +1926,7 @@ training_module_server <- function(id) {
         model_type  = df_sorted$model_type,
         evaluation  = eval_mode,
         normalisation = norm,
+        standardisation = std,
         mtry        = mtry,
         trees       = trees,
         node        = node,
@@ -2397,6 +2410,7 @@ training_module_server <- function(id) {
                 tags$tr(tags$td("Model"), tags$td(first_chr(row$model_type))),
                 tags$tr(tags$td("Evaluation mode"), tags$td(evaluation_mode_label(evaluation_mode))),
                 tags$tr(tags$td("Normalisation"), tags$td(first_chr(hp[["normalize_method"]]))),
+                tags$tr(tags$td("Feature standardisation"), tags$td(first_chr(hp[["feature_standardize"]], "none"))),
                 tags$tr(tags$td("mtry"), tags$td(first_chr(hp[["mtry"]]))),
                 tags$tr(tags$td("num.trees"), tags$td(first_chr(hp[["num_trees"]]))),
                 tags$tr(tags$td("min.node.size"), tags$td(first_chr(hp[["min_node_size"]]))),

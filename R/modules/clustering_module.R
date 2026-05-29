@@ -387,6 +387,7 @@ clustering_module_ui <- function(id) {
 
             selectInput(ns("method"), "Clustering method", choices = c("K-means", "VSClust", "MSIClust")),
             selectInput(ns("normalize"), "Normalisation", choices = c("None" = "none", "TIC" = "tic", "Median" = "median", "RMS" = "rms")),
+            selectInput(ns("feature_standardize"), "Feature standardisation", choices = c("None" = "none", "SD" = "sd", "Z-score" = "zscore")),
             numericInput(ns("clusters"), "Number of clusters", value = 3, min = 3, max = 30),
             uiOutput(ns("method_params_ui")),
 
@@ -1602,11 +1603,23 @@ clustering_module_server <- function(id) {
           "K-means" = {
             current_method("K-means")
             vsclust_membership_data(NULL)
-            run_kmeans(df, k = input$clusters, normalize_method = input$normalize)
+            run_kmeans(
+              df,
+              k = input$clusters,
+              normalize_method = input$normalize,
+              feature_standardize = input$feature_standardize
+            )
           },
           "VSClust" = {
             current_method("VSClust")
-            result <- run_vsclust(df, k = input$clusters, normalize_method = input$normalize, Sds = input$Sds %||% 1.3, minMem = input$minMem %||% 0.5)
+            result <- run_vsclust(
+              df,
+              k = input$clusters,
+              normalize_method = input$normalize,
+              feature_standardize = input$feature_standardize,
+              Sds = input$Sds %||% 1.3,
+              minMem = input$minMem %||% 0.5
+            )
             vsclust_membership_data(result)
             result
           },
@@ -1616,6 +1629,7 @@ clustering_module_server <- function(id) {
               df,
               k = input$clusters,
               normalize_method = input$normalize,
+              feature_standardize = input$feature_standardize,
               cor_radius = input$cor_radius %||% 1,
               cor_scale = input$cor_scale %||% 25,
               cor_cores = app_worker_count(),
@@ -1639,8 +1653,9 @@ clustering_module_server <- function(id) {
 
         progress$set(value = 100)
         norm_text <- if (input$normalize == "none") "no normalisation" else paste("with", input$normalize, "normalisation")
+        std_text <- if (input$feature_standardize == "none") "no feature standardisation" else paste(input$feature_standardize, "feature standardisation")
         output$status_text <- renderText(
-          paste0("Clustering complete: ", input$method, " (", norm_text, ") — ", input$clusters, " clusters")
+          paste0("Clustering complete: ", input$method, " (", norm_text, ", ", std_text, ") — ", input$clusters, " clusters")
         )
         showNotification(paste0("Clustering complete: ", input$clusters, " clusters identified."), type = "message", duration = 5)
         clear_cluster_shapes()
@@ -2346,6 +2361,7 @@ clustering_module_server <- function(id) {
           method = method,
           k = input$clusters,
           normalize = input$normalize,
+          feature_standardize = input$feature_standardize,
           input_pipeline_id = pid
         )
         if (method %in% c("VSClust", "MSIClust")) {

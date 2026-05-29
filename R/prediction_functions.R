@@ -1,5 +1,9 @@
 # R/prediction_functions.R
 
+if (!exists("standardize_feature_matrix", mode = "function")) {
+  source("R/feature_standardization_functions.R")
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -161,7 +165,11 @@ process_uploaded_data_for_prediction <- function(imzml_path,
 # Prepare feature matrix exactly like training/prediction expects
 # ---------------------------------------------------------------------------
 
-prepare_prediction_matrix <- function(feature_df, normalize_method = "none") {
+prepare_prediction_matrix <- function(feature_df,
+                                      normalize_method = "none",
+                                      feature_standardize = "none",
+                                      feature_center = NULL,
+                                      feature_scale = NULL) {
   mz_cols <- grep("^mz_", names(feature_df), value = TRUE)
   if (length(mz_cols) == 0) {
     stop("No mz_ feature columns found in processed prediction data.")
@@ -171,6 +179,23 @@ prepare_prediction_matrix <- function(feature_df, normalize_method = "none") {
 
   normalize_method <- as.character(first_scalar(normalize_method, "none"))
   new_X <- normalize_feature_matrix(new_X, method = normalize_method)
+
+  feature_standardize <- as.character(first_scalar(feature_standardize, "none"))
+  if (!feature_standardize %in% c("none", "sd", "zscore")) {
+    feature_standardize <- "none"
+  }
+  if (feature_standardize != "none" && is.null(feature_scale)) {
+    stop("Selected model is missing saved feature standardization parameters.")
+  }
+  if (feature_standardize == "zscore" && is.null(feature_center)) {
+    stop("Selected model is missing saved feature standardization centers.")
+  }
+  new_X <- standardize_feature_matrix(
+    new_X,
+    method = feature_standardize,
+    center = feature_center,
+    scale = feature_scale
+  )
 
   list(
     X = new_X,
@@ -201,10 +226,17 @@ run_prediction_from_upload <- function(run_id,
   )
 
   norm_method <- first_scalar(ctx$hyperparams$normalize_method, "none")
+  std_method <- first_scalar(ctx$hyperparams$feature_standardize, "none")
+  fit <- load_model_run(run_id, db, url)
+  std_params <- fit$msi_feature_standardization %||% list(method = std_method)
+  std_method <- first_scalar(std_params$method, std_method)
 
   prep <- prepare_prediction_matrix(
     feature_df = feature_df,
-    normalize_method = norm_method
+    normalize_method = norm_method,
+    feature_standardize = std_method,
+    feature_center = std_params$center %||% NULL,
+    feature_scale = std_params$scale %||% NULL
   )
 
   preds <- predict_from_model_run(

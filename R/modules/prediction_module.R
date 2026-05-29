@@ -53,6 +53,12 @@ prediction_module_ui <- function(id) {
                 width = "100%"
               ),
               selectInput(
+                ns("run_filter_standardize"),
+                "Feature standardisation:",
+                choices = c("All" = "__all__"),
+                width = "100%"
+              ),
+              selectInput(
                 ns("run_filter_model_type"),
                 "Model type:",
                 choices = c("All" = "__all__"),
@@ -175,6 +181,7 @@ prediction_module_server <- function(id) {
         evaluation_mode = character(0),
         evaluation_mode_label = character(0),
         normalisation = character(0),
+        standardisation = character(0),
         primary_score = numeric(0),
         created_at = character(0),
         stringsAsFactors = FALSE
@@ -207,6 +214,11 @@ prediction_module_server <- function(id) {
         value_col = "normalisation",
         label_col = "normalisation"
       ),
+      run_filter_standardize = list(
+        all_label = "All",
+        value_col = "standardisation",
+        label_col = "standardisation"
+      ),
       run_filter_model_type = list(
         all_label = "All",
         value_col = "model_type",
@@ -226,6 +238,7 @@ prediction_module_server <- function(id) {
         run_filter_eval_mode = normalize_filter_value(input$run_filter_eval_mode),
         run_filter_pipeline = normalize_filter_value(input$run_filter_pipeline),
         run_filter_normalize = normalize_filter_value(input$run_filter_normalize),
+        run_filter_standardize = normalize_filter_value(input$run_filter_standardize),
         run_filter_model_type = normalize_filter_value(input$run_filter_model_type)
       )
     }
@@ -282,6 +295,8 @@ prediction_module_server <- function(id) {
         primary_score <- if (identical(eval_mode, "cv_only")) cv_acc else test_acc
         norm_method <- as.character(hp$normalize_method[1] %||% "none")
         if (!nzchar(norm_method)) norm_method <- "none"
+        std_method <- as.character(hp$feature_standardize[1] %||% "none")
+        if (!nzchar(std_method)) std_method <- "none"
 
         data.frame(
           run_id = run_id,
@@ -297,6 +312,7 @@ prediction_module_server <- function(id) {
           evaluation_mode = eval_mode,
           evaluation_mode_label = evaluation_mode_label(eval_mode),
           normalisation = norm_method,
+          standardisation = std_method,
           primary_score = primary_score,
           created_at = as.character(row$created_at[1] %||% ""),
           stringsAsFactors = FALSE
@@ -415,6 +431,7 @@ prediction_module_server <- function(id) {
       input$run_filter_eval_mode
       input$run_filter_pipeline
       input$run_filter_normalize
+      input$run_filter_standardize
       input$run_filter_model_type
 
       sync_run_browser_filters()
@@ -433,13 +450,13 @@ prediction_module_server <- function(id) {
 
       tbl <- df[, c(
         "run_id", "dataset_name", "study", "pipeline_name",
-        "model_type", "evaluation_mode_label", "normalisation",
+        "model_type", "evaluation_mode_label", "normalisation", "standardisation",
         "primary_score", "created_at"
       ), drop = FALSE]
 
       names(tbl) <- c(
         "run_id", "Dataset", "Study", "Processing pipeline",
-        "Model type", "Evaluation mode", "Normalisation",
+        "Model type", "Evaluation mode", "Normalisation", "Feature standardisation",
         "Primary score", "Created at"
       )
 
@@ -507,6 +524,7 @@ prediction_module_server <- function(id) {
           tags$b("Evaluation mode: "), eval_label, tags$br(),
           tags$b("Model type: "), first_chr(ctx$run_row$model_type), tags$br(),
           tags$b("Normalisation: "), first_chr(hp$normalize_method, "none"), tags$br(),
+          tags$b("Feature standardisation: "), first_chr(hp$feature_standardize, "none"), tags$br(),
           tags$b("mtry: "), first_chr(hp$mtry), tags$br(),
           tags$b("Trees: "), first_chr(hp$num_trees)
         )
@@ -531,7 +549,8 @@ prediction_module_server <- function(id) {
           "tolerance",
           "resolution",
           "reference_name",
-          "normalize_method"
+          "normalize_method",
+          "feature_standardize"
         ),
         Value = c(
           dataset_label,
@@ -541,7 +560,8 @@ prediction_module_server <- function(id) {
           first_chr(p$tolerance),
           first_chr(p$resolution),
           first_chr(p$reference_name),
-          first_chr(hp$normalize_method, "none")
+          first_chr(hp$normalize_method, "none"),
+          first_chr(hp$feature_standardize, "none")
         ),
         stringsAsFactors = FALSE
       )
@@ -594,6 +614,7 @@ prediction_module_server <- function(id) {
         add_log(paste0("pipeline_id = ", ctx$pipeline_id))
         add_log(paste0("reference_name = ", first_chr(ctx$pipeline_params$reference_name)))
         add_log(paste0("normalize_method = ", first_chr(ctx$hyperparams$normalize_method, "none")))
+        add_log(paste0("feature_standardize = ", first_chr(ctx$hyperparams$feature_standardize, "none")))
         add_log("Processing uploaded raw data with pipeline-tied parameters ...")
 
         res <- run_prediction_from_upload(
