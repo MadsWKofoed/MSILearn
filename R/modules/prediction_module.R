@@ -119,7 +119,6 @@ prediction_module_ui <- function(id) {
             class = "app-stack",
             app_panel(
               "Prediction Map",
-              subtitle = "Spatial prediction output generated from the uploaded raw MSI data.",
               plotOutput(ns("prediction_plot"), height = "700px")
             )
           )
@@ -690,10 +689,16 @@ prediction_module_server <- function(id) {
       class_levels <- sort(unique(as.character(df$Predicted)))
       df$Predicted <- factor(df$Predicted, levels = class_levels)
 
-      palette_values <- if (length(class_levels) <= 8 && requireNamespace("RColorBrewer", quietly = TRUE)) {
-        RColorBrewer::brewer.pal(max(3, length(class_levels)), "Dark2")[seq_along(class_levels)]
+      palette_values <- if (requireNamespace("RColorBrewer", quietly = TRUE)) {
+        set3 <- RColorBrewer::brewer.pal(12, "Set3")
+        set3 <- set3[c(1, 4, 5, 3, 7, 8, 9, 10, 11, 12, 2, 6)]
+        if (length(class_levels) <= length(set3)) {
+          set3[seq_along(class_levels)]
+        } else {
+          grDevices::colorRampPalette(set3)(length(class_levels))
+        }
       } else {
-        grDevices::hcl.colors(length(class_levels), palette = "Dark 3")
+        grDevices::hcl.colors(length(class_levels), palette = "Set 3")
       }
       class_colors <- stats::setNames(palette_values, class_levels)
       legend_labels <- stats::setNames(
@@ -705,13 +710,12 @@ prediction_module_server <- function(id) {
       }
       legend_cols <- min(3L, length(class_levels))
 
-      ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, fill = Predicted)) +
+      p <- ggplot2::ggplot(df, ggplot2::aes(x = x, y = y, fill = Predicted)) +
         ggplot2::geom_tile(width = 1, height = 1) +
         ggplot2::scale_fill_manual(values = class_colors, labels = legend_labels, drop = FALSE) +
         ggplot2::scale_y_reverse(expand = ggplot2::expansion(mult = c(0.01, 0.01))) +
         ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.01, 0.01))) +
         ggplot2::coord_fixed() +
-        ggplot2::facet_wrap(~ runNames, labeller = ggplot2::labeller(runNames = wrap_facet_label)) +
         ggplot2::theme_minimal(base_size = 12) +
         ggplot2::theme(
           legend.position = "bottom",
@@ -726,8 +730,8 @@ prediction_module_server <- function(id) {
           panel.grid.minor = ggplot2::element_blank(),
           axis.title = ggplot2::element_text(size = 12, face = "bold", color = "#111827"),
           axis.text = ggplot2::element_text(size = 10, color = "#4B5563"),
-          strip.text = ggplot2::element_text(size = 12, face = "bold", color = "#111827"),
-          strip.background = ggplot2::element_rect(fill = "#F3F4F6", color = NA),
+          strip.text = ggplot2::element_text(size = 10, face = "plain", color = "#4B5563"),
+          strip.background = ggplot2::element_blank(),
           plot.margin = ggplot2::margin(8, 10, 8, 10)
         ) +
         ggplot2::guides(
@@ -744,6 +748,15 @@ prediction_module_server <- function(id) {
           y = "y",
           fill = "Predicted"
         )
+
+      if (length(unique(df$runNames)) > 1L) {
+        p <- p + ggplot2::facet_wrap(
+          ~ runNames,
+          labeller = ggplot2::labeller(runNames = wrap_facet_label)
+        )
+      }
+
+      p
     }, res = 96)
   })
 }
