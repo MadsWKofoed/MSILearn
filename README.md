@@ -2,6 +2,19 @@
 
 R/Shiny application for MSI processing, clustering, prediction, and database management.
 
+## Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + the Compose v2 plugin), installed and running before any `docker compose` command
+- `git`
+- On Apple Silicon Macs: Rosetta emulation enabled in Docker Desktop (Settings → General → "Use Rosetta for x86_64/amd64 emulation on Apple Silicon"), since the image targets `linux/amd64`
+
+## Getting the Code
+
+```sh
+git clone https://github.com/MadsWKofoed/MSILearn.git
+cd MSILearn
+```
+
 ## Configuration
 
 Database settings are read from environment variables:
@@ -110,6 +123,8 @@ Run in the background:
 docker compose up --build -d
 ```
 
+The first build compiles R from source packages and installs Bioconductor/Cardinal and other mass-spec dependencies, so it can easily take 10-20+ minutes and several GB of disk space depending on your machine and network. This is expected — it is not hung. On Apple Silicon, emulating `linux/amd64` makes both the build and the running app noticeably slower than on native amd64 hardware. Subsequent builds are much faster thanks to Docker layer caching, unless `docker/r-packages.csv` or the Dockerfile changes.
+
 Open the app at:
 
 ```text
@@ -168,3 +183,10 @@ To use a different MongoDB instance locally, set the environment variables befor
 export MONGO_DB=MSI_DB
 export MONGO_URL=mongodb://localhost:27018
 ```
+
+## Troubleshooting
+
+- **`Cannot connect to the Docker daemon` / socket errors**: Docker Desktop is not running. Start it and wait until it reports "running" before retrying.
+- **Port already in use (`3838` or `27018`)**: another process (maybe a previous `docker compose up`) is already bound to that port. Stop it with `docker compose down`, or override the port via `.env` (`APP_PORT`, `MONGO_HOST_PORT`).
+- **Build seems stuck**: check that it's still working with `docker compose logs -f app` or `docker builder prune -f` if a previous interrupted build left a bad cache. R/Bioconductor compilation is slow and quiet for long stretches, especially under Apple Silicon emulation.
+- **`app` container exits immediately**: run `docker compose logs app` to see the R error; a common cause is `mongo` not being healthy yet (Compose's `depends_on: condition: service_healthy` should prevent this, but check `docker compose ps`).
